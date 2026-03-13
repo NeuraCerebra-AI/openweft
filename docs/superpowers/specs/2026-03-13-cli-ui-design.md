@@ -8,7 +8,7 @@ Two UI modes exist:
 - **Full-screen TUI** for `openweft start` — the orchestration dashboard
 - **Styled text output** for one-shot commands (`init`, `add`, `status`, `stop`)
 
-Framework: Ink 5.x (React for the terminal). Same foundation as Claude Code, Codex CLI, and Gemini CLI.
+Framework: Ink 5.x (React for the terminal). Same foundation as Claude Code, Codex CLI, and Gemini CLI. Full-screen mode via `fullscreen-ink` package.
 
 ---
 
@@ -45,7 +45,7 @@ Two-column layout (lazygit-style):
 - **Footer**: 1 line at bottom
 - `Tab` switches focus between sidebar and main panel
 - Arrow keys navigate within the focused panel
-- `alternateScreen: true` for clean canvas
+- Full-screen via `fullscreen-ink` (`withFullScreen`) — manages alternate screen buffer automatically
 
 ### Status Bar: Segmented Chips
 
@@ -121,8 +121,10 @@ existing router structure first.
 │ read_file src/routes/index.ts ✓ 82 lines
 ```
 
+AI thinking text is rendered through `marked` + `marked-terminal` to convert markdown to ANSI. This handles bold, italic, lists, links, and inline code. Fenced code blocks are extracted and rendered by the dedicated `<CodeBlock>` component.
+
 Tool block elements:
-- Left border: 2px solid mauve (`#cba6f7`)
+- Left border: single-character left accent via Ink `<Box borderLeft borderStyle="bold" borderColor={colors.mauve}>` in mauve (`#cba6f7`)
 - Tool name: bold mauve
 - File/argument: peach (`#fab387`)
 - Result: green checkmark + summary
@@ -146,7 +148,9 @@ Modify src/routes/index.ts (add import + middleware)
 
 When an approval appears, the footer bar switches to APPROVAL mode.
 
-**5. Completed content** — scrolls up. Use Ink's `<Static>` component for completed items so they never re-render.
+**5. Scrolling** — output is managed as a virtual scroll buffer. The zustand store holds `outputLines` per agent and a `scrollOffset`. The `<MainPanel>` slices `outputLines[scrollOffset..scrollOffset+viewportHeight]` for rendering. When the user switches focused agent (via sidebar), the panel re-renders with the new agent's buffer. `<Static>` is NOT used in the main panel (it's append-only and can't switch between agents). Instead, `React.memo` on individual `<OutputLine>` components prevents unnecessary re-renders.
+
+Buffer cap: 5000 entries per agent. Older entries are pruned on append.
 
 ### Footer: Contextual Mode Bar
 
@@ -262,10 +266,11 @@ export interface Theme {
     yellow: string;   // '#f9e2af'
     muted: string;    // '#585b70'
   };
+  // These map to Ink's <Box borderStyle="..."> prop values
   borders: {
-    panel: 'single';
-    panelActive: 'bold';
-    prompt: 'round';
+    panel: 'single';       // ┌─┐└─┘ for persistent panels
+    panelActive: 'bold';   // ┏━┓┗━┛ for focused/active panel
+    prompt: 'round';       // ╭─╮╰─╯ for approval prompts
   };
 }
 
@@ -335,6 +340,8 @@ interface UIStore {
   mode: 'normal' | 'approval' | 'input';
   sidebarFocused: boolean;
   filterText: string;
+  scrollOffset: number;        // Main panel scroll position
+  showHelp: boolean;           // Help overlay visible
 
   // Actions
   setAgents: (agents: AgentState[]) => void;
@@ -350,11 +357,44 @@ export const useStore = create<UIStore>((set) => ({
 }));
 ```
 
+### Orchestrator Event Contract
+
+The orchestrator emits structured events via a callback. The UI bridge converts these into zustand mutations.
+
+```typescript
+// src/ui/events.ts
+type OrchestratorEvent =
+  | { type: 'agent:started'; agentId: string; name: string; feature: string }
+  | { type: 'agent:text'; agentId: string; text: string }
+  | { type: 'agent:tool-call'; agentId: string; tool: string; args: string; result?: string }
+  | { type: 'agent:code-block'; agentId: string; filename: string; content: string; language: string }
+  | { type: 'agent:approval'; agentId: string; request: ApprovalRequest }
+  | { type: 'agent:approval-resolved'; agentId: string; decision: 'approve' | 'deny' | 'skip' }
+  | { type: 'agent:completed'; agentId: string; cost: number }
+  | { type: 'agent:failed'; agentId: string; error: string }
+  | { type: 'phase:started'; phase: number; total: number; featureIds: string[] }
+  | { type: 'phase:completed'; phase: number }
+  | { type: 'session:cost-update'; totalCost: number };
+```
+
+The existing `realRun.ts` orchestrator will be extended with an `onEvent: (event: OrchestratorEvent) => void` callback parameter. The `useOrchestratorBridge` hook subscribes this callback to zustand mutations.
+
+### Approval Propagation
+
+Agents (Codex CLI, Claude Code) are subprocesses launched via `execa`. Approval detection works by parsing agent stdout for known patterns:
+- Claude Code: `--output-format json` emits structured JSON events including tool approval requests
+- Codex CLI: stdout patterns for approval prompts are parsed via regex
+- Mock adapter: emits synthetic approval events for testing
+
+When an approval is detected, the bridge emits `agent:approval`. The UI switches to APPROVAL mode. User keypress (y/n/a/s) is sent back to the subprocess via stdin write. On resolution, the bridge emits `agent:approval-resolved`.
+
+Note: Approval support is backend-dependent. Initial implementation may only support Claude Code's JSON mode. Codex approval support is stretch goal.
+
 Data flow:
 ```
 xstate orchestrator
-  → emits events (agent started, tool called, text streamed, etc.)
-  → event handler calls useStore.getState().updateAgent(...)
+  → calls onEvent({ type: 'agent:text', agentId, text })
+  → useOrchestratorBridge calls useStore.getState().appendOutput(...)
   → zustand notifies subscribed React components
   → Ink re-renders only changed components
 ```
@@ -381,22 +421,21 @@ For non-TTY (piped output, CI), fall back to the existing `writeLine` text outpu
     <Box flexDirection="row">
       <Sidebar>                      // Left panel
         <AgentList>
-          <AgentRow />               // Compact row per agent
+          <AgentRow />               // Compact row per agent (React.memo)
           <AgentExpanded />          // Expanded detail for focused agent
         </AgentList>
         <SidebarFooter />            // Phase + total cost
       </Sidebar>
-      <MainPanel>                    // Right panel
-        <Static items={completedLines}>
-          <OutputLine />             // Completed output (never re-renders)
-        </Static>
-        <LiveOutput>                 // Current streaming output
-          <TextBlock />              // AI thinking text
+      <MainPanel>                    // Right panel, keyed by focusedAgentId
+        <ScrollableOutput>           // Virtual scroll buffer (offset slicing)
+          <OutputLine />             // Individual line (React.memo)
+          <TextBlock />              // AI thinking text (via marked-terminal)
           <ToolBlock />              // Tool call inline block
           <CodeBlock />              // Syntax-highlighted code
           <ApprovalPrompt />         // Approval request
-        </LiveOutput>
+        </ScrollableOutput>
       </MainPanel>
+      <HelpOverlay />               // Conditional: replaces main panel when ? pressed
     </Box>
     <Footer />                       // Contextual mode bar
   </App>
@@ -414,7 +453,7 @@ For non-TTY (piped output, CI), fall back to the existing `writeLine` text outpu
 | `Enter` | Focus selected agent in main panel | — | Submit |
 | `/` | Enter filter mode (INPUT) | — | — |
 | `q` | Quit | — | — |
-| `?` | Show help overlay | — | — |
+| `?` | Show help overlay (replaces main panel, Esc to dismiss) | — | — |
 | `y` | — | Approve | — |
 | `n` | — | Deny | — |
 | `a` | — | Always allow | — |
@@ -428,18 +467,30 @@ For non-TTY (piped output, CI), fall back to the existing `writeLine` text outpu
 
 ```json
 {
-  "ink": "^5.0.0",
+  "ink": "^5.1.0",
   "react": "^19.0.0",
+  "fullscreen-ink": "^1.0.0",
   "@inkjs/ui": "^2.0.0",
-  "ink-spinner": "^5.0.0",
   "zustand": "^5.0.0",
   "marked": "^15.0.0",
   "marked-terminal": "^7.0.0",
-  "chalk": "^5.0.0",
   "figures": "^6.0.0",
-  "cli-spinners": "^4.0.0"
+  "cli-spinners": "^4.0.0",
+  "supports-color": "^10.0.0",
+  "is-unicode-supported": "^2.0.0"
 }
 ```
+
+Dev dependencies:
+```json
+{
+  "@types/react": "^19.0.0"
+}
+```
+
+TSConfig change required: add `"jsx": "react-jsx"` to compiler options (React 19 automatic runtime).
+
+Note: `ink@^5.1.0` minimum is required for React 19 compatibility. The `@inkjs/ui` package includes a `<Spinner>` component, so a separate `ink-spinner` is not needed. `chalk` is not needed since Ink's `<Text color="...">` handles coloring, and the `writeLine` fallback path can use `picocolors` (already lighter).
 
 Optional / evaluate later:
 - `@shikijs/cli` — VS Code-quality syntax highlighting (heavier, add when needed)
@@ -466,16 +517,19 @@ src/ui/
   ApprovalPrompt.tsx    // Approval request UI
   Footer.tsx            // Contextual mode bar
   StyledCard.tsx        // Bordered card for non-TUI commands
+  HelpOverlay.tsx     // Keybinding reference (replaces main panel on ?)
+  events.ts           // OrchestratorEvent discriminated union
   hooks/
     useKeyboard.ts      // Keyboard navigation handler
-    useOrchestratorBridge.ts  // Connects xstate events to zustand store
+    useTerminalSize.ts  // Terminal dimensions (useStdout + resize listener)
+    useOrchestratorBridge.ts  // Connects orchestrator onEvent callback to zustand store
 ```
 
 ---
 
 ## Responsive Behavior
 
-Detect terminal size via `useWindowSize()`:
+Detect terminal size via a custom `useTerminalSize()` hook (Ink's `useStdout()` provides `stdout.columns`/`stdout.rows`, combined with a `process.stdout.on('resize', ...)` listener for reactive updates):
 
 | Width | Behavior |
 |-------|----------|
@@ -507,12 +561,12 @@ const isTTY = process.stdout.isTTY;
 
 ## Anti-Flicker Strategy
 
-1. `incrementalRendering: true` in Ink render options
-2. `React.memo` on stable components (StatusBar, completed AgentRows)
-3. `<Static>` for completed output lines (never re-rendered)
-4. `patchConsole: true` to prevent console.log corruption
-5. `alternateScreen: true` for clean canvas
-6. Zustand selector subscriptions — components only re-render when their slice changes
+1. `incrementalRendering: true` in Ink render options — only redraws changed lines
+2. `React.memo` on stable components (StatusBar, completed AgentRows, individual OutputLines)
+3. `patchConsole: true` to prevent console.log corruption
+4. `fullscreen-ink` for alternate screen buffer — clean canvas
+5. Zustand selector subscriptions — components only re-render when their slice changes
+6. Virtual scroll buffer with offset slicing — only visible lines are rendered
 
 ---
 
@@ -525,14 +579,14 @@ The `start` handler gains a branch: if `process.stdout.isTTY` and not `--bg` and
 ```typescript
 // Pseudocode for the new branch in start handler
 if (process.stdout.isTTY && !options.bg && !options.tmux) {
-  const { render } = await import('ink');
+  const { withFullScreen } = await import('fullscreen-ink');
   const { App } = await import('../ui/App.js');
-  const instance = render(<App config={config} />, {
-    alternateScreen: true,
-    incrementalRendering: true,
+  const app = withFullScreen(<App config={config} />, {
     patchConsole: true,
+    incrementalRendering: true,
   });
-  await instance.waitUntilExit();
+  await app.start();
+  await app.waitUntilExit();
 } else {
   // existing writeLine-based flow
 }
