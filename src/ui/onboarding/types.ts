@@ -25,3 +25,18 @@ export interface WizardCallbacks {
   onQueueRequest: (request: string) => Promise<void>;
   onRedetectBackends: () => Promise<{ codex: BackendDetection; claude: BackendDetection }>;
 }
+
+/**
+ * The subset of CliDependencies that runOnboardingWizard needs.
+ * Defined here to avoid a circular dependency on handlers.ts.
+ */
+export interface WizardDependencies {
+  getCwd: () => string;
+  detectGitInstalled: () => Promise<boolean>;
+  detectGitRepo: () => Promise<boolean>;
+  detectGitHasCommits: () => Promise<boolean>;
+  initGitRepo: () => Promise<void>;
+  createInitialCommit: () => Promise<void>;
+  detectCodex: () => Promise<BackendDetection>;
+  detectClaude: () => Promise<BackendDetection>;
+}
