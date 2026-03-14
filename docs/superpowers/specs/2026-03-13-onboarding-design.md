@@ -50,10 +50,10 @@ These run before the wizard UI appears. They're fast checks that determine wheth
 
 1c. git rev-parse HEAD (only if isGitRepo)
     → success: hasCommits = true
-    → failure: hasCommits = false (will create empty initial commit after git init or at init step)
+    → failure: hasCommits = false
 
 1d. detectCodex() + detectClaude() (run in parallel)
-    → store results for step 2
+    → store results for step 2 (re-run on step 2 entry if navigating back, to pick up changes)
 ```
 
 ### Wizard Steps
@@ -75,7 +75,7 @@ These run before the wizard UI appears. They're fast checks that determine wheth
 - Title: "No git repository found" (yellow)
 - Description: "OpenWeft uses git worktrees to run agents in parallel. This directory needs to be a git repository."
 - Select: "Initialize git here" (runs `git init`) / "Exit"
-- If git init chosen and no commits exist: run `git commit --allow-empty -m "Initial commit"` and note it.
+- If git init chosen: run `git init` followed by `git commit --allow-empty -m "Initial commit"` (worktrees require at least one commit). After success, re-render the step showing `✓ Git repository detected` and `✓ Initial commit created`, then `Enter` to continue to step 2.
 
 **Footer:** `Enter continue` · `Esc quit`
 
@@ -91,13 +91,14 @@ These run before the wizard UI appears. They're fast checks that determine wheth
 - If both authenticated: show select prompt "Choose your default backend" with ↑↓ selection (Codex / Claude), showing model name as hint
 - If one authenticated: auto-select, show "Using [backend] as your default backend." and `Enter` to continue
 - If one installed but not authed, other ready: auto-select the ready one, mention the other needs auth
+- If both installed but neither authenticated: show error state (see below)
 
-**Error — No backends available:**
-- Title: "No backends available" (red)
-- Shows status of each backend
-- Provides install/auth commands
+**Error — No backends ready:**
+- Title: "No backends authenticated" (yellow) if at least one is installed; "No backends available" (red) if neither is installed
+- Shows status of each backend with per-backend fix instructions
+- Provides install/auth commands as appropriate
 - "Run `openweft` again after authenticating."
-- Footer: only `← back` and `Esc quit`
+- Footer: only `Esc quit` (no `← back` — going back to step 1 and forward again would show the same error since nothing changed; re-running `openweft` re-detects backends)
 
 **Interaction:** `↑↓` select (if choice), `Enter` confirm, `←` back.
 
@@ -117,7 +118,9 @@ These run before the wizard UI appears. They're fast checks that determine wheth
 5. Create `prompts/plan-adjustment.md` with starter template
 6. Add `.openweft/` to `.gitignore` (create `.gitignore` if needed, append if exists and entry missing)
 
-**Content:**
+**Note:** The `.gitignore` handling is new behavior not present in the existing `initCommand`. The `initCommand` should also be updated to include `.gitignore` handling for consistency, so that `openweft init` (non-wizard) produces the same result.
+
+**Content (success):**
 - Title: "Project initialized" (green)
 - List of created items with checkmarks and brief descriptions:
   - `.openweftrc.json` — config (backend: [selected])
@@ -127,6 +130,13 @@ These run before the wizard UI appears. They're fast checks that determine wheth
   - `prompts/plan-adjustment.md` — post-merge re-planning prompt
   - `.gitignore` — added .openweft/
 - Tip line (peach): "The prompt files are the biggest lever for quality. Customize them after your first run."
+
+**Error — Initialization failed:**
+- Title: "Initialization failed" (red)
+- Shows the specific error message (e.g., "EACCES: permission denied")
+- Suggestion: "Check file permissions and disk space."
+- Footer: `← back` · `Esc quit`
+- The user can go back to step 2 and forward again to retry, since init is idempotent (`ensureStarterFile` skips existing files).
 
 **Interaction:** `Enter` to continue, `←` to go back.
 
@@ -143,11 +153,13 @@ These run before the wizard UI appears. They're fast checks that determine wheth
 - Description: "Type a feature request. One line, plain language. You can add more after."
 - Text input field with `›` prompt and blinking cursor
 
-**Interaction:** Type text, `Enter` to submit, `←` to go back (when input is empty).
+**Interaction:** Type text, `Enter` to submit, `←` to go back (only when input is empty — otherwise `←` is cursor movement within the text).
 
 **Validation:** Non-empty after trim. If empty on Enter, do nothing (stay on step).
 
 **On submit:** Write to queue file, advance to step 5.
+
+**Esc behavior in text input steps (4 and 5):** `Esc` only quits when the input field is empty. If the user has typed text, `Esc` clears the input field first. A second `Esc` on an empty field quits the wizard. This prevents accidental data loss.
 
 **Footer:** `Enter submit` · `← back` · `Esc quit`
 
@@ -198,6 +210,11 @@ These run before the wizard UI appears. They're fast checks that determine wheth
 The wizard maintains an internal state object:
 
 ```typescript
+interface BackendDetection {
+  installed: boolean;
+  authenticated: boolean;
+}
+
 interface OnboardingState {
   currentStep: number;             // 1-6
   gitDetected: boolean;
@@ -206,18 +223,22 @@ interface OnboardingState {
   claudeStatus: BackendDetection;
   selectedBackend: 'codex' | 'claude' | null;
   initialized: boolean;
+  initError: string | null;
   queuedRequests: string[];
   launchDecision: 'start' | 'exit' | null;
 }
 ```
+
+**Note:** `BackendDetection` is currently defined but not exported in `handlers.ts`. It must be extracted to a shared location (e.g., `src/ui/onboarding/types.ts` or a shared types module) so both the wizard and `handlers.ts` can use it.
 
 **Back navigation rules:**
 - `←` moves to `currentStep - 1` (minimum 1)
 - State from completed steps is preserved (selections, queued items)
 - Initialization is idempotent — going back and forward through step 3 doesn't duplicate files
 - Text input steps: `←` only works when the input field is empty (otherwise `←` is cursor movement)
+- Entering step 2 via back navigation re-runs backend detection (to pick up auth changes made in another terminal)
 
-**Esc behavior:** Exits the wizard immediately. Any files already created (from init) remain on disk. The user can resume by running `openweft` again — config will exist, so they'll get the returning-user flow instead of re-running onboarding.
+**Esc behavior:** Exits the wizard immediately (unless in a text input with content — see Step 4). Any files already created (from init) remain on disk. The user can resume by running `openweft` again — config will exist, so they'll get the returning-user flow instead of re-running onboarding.
 
 ---
 
@@ -314,6 +335,38 @@ createInitialCommit: () => Promise<void>;
 ```
 
 These wrap `execa('git', [...])` calls and are injectable for testing.
+
+### Shared Constants
+
+The prompt template constants (`DEFAULT_PROMPT_A_TEMPLATE`, `DEFAULT_PLAN_ADJUSTMENT_TEMPLATE`) are currently local `const` declarations in `handlers.ts`. They must be exported (or moved to a shared module like `src/config/defaults.ts`) so both `handlers.ts` and the wizard can access them.
+
+### Wizard Orchestration Function
+
+```typescript
+async function runOnboardingWizard(
+  deps: CliDependencies
+): Promise<{ launch: boolean }>;
+```
+
+This function:
+1. Runs Phase 1 pre-checks (git, backends) using `deps`
+2. Creates a `WizardCallbacks` object with bound dependency functions
+3. Launches the Ink app (`OnboardingApp`) with initial state and callbacks
+4. Waits for the app to exit
+5. Returns `{ launch: true }` if the user selected "Start now", `{ launch: false }` otherwise
+
+### Dependency Flow into Components
+
+```typescript
+interface WizardCallbacks {
+  onGitInit: () => Promise<void>;          // deps.initGitRepo + deps.createInitialCommit
+  onRunInit: (backend: 'codex' | 'claude') => Promise<void>;  // creates config, dirs, prompts
+  onQueueRequest: (request: string) => Promise<void>;          // appends to queue.txt
+  onRedetectBackends: () => Promise<{ codex: BackendDetection; claude: BackendDetection }>;
+}
+```
+
+`runOnboardingWizard` creates these callbacks by binding `deps`. They're passed as props to `OnboardingApp`, which distributes them to step components. Step components call callbacks on user actions; callbacks update disk state and return results that update `OnboardingState`.
 
 ### New Files
 
