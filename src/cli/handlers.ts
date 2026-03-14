@@ -348,7 +348,54 @@ export const createCommandHandlers = (
     ...dependencies
   };
 
-  return {
+  // handlers is declared here so that `launch` can call sibling handlers.
+  const handlers: CommandHandlers = {
+    launch: async () => {
+      const cwd = resolvedDependencies.getCwd();
+      const { config } = await loadOpenWeftConfig(cwd);
+
+      // No config — first-time user
+      if (config.configFilePath === null) {
+        if (process.stdout.isTTY) {
+          // Dynamic import to avoid loading Ink unless needed
+          const { runOnboardingWizard } = await import('../ui/onboarding/runOnboardingWizard.js');
+          const result = await runOnboardingWizard(resolvedDependencies);
+          if (result.launch) {
+            await handlers.start({});
+          }
+          return;
+        }
+        // Non-TTY: existing init behavior
+        await handlers.init();
+        resolvedDependencies.writeLine('OpenWeft is ready. Run "openweft add" to queue work, then "openweft start".');
+        return;
+      }
+
+      // Config exists — returning user
+      const background = await readBackgroundPid(config.paths.pidFile, resolvedDependencies.isPidAlive);
+      if (background?.alive) {
+        await handlers.status();
+        return;
+      }
+
+      const queueContent = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
+      const { pending } = parseQueueFile(queueContent);
+      if (pending.length > 0) {
+        await handlers.start({});
+        return;
+      }
+
+      const checkpointResult = await loadCheckpoint({
+        checkpointFile: config.paths.checkpointFile,
+        checkpointBackupFile: config.paths.checkpointBackupFile,
+      });
+      if (checkpointResult.checkpoint) {
+        await handlers.status();
+        return;
+      }
+
+      await handlers.status();
+    },
     init: async () => {
       const cwd = resolvedDependencies.getCwd();
       const configPath = path.join(cwd, '.openweftrc.json');
@@ -730,4 +777,6 @@ export const createCommandHandlers = (
       );
     }
   };
+
+  return handlers;
 };
