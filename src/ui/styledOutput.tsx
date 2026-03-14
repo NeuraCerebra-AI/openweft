@@ -4,12 +4,13 @@ import { render, Text } from 'ink';
 import { ThemeContext, catppuccinMocha } from './theme.js';
 import { StyledCard } from './StyledCard.js';
 
-export const renderStyledOutput = (element: React.ReactElement): void => {
-  render(
+export const renderStyledOutput = async (element: React.ReactElement): Promise<void> => {
+  const instance = render(
     <ThemeContext.Provider value={catppuccinMocha}>
       {element}
     </ThemeContext.Provider>
   );
+  await instance.waitUntilExit();
 };
 
 interface StatusCardProps {

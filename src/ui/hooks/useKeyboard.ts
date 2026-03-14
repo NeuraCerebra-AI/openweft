@@ -45,7 +45,9 @@ export const handleKeypress = (store: StoreApi<UIStore>, key: string): KeypressR
               if (next !== undefined) state.setFocusedAgent(next.id);
             }
           } else {
-            state.setScrollOffset(state.scrollOffset + 1);
+            const agent = state.agents.find((a) => a.id === state.focusedAgentId);
+            const maxOffset = agent !== undefined ? Math.max(0, agent.outputLines.length - 1) : 0;
+            state.setScrollOffset(Math.min(state.scrollOffset + 1, maxOffset));
           }
           return 'handled';
 

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Box, useInput, useApp } from 'ink';
 import { useStore } from 'zustand/react';
 import type { StoreApi } from 'zustand/vanilla';
@@ -28,6 +28,15 @@ export const App: React.FC<AppProps> = ({ store }) => {
   const focusedAgent = state.agents.find((a) => a.id === state.focusedAgentId) ?? null;
   const activeCount = state.agents.filter((a) => a.status === 'running').length;
   const viewportHeight = Math.max(5, rows - CHROME_LINES);
+
+  const startTimeRef = useRef(Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      store.getState().setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [store]);
 
   useInput((_input, key) => {
     const keyName = key.tab ? 'tab'

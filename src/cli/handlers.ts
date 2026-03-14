@@ -339,7 +339,7 @@ export const createCommandHandlers = (
       if (process.stdout.isTTY) {
         const React = await import('react');
         const { renderStyledOutput, SuccessCard } = await import('../ui/styledOutput.js');
-        renderStyledOutput(
+        await renderStyledOutput(
           React.createElement(SuccessCard, {
             message: 'Initialized OpenWeft',
             hint: `Config: ${configExists ? `kept ${config.configFilePath}.` : 'created .openweftrc.json.'}  Backends: codex=${codex.installed ? (codex.authenticated ? 'ready' : 'auth missing') : 'missing'}, claude=${claude.installed ? (claude.authenticated ? 'ready' : 'auth missing') : 'missing'}`,
@@ -386,7 +386,7 @@ export const createCommandHandlers = (
         const React = await import('react');
         const { renderStyledOutput, InfoCard } = await import('../ui/styledOutput.js');
         const queuedItems = requests.map((req, index) => `#${(firstId + index).toString().padStart(3, '0')} "${req}"`).join(', ');
-        renderStyledOutput(
+        await renderStyledOutput(
           React.createElement(InfoCard, {
             message: `Queued ${requests.length} request${requests.length === 1 ? '' : 's'}`,
             detail: queuedItems,
@@ -601,7 +601,7 @@ export const createCommandHandlers = (
               status: f.status === 'executing' ? 'running' : f.status,
             }))
           : [];
-        renderStyledOutput(
+        await renderStyledOutput(
           React.createElement(StatusCard, {
             appName: 'OpenWeft',
             phase,
@@ -631,7 +631,7 @@ export const createCommandHandlers = (
         if (process.stdout.isTTY) {
           const React = await import('react');
           const { renderStyledOutput, WarningCard } = await import('../ui/styledOutput.js');
-          renderStyledOutput(
+          await renderStyledOutput(
             React.createElement(WarningCard, {
               message: 'No background OpenWeft run is active.',
             })
@@ -657,7 +657,7 @@ export const createCommandHandlers = (
           if (process.stdout.isTTY) {
             const React = await import('react');
             const { renderStyledOutput, SuccessCard } = await import('../ui/styledOutput.js');
-            renderStyledOutput(
+            await renderStyledOutput(
               React.createElement(SuccessCard, {
                 message: 'OpenWeft background run stopped.',
               })

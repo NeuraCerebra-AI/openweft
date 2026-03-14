@@ -58,6 +58,10 @@ describe('handleKeypress', () => {
 
   it('scrolls main panel with arrow keys when main panel focused', () => {
     const store = createUIStore();
+    store.getState().addAgent({ id: 'a1', name: 'Alpha', feature: 'auth' });
+    store.getState().setFocusedAgent('a1');
+    store.getState().appendOutput('a1', { type: 'text', content: 'line1', timestamp: Date.now() });
+    store.getState().appendOutput('a1', { type: 'text', content: 'line2', timestamp: Date.now() });
     store.getState().togglePanel(); // switch to main panel
     handleKeypress(store, 'down');
     expect(store.getState().scrollOffset).toBe(1);
