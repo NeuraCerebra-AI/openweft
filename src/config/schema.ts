@@ -1,0 +1,120 @@
+import { z } from 'zod';
+
+import { AuthMethodSchema, BackendSchema, type Backend } from '../domain/primitives.js';
+import type { RuntimePaths } from '../fs/paths.js';
+export { AuthMethodSchema, BackendSchema };
+
+export const BackendAuthConfigSchema = z
+  .object({
+    method: AuthMethodSchema,
+    envVar: z.string().min(1).optional()
+  })
+  .strict();
+
+export const RateLimitModeSchema = z.enum(['subscription', 'api_key']);
+
+export const RateLimitConfigSchema = z
+  .object({
+    mode: RateLimitModeSchema,
+    maxConcurrentRequests: z.number().int().positive(),
+    retryBackoffMs: z.number().int().nonnegative(),
+    retryMaxAttempts: z.number().int().positive()
+  })
+  .strict();
+
+export const BudgetConfigSchema = z
+  .object({
+    warnAtUsd: z.number().nonnegative().nullable(),
+    pauseAtUsd: z.number().nonnegative().nullable(),
+    stopAtUsd: z.number().nonnegative().nullable()
+  })
+  .strict();
+
+export const OpenWeftConfigSchema = z
+  .object({
+    backend: BackendSchema,
+    auth: z
+      .object({
+        codex: BackendAuthConfigSchema,
+        claude: BackendAuthConfigSchema
+      })
+      .strict(),
+    prompts: z
+      .object({
+        promptA: z.string().min(1),
+        planAdjustment: z.string().min(1)
+      })
+      .strict(),
+    featureRequestsDir: z.string().min(1),
+    queueFile: z.string().min(1),
+    models: z
+      .object({
+        codex: z.string().min(1),
+        claude: z.string().min(1)
+      })
+      .strict(),
+    concurrency: z
+      .object({
+        maxParallelAgents: z.number().int().positive(),
+        staggerDelayMs: z.number().int().nonnegative()
+      })
+      .strict(),
+    rateLimits: z
+      .object({
+        codex: RateLimitConfigSchema,
+        claude: RateLimitConfigSchema
+      })
+      .strict(),
+    budget: BudgetConfigSchema
+  })
+  .strict();
+
+export type OpenWeftConfig = z.infer<typeof OpenWeftConfigSchema>;
+
+export const DEFAULT_OPENWEFT_CONFIG: OpenWeftConfig = {
+  backend: 'codex',
+  auth: {
+    codex: { method: 'subscription' },
+    claude: { method: 'subscription' }
+  },
+  prompts: {
+    promptA: './prompts/prompt-a.md',
+    planAdjustment: './prompts/plan-adjustment.md'
+  },
+  featureRequestsDir: './feature_requests',
+  queueFile: './feature_requests/queue.txt',
+  models: {
+    codex: 'gpt-5.3-codex',
+    claude: 'claude-sonnet-4-6'
+  },
+  concurrency: {
+    maxParallelAgents: 3,
+    staggerDelayMs: 5000
+  },
+  rateLimits: {
+    codex: {
+      mode: 'subscription',
+      maxConcurrentRequests: 3,
+      retryBackoffMs: 5000,
+      retryMaxAttempts: 5
+    },
+    claude: {
+      mode: 'subscription',
+      maxConcurrentRequests: 2,
+      retryBackoffMs: 5000,
+      retryMaxAttempts: 5
+    }
+  },
+  budget: {
+    warnAtUsd: null,
+    pauseAtUsd: null,
+    stopAtUsd: null
+  }
+};
+
+export interface ResolvedOpenWeftConfig extends OpenWeftConfig {
+  configFilePath: string | null;
+  configDirectory: string;
+  repoRoot: string;
+  paths: RuntimePaths;
+}
