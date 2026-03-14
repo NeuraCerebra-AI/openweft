@@ -1,8 +1,8 @@
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildProgram } from '../../src/cli/buildProgram.js';
 import { createCommandHandlers } from '../../src/cli/handlers.js';
@@ -262,5 +262,63 @@ describe('command handlers', () => {
     expect(resolvedTmuxInput.slotCount).toBe(3);
     expect(resolvedTmuxInput.logDirectory).toBe(path.join(repoRoot, '.openweft', 'tmux'));
     expect(output.some((line) => line.includes("tmux attach -t"))).toBe(true);
+  });
+});
+
+describe('initCommand .gitignore handling', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), 'openweft-gitignore-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const runInit = async (dir: string): Promise<void> => {
+    const program = buildProgram(
+      createCommandHandlers({
+        getCwd: () => dir,
+        writeLine: () => { /* suppress output */ },
+        detectCodex: async () => ({ installed: false, authenticated: false }),
+        detectClaude: async () => ({ installed: false, authenticated: false }),
+      })
+    );
+    await program.parseAsync(['init'], { from: 'user' });
+  };
+
+  it('creates .gitignore with .openweft/ if no .gitignore exists', async () => {
+    await runInit(tempDir);
+
+    const gitignorePath = path.join(tempDir, '.gitignore');
+    const content = await readFile(gitignorePath, 'utf8');
+    expect(content).toContain('.openweft/');
+  });
+
+  it('appends .openweft/ to existing .gitignore if entry is missing', async () => {
+    const gitignorePath = path.join(tempDir, '.gitignore');
+    await writeFile(gitignorePath, 'node_modules/\ndist/\n', 'utf8');
+
+    await runInit(tempDir);
+
+    const content = await readFile(gitignorePath, 'utf8');
+    expect(content).toContain('node_modules/');
+    expect(content).toContain('dist/');
+    expect(content).toContain('.openweft/');
+  });
+
+  it('does nothing to .gitignore if .openweft/ entry already exists', async () => {
+    const gitignorePath = path.join(tempDir, '.gitignore');
+    const original = 'node_modules/\n.openweft/\n';
+    await writeFile(gitignorePath, original, 'utf8');
+
+    await runInit(tempDir);
+
+    const content = await readFile(gitignorePath, 'utf8');
+    expect(content).toBe(original);
+    // Ensure .openweft/ appears exactly once
+    const occurrences = content.split('.openweft/').length - 1;
+    expect(occurrences).toBe(1);
   });
 });

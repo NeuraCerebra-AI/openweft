@@ -421,6 +421,15 @@ export const createCommandHandlers = (
         await writeTextFileAtomic(configPath, `${JSON.stringify(getDefaultConfig(), null, 2)}\n`);
       }
 
+      const gitignorePath = path.join(cwd, '.gitignore');
+      const gitignoreContent = (await readTextFileIfExists(gitignorePath)) ?? '';
+      if (!gitignoreContent.includes('.openweft/')) {
+        const newContent = gitignoreContent.length > 0
+          ? gitignoreContent.trimEnd() + '\n.openweft/\n'
+          : '.openweft/\n';
+        await writeTextFileAtomic(gitignorePath, newContent);
+      }
+
       const codex = await resolvedDependencies.detectCodex();
       const claude = await resolvedDependencies.detectClaude();
 
