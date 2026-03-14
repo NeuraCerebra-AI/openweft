@@ -5,6 +5,7 @@ import { execa } from 'execa';
 
 import type { CommandHandlers } from './buildProgram.js';
 import { ClaudeCliAdapter, CodexCliAdapter, MockAgentAdapter, createExecaCommandRunner } from '../adapters/index.js';
+import type { BackendDetection } from '../ui/onboarding/types.js';
 import { getDefaultConfig, loadOpenWeftConfig } from '../config/index.js';
 import {
   appendRequestsToQueueContent,
@@ -32,11 +33,6 @@ import {
   type TmuxSpawnResult
 } from '../tmux/index.js';
 
-interface BackendDetection {
-  installed: boolean;
-  authenticated: boolean;
-}
-
 interface BackgroundSpawnInput {
   cwd: string;
   args: string[];
@@ -59,7 +55,7 @@ interface CliDependencies {
   sleep: (ms: number) => Promise<void>;
 }
 
-const DEFAULT_PROMPT_A_TEMPLATE = `You are preparing a planning prompt for a coding agent.
+export const DEFAULT_PROMPT_A_TEMPLATE = `You are preparing a planning prompt for a coding agent.
 
 User request:
 {{USER_REQUEST}}
@@ -73,7 +69,7 @@ Return a Prompt B that tells the next agent to produce a compact Markdown featur
 Prefer the smallest safe change set.
 `;
 
-const DEFAULT_PLAN_ADJUSTMENT_TEMPLATE = `Review these merged edits:
+export const DEFAULT_PLAN_ADJUSTMENT_TEMPLATE = `Review these merged edits:
 {{CODE_EDIT_SUMMARY}}
 
 Investigate whether they interfere with the referenced feature plan.
