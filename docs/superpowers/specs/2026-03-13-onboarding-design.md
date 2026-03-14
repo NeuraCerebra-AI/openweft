@@ -76,8 +76,11 @@ These run before the wizard UI appears. They're fast checks that determine wheth
 - Description: "OpenWeft uses git worktrees to run agents in parallel. This directory needs to be a git repository."
 - Select: "Initialize git here" (runs `git init`) / "Exit"
 - If git init chosen: run `git init` followed by `git commit --allow-empty -m "Initial commit"` (worktrees require at least one commit). After success, re-render the step showing `✓ Git repository detected` and `✓ Initial commit created`, then `Enter` to continue to step 2.
+- If git init or commit fails: show error inline — "Git initialization failed: [error message]". Footer: `Esc quit`. The user should fix the underlying issue (permissions, disk) and re-run `openweft`.
 
-**Footer:** `Enter continue` · `Esc quit`
+**Footer (error state with select):** `↑↓ select` · `Enter confirm` · `Esc quit`
+
+**Footer (success):** `Enter continue` · `Esc quit`
 
 #### Step 2: Backend Detection
 
@@ -173,7 +176,7 @@ These run before the wizard UI appears. They're fast checks that determine wheth
 - Count: "N requests queued. Add another or continue to launch."
 - Select: "Continue to launch" / "Add another request"
 
-**If "Add another" selected:** Show text input inline (same as step 4), on submit: append to queue, refresh the list, stay on step 5.
+**If "Add another" selected:** Show text input inline (same as step 4), on submit: append to queue, refresh the list, stay on step 5. While the inline text input is active, the footer matches step 4's text input footer (`Enter submit` · `Esc clear/quit`). When the input is submitted or dismissed, the footer reverts to the select footer.
 
 **Interaction:** `↑↓` select, `Enter` confirm, `←` back.
 
@@ -222,6 +225,7 @@ interface OnboardingState {
   codexStatus: BackendDetection;
   claudeStatus: BackendDetection;
   selectedBackend: 'codex' | 'claude' | null;
+  gitInitError: string | null;
   initialized: boolean;
   initError: string | null;
   queuedRequests: string[];
