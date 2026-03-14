@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Text } from 'ink';
-import { marked } from 'marked';
+import { marked, type MarkedExtension } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 
 import { useTheme } from './theme.js';
@@ -8,8 +8,9 @@ import { ToolBlock } from './ToolBlock.js';
 import { CodeBlock } from './CodeBlock.js';
 import type { OutputLine as OutputLineType } from './store.js';
 
-// Configure marked with terminal renderer (once)
-marked.use(markedTerminal());
+// Configure marked with terminal renderer (once).
+// Type cast needed because @types/marked-terminal lags behind marked's MarkedExtension interface.
+marked.use(markedTerminal() as unknown as MarkedExtension);
 
 interface OutputLineProps {
   readonly line: OutputLineType;
