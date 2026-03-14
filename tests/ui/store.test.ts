@@ -1,0 +1,70 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { createUIStore } from '../../src/ui/store.js';
+
+describe('UIStore', () => {
+  let store: ReturnType<typeof createUIStore>;
+
+  beforeEach(() => {
+    store = createUIStore();
+  });
+
+  it('initializes with empty state', () => {
+    const state = store.getState();
+    expect(state.agents).toEqual([]);
+    expect(state.focusedAgentId).toBeNull();
+    expect(state.mode).toBe('normal');
+    expect(state.sidebarFocused).toBe(true);
+    expect(state.phase).toBeNull();
+    expect(state.totalCost).toBe(0);
+    expect(state.scrollOffset).toBe(0);
+    expect(state.showHelp).toBe(false);
+  });
+
+  it('adds an agent via addAgent', () => {
+    store.getState().addAgent({ id: 'alpha', name: 'Alpha', feature: 'auth' });
+    const state = store.getState();
+    expect(state.agents).toHaveLength(1);
+    expect(state.agents[0]?.id).toBe('alpha');
+    expect(state.agents[0]?.status).toBe('running');
+    expect(state.agents[0]?.outputLines).toEqual([]);
+  });
+
+  it('updates an agent via updateAgent', () => {
+    store.getState().addAgent({ id: 'alpha', name: 'Alpha', feature: 'auth' });
+    store.getState().updateAgent('alpha', { status: 'completed', cost: 0.12 });
+    const agent = store.getState().agents[0];
+    expect(agent?.status).toBe('completed');
+    expect(agent?.cost).toBe(0.12);
+  });
+
+  it('appends output lines and caps at MAX_LINES', () => {
+    store.getState().addAgent({ id: 'alpha', name: 'Alpha', feature: 'auth' });
+    store.getState().appendOutput('alpha', { type: 'text', content: 'hello', timestamp: Date.now() });
+    const agent = store.getState().agents[0];
+    expect(agent?.outputLines).toHaveLength(1);
+    expect(agent?.outputLines[0]?.content).toBe('hello');
+  });
+
+  it('sets focused agent', () => {
+    store.getState().setFocusedAgent('alpha');
+    expect(store.getState().focusedAgentId).toBe('alpha');
+  });
+
+  it('toggles panel focus', () => {
+    expect(store.getState().sidebarFocused).toBe(true);
+    store.getState().togglePanel();
+    expect(store.getState().sidebarFocused).toBe(false);
+    store.getState().togglePanel();
+    expect(store.getState().sidebarFocused).toBe(true);
+  });
+
+  it('sets mode', () => {
+    store.getState().setMode('approval');
+    expect(store.getState().mode).toBe('approval');
+  });
+
+  it('sets phase info', () => {
+    store.getState().setPhase({ current: 2, total: 4 });
+    expect(store.getState().phase).toEqual({ current: 2, total: 4 });
+  });
+});
