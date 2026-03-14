@@ -13,6 +13,7 @@ const waitForUpdate = () => new Promise<void>((r) => setTimeout(r, 50));
 
 const defaultProps = {
   onAdvance: vi.fn(),
+  onBack: vi.fn(),
   onExit: vi.fn(),
   onQueueRequest: vi.fn().mockResolvedValue(undefined),
 };

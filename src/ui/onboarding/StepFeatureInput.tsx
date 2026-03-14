@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text, useInput } from 'ink';
 
 import { useTheme } from '../theme.js';
 import { TextInputField } from './TextInputField.js';
@@ -7,17 +7,26 @@ import { WizardFooter } from './WizardFooter.js';
 
 export interface StepFeatureInputProps {
   readonly onAdvance: () => void;
+  readonly onBack: () => void;
   readonly onExit: () => void;
   readonly onQueueRequest: (request: string) => Promise<void>;
 }
 
 export const StepFeatureInput: React.FC<StepFeatureInputProps> = ({
   onAdvance,
+  onBack,
   onExit,
   onQueueRequest,
 }) => {
   const { colors } = useTheme();
   const [value, setValue] = useState('');
+
+  // Handle ← back only when input is empty (per spec)
+  useInput((_input, key) => {
+    if (key.leftArrow && value.length === 0) {
+      onBack();
+    }
+  });
 
   const handleSubmit = (text: string) => {
     void onQueueRequest(text).then(() => {

@@ -9,6 +9,7 @@ import { WizardFooter } from './WizardFooter.js';
 export interface StepAddMoreProps {
   readonly queuedRequests: readonly string[];
   readonly onAdvance: () => void;
+  readonly onBack: () => void;
   readonly onExit: () => void;
   readonly onQueueRequest: (request: string) => Promise<void>;
 }
@@ -29,6 +30,7 @@ function formatId(index: number): string {
 export const StepAddMore: React.FC<StepAddMoreProps> = ({
   queuedRequests,
   onAdvance,
+  onBack,
   onExit,
   onQueueRequest,
 }) => {
@@ -36,10 +38,15 @@ export const StepAddMore: React.FC<StepAddMoreProps> = ({
   const [mode, setMode] = useState<Mode>('select');
   const [inputValue, setInputValue] = useState('');
 
-  // Handle Esc in select mode to exit
+  // Handle Esc in select mode to exit, ← back in select mode
   useInput((_input, key) => {
-    if (mode === 'select' && key.escape) {
-      onExit();
+    if (mode === 'select') {
+      if (key.escape) {
+        onExit();
+      }
+      if (key.leftArrow) {
+        onBack();
+      }
     }
   });
 

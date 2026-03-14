@@ -14,6 +14,7 @@ const waitForUpdate = () => new Promise<void>((r) => setTimeout(r, 50));
 const defaultProps = {
   queuedRequests: ['Add user authentication'],
   onAdvance: vi.fn(),
+  onBack: vi.fn(),
   onExit: vi.fn(),
   onQueueRequest: vi.fn().mockResolvedValue(undefined),
 };
