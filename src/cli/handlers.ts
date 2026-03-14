@@ -336,6 +336,18 @@ export const createCommandHandlers = (
       const codex = await resolvedDependencies.detectCodex();
       const claude = await resolvedDependencies.detectClaude();
 
+      if (process.stdout.isTTY) {
+        const React = await import('react');
+        const { renderStyledOutput, SuccessCard } = await import('../ui/styledOutput.js');
+        renderStyledOutput(
+          React.createElement(SuccessCard, {
+            message: 'Initialized OpenWeft',
+            hint: `Config: ${configExists ? `kept ${config.configFilePath}.` : 'created .openweftrc.json.'}  Backends: codex=${codex.installed ? (codex.authenticated ? 'ready' : 'auth missing') : 'missing'}, claude=${claude.installed ? (claude.authenticated ? 'ready' : 'auth missing') : 'missing'}`,
+          })
+        );
+        return;
+      }
+
       resolvedDependencies.writeLine(
         `Initialized OpenWeft in ${cwd}. Config: ${configExists ? `kept ${config.configFilePath}.` : 'created .openweftrc.json.'}`
       );
@@ -367,7 +379,21 @@ export const createCommandHandlers = (
         ? await readdir(config.paths.featureRequestsDir).catch(() => [] as string[])
         : [];
       const existingPendingCount = parseQueueFile(existingQueueContent).pending.length;
-      let nextId = getNextFeatureIdFromQueue(existingPlanFiles, existingQueueContent) + existingPendingCount;
+      const firstId = getNextFeatureIdFromQueue(existingPlanFiles, existingQueueContent) + existingPendingCount;
+      let nextId = firstId;
+
+      if (process.stdout.isTTY) {
+        const React = await import('react');
+        const { renderStyledOutput, InfoCard } = await import('../ui/styledOutput.js');
+        const queuedItems = requests.map((req, index) => `#${(firstId + index).toString().padStart(3, '0')} "${req}"`).join(', ');
+        renderStyledOutput(
+          React.createElement(InfoCard, {
+            message: `Queued ${requests.length} request${requests.length === 1 ? '' : 's'}`,
+            detail: queuedItems,
+          })
+        );
+        return;
+      }
 
       for (const request of requests) {
         resolvedDependencies.writeLine(`Queued #${nextId.toString().padStart(3, '0')} "${request}"`);
@@ -453,6 +479,41 @@ export const createCommandHandlers = (
         useStream = true;
       }
 
+      if (process.stdout.isTTY && !options.bg && !options.tmux && !tmuxMonitor && !options.dryRun) {
+        // Dynamic import to avoid loading Ink for non-TUI paths
+        const { withFullScreen } = await import('fullscreen-ink');
+        const { App } = await import('../ui/App.js');
+        const { createUIStore } = await import('../ui/store.js');
+        const { createEventHandler } = await import('../ui/hooks/useOrchestratorBridge.js');
+        const React = await import('react');
+
+        const uiStore = createUIStore();
+        const onEvent = createEventHandler(uiStore);
+
+        const app = withFullScreen(
+          React.createElement(App, { store: uiStore }),
+          { exitOnCtrlC: false }
+        );
+        await app.start();
+
+        // Run orchestration with event bridge
+        await runRealOrchestration({
+          config,
+          configHash,
+          adapter: selectAdapter({ backend: config.backend, streamOutput: false }),
+          stopController: new StopController(),
+          streamOutput: false,
+          tmuxRequested: false,
+          writeLine: resolvedDependencies.writeLine,
+          sleep: resolvedDependencies.sleep,
+          onEvent,
+        });
+
+        // Wait for user to quit
+        await app.waitUntilExit();
+        return;
+      }
+
       const stopController = new StopController();
       const signalHandler = () => {
         if (!stopController.isRequested) {
@@ -526,6 +587,31 @@ export const createCommandHandlers = (
         resolvedDependencies.isPidAlive
       );
 
+      if (process.stdout.isTTY) {
+        const React = await import('react');
+        const { renderStyledOutput, StatusCard } = await import('../ui/styledOutput.js');
+        const cp = checkpointResult.checkpoint;
+        const phase = cp?.currentPhase
+          ? `${cp.currentPhase.name} (${cp.currentPhase.featureIds.length} feature${cp.currentPhase.featureIds.length === 1 ? '' : 's'})`
+          : cp?.status ?? 'idle';
+        const cost = cp ? `$${cp.cost.totalEstimatedUsd.toFixed(4)}` : '$0.0000';
+        const agents = cp
+          ? Object.values(cp.features).map((f) => ({
+              name: `${f.id} ${f.title ?? f.request}`,
+              status: f.status === 'executing' ? 'running' : f.status,
+            }))
+          : [];
+        renderStyledOutput(
+          React.createElement(StatusCard, {
+            appName: 'OpenWeft',
+            phase,
+            cost,
+            agents,
+          })
+        );
+        return;
+      }
+
       resolvedDependencies.writeLine(
         renderStatusReport({
           checkpoint: checkpointResult.checkpoint,
@@ -542,6 +628,16 @@ export const createCommandHandlers = (
       );
 
       if (!background?.alive) {
+        if (process.stdout.isTTY) {
+          const React = await import('react');
+          const { renderStyledOutput, WarningCard } = await import('../ui/styledOutput.js');
+          renderStyledOutput(
+            React.createElement(WarningCard, {
+              message: 'No background OpenWeft run is active.',
+            })
+          );
+          return;
+        }
         resolvedDependencies.writeLine('No background OpenWeft run is active.');
         return;
       }
@@ -558,6 +654,16 @@ export const createCommandHandlers = (
           resolvedDependencies.isPidAlive
         );
         if (!liveState?.alive) {
+          if (process.stdout.isTTY) {
+            const React = await import('react');
+            const { renderStyledOutput, SuccessCard } = await import('../ui/styledOutput.js');
+            renderStyledOutput(
+              React.createElement(SuccessCard, {
+                message: 'OpenWeft background run stopped.',
+              })
+            );
+            return;
+          }
           resolvedDependencies.writeLine('OpenWeft background run stopped.');
           return;
         }

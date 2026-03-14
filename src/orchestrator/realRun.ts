@@ -9,6 +9,7 @@ import { simpleGit } from 'simple-git';
 
 import { buildExecutionPrompt, CODE_EDIT_SUMMARY_MARKER, injectPromptTemplate, USER_REQUEST_MARKER } from '../adapters/prompts.js';
 import type { AgentAdapter, AdapterCommandSpec, AdapterTurnRequest, AdapterTurnResult } from '../adapters/types.js';
+import type { OrchestratorEventHandler } from '../ui/events.js';
 import type { ResolvedOpenWeftConfig } from '../config/index.js';
 import { addCostRecordToTotals, type CostRecord } from '../domain/costs.js';
 import { circuitBreakerTripped } from '../domain/errors.js';
@@ -77,6 +78,7 @@ interface RealRunInput {
   writeLine?: (message: string) => void;
   notificationDependencies?: NotificationDependencies;
   sleep?: (ms: number) => Promise<void>;
+  onEvent?: OrchestratorEventHandler;
 }
 
 interface RealRunContext extends RealRunInput {
