@@ -5,6 +5,7 @@ import { execa } from 'execa';
 
 import type { CommandHandlers } from './buildProgram.js';
 import { ClaudeCliAdapter, CodexCliAdapter, MockAgentAdapter, createExecaCommandRunner } from '../adapters/index.js';
+import type { BackendDetection } from '../ui/onboarding/types.js';
 import { getDefaultConfig, loadOpenWeftConfig } from '../config/index.js';
 import {
   appendRequestsToQueueContent,
@@ -32,11 +33,6 @@ import {
   type TmuxSpawnResult
 } from '../tmux/index.js';
 
-interface BackendDetection {
-  installed: boolean;
-  authenticated: boolean;
-}
-
 interface BackgroundSpawnInput {
   cwd: string;
   args: string[];
@@ -49,6 +45,11 @@ interface CliDependencies {
   detectCodex: () => Promise<BackendDetection>;
   detectClaude: () => Promise<BackendDetection>;
   detectTmux: () => Promise<boolean>;
+  detectGitInstalled: () => Promise<boolean>;
+  detectGitRepo: () => Promise<boolean>;
+  detectGitHasCommits: () => Promise<boolean>;
+  initGitRepo: () => Promise<void>;
+  createInitialCommit: () => Promise<void>;
   getProcessArgv: () => string[];
   getExecPath: () => string;
   getEnv: () => NodeJS.ProcessEnv;
@@ -59,7 +60,7 @@ interface CliDependencies {
   sleep: (ms: number) => Promise<void>;
 }
 
-const DEFAULT_PROMPT_A_TEMPLATE = `You are preparing a planning prompt for a coding agent.
+export const DEFAULT_PROMPT_A_TEMPLATE = `You are preparing a planning prompt for a coding agent.
 
 User request:
 {{USER_REQUEST}}
@@ -73,7 +74,7 @@ Return a Prompt B that tells the next agent to produce a compact Markdown featur
 Prefer the smallest safe change set.
 `;
 
-const DEFAULT_PLAN_ADJUSTMENT_TEMPLATE = `Review these merged edits:
+export const DEFAULT_PLAN_ADJUSTMENT_TEMPLATE = `Review these merged edits:
 {{CODE_EDIT_SUMMARY}}
 
 Investigate whether they interfere with the referenced feature plan.
@@ -142,6 +143,41 @@ async function detectTmux(): Promise<boolean> {
   }
 }
 
+async function detectGitInstalled(): Promise<boolean> {
+  try {
+    const result = await execa('git', ['--version'], { reject: false });
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function detectGitRepo(): Promise<boolean> {
+  try {
+    const result = await execa('git', ['rev-parse', '--git-dir'], { reject: false });
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function detectGitHasCommits(): Promise<boolean> {
+  try {
+    const result = await execa('git', ['rev-parse', 'HEAD'], { reject: false });
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function initGitRepo(): Promise<void> {
+  await execa('git', ['init']);
+}
+
+async function createInitialCommit(): Promise<void> {
+  await execa('git', ['commit', '--allow-empty', '-m', 'Initial commit']);
+}
+
 const sleep = async (ms: number): Promise<void> => {
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -156,6 +192,11 @@ const defaultDependencies: CliDependencies = {
   detectCodex,
   detectClaude,
   detectTmux,
+  detectGitInstalled,
+  detectGitRepo,
+  detectGitHasCommits,
+  initGitRepo,
+  createInitialCommit,
   getProcessArgv: () => [...process.argv],
   getExecPath: () => process.execPath,
   getEnv: () => ({ ...process.env }),
@@ -307,7 +348,54 @@ export const createCommandHandlers = (
     ...dependencies
   };
 
-  return {
+  // handlers is declared here so that `launch` can call sibling handlers.
+  const handlers: CommandHandlers = {
+    launch: async () => {
+      const cwd = resolvedDependencies.getCwd();
+      const { config } = await loadOpenWeftConfig(cwd);
+
+      // No config — first-time user
+      if (config.configFilePath === null) {
+        if (process.stdout.isTTY) {
+          // Dynamic import to avoid loading Ink unless needed
+          const { runOnboardingWizard } = await import('../ui/onboarding/runOnboardingWizard.js');
+          const result = await runOnboardingWizard(resolvedDependencies);
+          if (result.launch) {
+            await handlers.start({});
+          }
+          return;
+        }
+        // Non-TTY: existing init behavior
+        await handlers.init();
+        resolvedDependencies.writeLine('OpenWeft is ready. Run "openweft add" to queue work, then "openweft start".');
+        return;
+      }
+
+      // Config exists — returning user
+      const background = await readBackgroundPid(config.paths.pidFile, resolvedDependencies.isPidAlive);
+      if (background?.alive) {
+        await handlers.status();
+        return;
+      }
+
+      const queueContent = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
+      const { pending } = parseQueueFile(queueContent);
+      if (pending.length > 0) {
+        await handlers.start({});
+        return;
+      }
+
+      const checkpointResult = await loadCheckpoint({
+        checkpointFile: config.paths.checkpointFile,
+        checkpointBackupFile: config.paths.checkpointBackupFile,
+      });
+      if (checkpointResult.checkpoint) {
+        await handlers.status();
+        return;
+      }
+
+      await handlers.status();
+    },
     init: async () => {
       const cwd = resolvedDependencies.getCwd();
       const configPath = path.join(cwd, '.openweftrc.json');
@@ -331,6 +419,15 @@ export const createCommandHandlers = (
 
       if (!configExists) {
         await writeTextFileAtomic(configPath, `${JSON.stringify(getDefaultConfig(), null, 2)}\n`);
+      }
+
+      const gitignorePath = path.join(cwd, '.gitignore');
+      const gitignoreContent = (await readTextFileIfExists(gitignorePath)) ?? '';
+      if (!gitignoreContent.includes('.openweft/')) {
+        const newContent = gitignoreContent.length > 0
+          ? gitignoreContent.trimEnd() + '\n.openweft/\n'
+          : '.openweft/\n';
+        await writeTextFileAtomic(gitignorePath, newContent);
       }
 
       const codex = await resolvedDependencies.detectCodex();
@@ -689,4 +786,6 @@ export const createCommandHandlers = (
       );
     }
   };
+
+  return handlers;
 };

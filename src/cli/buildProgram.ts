@@ -3,6 +3,7 @@ import { Command } from 'commander';
 export type CommandHandler = (...args: unknown[]) => Promise<void> | void;
 
 export interface CommandHandlers {
+  launch: CommandHandler;
   init: CommandHandler;
   add: CommandHandler;
   start: CommandHandler;
@@ -17,6 +18,7 @@ const createPlaceholderHandler = (commandName: string): CommandHandler => {
 };
 
 export const createDefaultHandlers = (): CommandHandlers => ({
+  launch: createPlaceholderHandler('launch'),
   init: createPlaceholderHandler('init'),
   add: createPlaceholderHandler('add'),
   start: createPlaceholderHandler('start'),
@@ -36,6 +38,11 @@ export const buildProgram = (handlers: Partial<CommandHandlers> = {}): Command =
     .name('openweft')
     .description('Orchestrate phased AI coding work across Codex CLI and Claude Code.')
     .version('0.1.0');
+
+  // Default action: runs when no subcommand is given.
+  program.action(async (...args) => {
+    await resolvedHandlers.launch(...args);
+  });
 
   program
     .command('init')
