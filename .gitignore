@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.openweft/
+.worktrees/
+.DS_Store
+coverage/
+openweft-*.tgz
+.tmp-npm-cache/
+
+# Internal build/research artifacts that should not ship with the public repo
+Research_Data/
+project_ledgers/
+prompts/openweft-build-ultrathink.md
