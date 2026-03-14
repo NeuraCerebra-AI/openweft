@@ -14,7 +14,7 @@ interface SidebarProps {
   readonly isFocused: boolean;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ agents, focusedAgentId, phase, totalCost, isFocused }) => {
+export const Sidebar: React.FC<SidebarProps> = React.memo(({ agents, focusedAgentId, phase, totalCost, isFocused }) => {
   const { colors, borders } = useTheme();
 
   return (
@@ -49,4 +49,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ agents, focusedAgentId, phase,
       </Box>
     </Box>
   );
-};
+});
+
+Sidebar.displayName = 'Sidebar';

@@ -12,7 +12,7 @@ interface MainPanelProps {
   readonly viewportHeight: number;
 }
 
-export const MainPanel: React.FC<MainPanelProps> = ({ agentName, lines, scrollOffset, viewportHeight }) => {
+export const MainPanel: React.FC<MainPanelProps> = React.memo(({ agentName, lines, scrollOffset, viewportHeight }) => {
   const { colors, borders } = useTheme();
   const visibleLines = lines.slice(scrollOffset, scrollOffset + viewportHeight);
 
@@ -29,4 +29,6 @@ export const MainPanel: React.FC<MainPanelProps> = ({ agentName, lines, scrollOf
       ))}
     </Box>
   );
-};
+});
+
+MainPanel.displayName = 'MainPanel';

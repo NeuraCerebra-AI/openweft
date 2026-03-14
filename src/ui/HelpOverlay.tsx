@@ -3,7 +3,7 @@ import { Box, Text } from 'ink';
 
 import { useTheme } from './theme.js';
 
-export const HelpOverlay: React.FC = () => {
+export const HelpOverlay: React.FC = React.memo(() => {
   const { colors, borders } = useTheme();
 
   return (
@@ -20,4 +20,6 @@ export const HelpOverlay: React.FC = () => {
       <Text color={colors.muted}>{'Press ? or Esc to dismiss'}</Text>
     </Box>
   );
-};
+});
+
+HelpOverlay.displayName = 'HelpOverlay';

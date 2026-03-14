@@ -6,6 +6,7 @@ import { markedTerminal } from 'marked-terminal';
 import { useTheme } from './theme.js';
 import { ToolBlock } from './ToolBlock.js';
 import { CodeBlock } from './CodeBlock.js';
+import { ApprovalPrompt } from './ApprovalPrompt.js';
 import type { OutputLine as OutputLineType } from './store.js';
 
 // Configure marked with terminal renderer (once).
@@ -56,7 +57,13 @@ export const OutputLine: React.FC<OutputLineProps> = React.memo(({ line }) => {
       );
 
     case 'approval':
-      return <Text color={colors.yellow}>{`⚠ ${line.content}`}</Text>;
+      return (
+        <ApprovalPrompt
+          file={line.meta?.['file'] ?? ''}
+          action={line.meta?.['action'] ?? line.content}
+          detail={line.content}
+        />
+      );
 
     default:
       return <Text>{line.content}</Text>;

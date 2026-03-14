@@ -6,10 +6,12 @@ interface StyledCardProps {
   readonly children: React.ReactNode;
 }
 
-export const StyledCard: React.FC<StyledCardProps> = ({ borderColor, children }) => {
+export const StyledCard: React.FC<StyledCardProps> = React.memo(({ borderColor, children }) => {
   return (
     <Box flexDirection="column" borderStyle="round" borderColor={borderColor} paddingX={1}>
       {children}
     </Box>
   );
-};
+});
+
+StyledCard.displayName = 'StyledCard';
