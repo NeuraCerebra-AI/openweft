@@ -45,6 +45,11 @@ interface CliDependencies {
   detectCodex: () => Promise<BackendDetection>;
   detectClaude: () => Promise<BackendDetection>;
   detectTmux: () => Promise<boolean>;
+  detectGitInstalled: () => Promise<boolean>;
+  detectGitRepo: () => Promise<boolean>;
+  detectGitHasCommits: () => Promise<boolean>;
+  initGitRepo: () => Promise<void>;
+  createInitialCommit: () => Promise<void>;
   getProcessArgv: () => string[];
   getExecPath: () => string;
   getEnv: () => NodeJS.ProcessEnv;
@@ -138,6 +143,41 @@ async function detectTmux(): Promise<boolean> {
   }
 }
 
+async function detectGitInstalled(): Promise<boolean> {
+  try {
+    const result = await execa('git', ['--version'], { reject: false });
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function detectGitRepo(): Promise<boolean> {
+  try {
+    const result = await execa('git', ['rev-parse', '--git-dir'], { reject: false });
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function detectGitHasCommits(): Promise<boolean> {
+  try {
+    const result = await execa('git', ['rev-parse', 'HEAD'], { reject: false });
+    return result.exitCode === 0;
+  } catch {
+    return false;
+  }
+}
+
+async function initGitRepo(): Promise<void> {
+  await execa('git', ['init']);
+}
+
+async function createInitialCommit(): Promise<void> {
+  await execa('git', ['commit', '--allow-empty', '-m', 'Initial commit']);
+}
+
 const sleep = async (ms: number): Promise<void> => {
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -152,6 +192,11 @@ const defaultDependencies: CliDependencies = {
   detectCodex,
   detectClaude,
   detectTmux,
+  detectGitInstalled,
+  detectGitRepo,
+  detectGitHasCommits,
+  initGitRepo,
+  createInitialCommit,
   getProcessArgv: () => [...process.argv],
   getExecPath: () => process.execPath,
   getEnv: () => ({ ...process.env }),
