@@ -28,6 +28,21 @@ describe('manifest', () => {
     expect(parsed.method).toBe('json');
   });
 
+  it('parses a manifest from a plain json fence', () => {
+    const parsed = parseManifestFromMarkdown(`## Manifest
+
+\`\`\`json
+{
+  "create": [],
+  "modify": ["src/plain.ts"],
+  "delete": []
+}
+\`\`\`
+`);
+
+    expect(parsed.manifest.modify).toEqual(['src/plain.ts']);
+  });
+
   it('repairs malformed JSON manifests', () => {
     const repaired = parseManifestJson(`{create:['src/a.ts'], modify:[], delete:[],}`);
     expect(repaired.method).toBe('jsonrepair');
@@ -60,4 +75,3 @@ describe('manifest', () => {
     ).toEqual(['src/auth/login.ts']);
   });
 });
-

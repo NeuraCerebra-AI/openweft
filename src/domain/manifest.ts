@@ -59,7 +59,12 @@ export const extractManifestBlock = (markdown: string): ManifestBlock | null => 
       return;
     }
 
-    if (underManifestHeading && node.type === 'code' && node.lang === 'json' && node.position) {
+    if (
+      underManifestHeading &&
+      node.type === 'code' &&
+      node.position &&
+      (node.lang === 'json' || node.lang === 'json manifest')
+    ) {
       manifestNode = {
         raw: node.value,
         startOffset: node.position.start.offset ?? 0,
