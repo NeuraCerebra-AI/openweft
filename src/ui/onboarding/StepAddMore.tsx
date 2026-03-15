@@ -5,6 +5,7 @@ import { useTheme } from '../theme.js';
 import { SelectInput } from './SelectInput.js';
 import { TextInputField } from './TextInputField.js';
 import { WizardFooter } from './WizardFooter.js';
+import { WizardHeader } from './WizardHeader.js';
 
 export interface StepAddMoreProps {
   readonly queuedRequests: readonly string[];
@@ -78,12 +79,7 @@ export const StepAddMore: React.FC<StepAddMoreProps> = ({
   return (
     <Box flexDirection="column" gap={1} paddingX={2} paddingY={1}>
       {/* Brand header */}
-      <Box flexDirection="row" gap={1}>
-        <Text color={colors.mauve} bold>
-          {'◆ openweft'}
-        </Text>
-        <Text color={colors.subtext}>{'setup · queue'}</Text>
-      </Box>
+      <WizardHeader subtitle="setup · queue" />
 
       {/* Title */}
       <Text color={colors.sky} bold>

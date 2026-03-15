@@ -3,6 +3,7 @@ import { Box, Text, useInput } from 'ink';
 
 import { useTheme } from '../theme.js';
 import { WizardFooter } from './WizardFooter.js';
+import { WizardHeader } from './WizardHeader.js';
 
 export interface StepInitProps {
   readonly selectedBackend: 'codex' | 'claude';
@@ -82,12 +83,7 @@ export const StepInit: React.FC<StepInitProps> = ({
   return (
     <Box flexDirection="column" gap={1} paddingX={2} paddingY={1}>
       {/* Brand header */}
-      <Box flexDirection="row" gap={1}>
-        <Text color={colors.mauve} bold>
-          {'◆ openweft'}
-        </Text>
-        <Text color={colors.subtext}>{'setup · init'}</Text>
-      </Box>
+      <WizardHeader subtitle="setup · init" />
 
       {/* Content area */}
       {initialized && (

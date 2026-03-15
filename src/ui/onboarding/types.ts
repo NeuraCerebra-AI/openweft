@@ -32,6 +32,7 @@ export interface WizardCallbacks {
  */
 export interface WizardDependencies {
   getCwd: () => string;
+  writeError: (message: string) => void;
   detectGitInstalled: () => Promise<boolean>;
   detectGitRepo: () => Promise<boolean>;
   detectGitHasCommits: () => Promise<boolean>;

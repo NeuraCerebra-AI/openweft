@@ -45,3 +45,5 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({ steps, current }) => {
     </Box>
   );
 };
+
+ProgressBar.displayName = 'ProgressBar';

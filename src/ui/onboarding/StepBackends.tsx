@@ -4,6 +4,7 @@ import { Box, Text, useInput } from 'ink';
 import { useTheme } from '../theme.js';
 import { SelectInput } from './SelectInput.js';
 import { WizardFooter } from './WizardFooter.js';
+import { WizardHeader } from './WizardHeader.js';
 import type { BackendDetection } from './types.js';
 
 export interface StepBackendsProps {
@@ -141,12 +142,7 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
   return (
     <Box flexDirection="column" gap={1} paddingX={2} paddingY={1}>
       {/* Brand header */}
-      <Box flexDirection="row" gap={1}>
-        <Text color={colors.mauve} bold>
-          {'◆ openweft'}
-        </Text>
-        <Text color={colors.subtext}>{'setup · backends'}</Text>
-      </Box>
+      <WizardHeader subtitle="setup · backends" />
 
       {/* Backend status rows */}
       <Box flexDirection="column" gap={0}>

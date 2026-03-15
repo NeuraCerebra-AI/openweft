@@ -3,53 +3,19 @@ import path from 'node:path';
 import { getDefaultConfig } from '../../config/index.js';
 import { appendRequestsToQueueContent } from '../../domain/queue.js';
 import {
+  buildDefaultRuntimePaths,
   ensureDirectory,
+  ensureQueueFile,
   ensureRuntimeDirectories,
+  ensureStarterFile,
   readTextFileIfExists,
   writeTextFileAtomic,
 } from '../../fs/index.js';
-import { buildRuntimePaths } from '../../fs/paths.js';
 import {
   DEFAULT_PLAN_ADJUSTMENT_TEMPLATE,
   DEFAULT_PROMPT_A_TEMPLATE,
 } from '../../cli/handlers.js';
 import type { OnboardingState, WizardCallbacks, WizardDependencies } from './types.js';
-
-/**
- * Build a RuntimePaths object using the default config values for a given cwd.
- * Mirrors the private buildDefaultRuntimePaths in handlers.ts.
- */
-const buildDefaultRuntimePaths = (cwd: string) => {
-  const defaults = getDefaultConfig();
-  return buildRuntimePaths({
-    repoRoot: cwd,
-    configDirectory: cwd,
-    featureRequestsDir: defaults.featureRequestsDir,
-    queueFile: defaults.queueFile,
-    promptA: defaults.prompts.promptA,
-    planAdjustment: defaults.prompts.planAdjustment,
-  });
-};
-
-/**
- * Ensure a queue file exists; create it with a header comment if it doesn't.
- */
-const ensureQueueFile = async (queueFile: string): Promise<void> => {
-  const exists = await readTextFileIfExists(queueFile);
-  if (exists === null) {
-    await writeTextFileAtomic(queueFile, '# OpenWeft feature queue\n');
-  }
-};
-
-/**
- * Write a starter file at the given path only if it doesn't already exist.
- */
-const ensureStarterFile = async (filePath: string, content: string): Promise<void> => {
-  const exists = await readTextFileIfExists(filePath);
-  if (exists === null) {
-    await writeTextFileAtomic(filePath, `${content.trimEnd()}\n`);
-  }
-};
 
 /**
  * Run the interactive onboarding wizard.
@@ -68,7 +34,7 @@ export async function runOnboardingWizard(
 
   const gitInstalled = await deps.detectGitInstalled();
   if (!gitInstalled) {
-    process.stderr.write('Git is required. Install it and try again.\n');
+    deps.writeError('Git is required. Install it and try again.');
     return { launch: false };
   }
 

@@ -14,13 +14,15 @@ import {
   parseQueueFile
 } from '../domain/queue.js';
 import {
+  buildDefaultRuntimePaths,
   ensureDirectory,
+  ensureQueueFile,
   ensureRuntimeDirectories,
+  ensureStarterFile,
   pathExists,
   readTextFileIfExists,
   writeTextFileAtomic
 } from '../fs/index.js';
-import { buildRuntimePaths } from '../fs/paths.js';
 import { ApprovalController, runDryRunOrchestration, runRealOrchestration, StopController } from '../orchestrator/index.js';
 import { createDefaultNotificationDependencies } from '../notifications/index.js';
 import { loadCheckpoint } from '../state/index.js';
@@ -43,6 +45,7 @@ interface BackgroundSpawnInput {
 interface CliDependencies {
   getCwd: () => string;
   writeLine: (message: string) => void;
+  writeError: (message: string) => void;
   detectCodex: () => Promise<BackendDetection>;
   detectClaude: () => Promise<BackendDetection>;
   detectTmux: () => Promise<boolean>;
@@ -190,6 +193,9 @@ const defaultDependencies: CliDependencies = {
   writeLine: (message) => {
     console.log(message);
   },
+  writeError: (message) => {
+    console.error(message);
+  },
   detectCodex,
   detectClaude,
   detectTmux,
@@ -251,32 +257,6 @@ const defaultDependencies: CliDependencies = {
   sleep
 };
 
-const ensureQueueFile = async (queueFile: string): Promise<void> => {
-  if (!(await pathExists(queueFile))) {
-    await writeTextFileAtomic(queueFile, '# OpenWeft feature queue\n');
-  }
-};
-
-const ensureStarterFile = async (filePath: string, content: string): Promise<boolean> => {
-  if (await pathExists(filePath)) {
-    return false;
-  }
-
-  await writeTextFileAtomic(filePath, `${content.trimEnd()}\n`);
-  return true;
-};
-
-const buildDefaultRuntimePaths = (cwd: string) => {
-  const defaults = getDefaultConfig();
-  return buildRuntimePaths({
-    repoRoot: cwd,
-    configDirectory: cwd,
-    featureRequestsDir: defaults.featureRequestsDir,
-    queueFile: defaults.queueFile,
-    promptA: defaults.prompts.promptA,
-    planAdjustment: defaults.prompts.planAdjustment
-  });
-};
 
 const selectAdapter = (input: {
   backend: 'codex' | 'claude' | 'mock';

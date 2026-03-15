@@ -6,13 +6,19 @@ import type { MockedFunction } from 'vitest';
 // ---------------------------------------------------------------------------
 
 // Mock fs helpers
-vi.mock('../../../src/fs/index.js', () => ({
-  ensureDirectory: vi.fn().mockResolvedValue(undefined),
-  ensureRuntimeDirectories: vi.fn().mockResolvedValue(undefined),
-  readTextFileIfExists: vi.fn().mockResolvedValue(null),
-  writeTextFileAtomic: vi.fn().mockResolvedValue(undefined),
-  pathExists: vi.fn().mockResolvedValue(false),
-}));
+vi.mock('../../../src/fs/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/fs/index.js')>();
+  return {
+    ...actual,
+    ensureDirectory: vi.fn().mockResolvedValue(undefined),
+    ensureRuntimeDirectories: vi.fn().mockResolvedValue(undefined),
+    readTextFileIfExists: vi.fn().mockResolvedValue(null),
+    writeTextFileAtomic: vi.fn().mockResolvedValue(undefined),
+    pathExists: vi.fn().mockResolvedValue(false),
+    ensureQueueFile: vi.fn().mockResolvedValue(undefined),
+    ensureStarterFile: vi.fn().mockResolvedValue(false),
+  };
+});
 
 // Mock domain/queue
 vi.mock('../../../src/domain/queue.js', () => ({
@@ -91,6 +97,7 @@ import type { Instance } from 'ink';
 
 const makeDeps = (overrides?: Partial<WizardDependencies>): WizardDependencies => ({
   getCwd: vi.fn(() => '/fake/cwd'),
+  writeError: vi.fn(),
   detectGitInstalled: vi.fn().mockResolvedValue(true),
   detectGitRepo: vi.fn().mockResolvedValue(true),
   detectGitHasCommits: vi.fn().mockResolvedValue(true),
@@ -291,6 +298,7 @@ describe('runOnboardingWizard', () => {
       const result = await runOnboardingWizard(deps);
 
       expect(result).toEqual({ launch: false });
+      expect(deps.writeError).toHaveBeenCalledWith('Git is required. Install it and try again.');
       expect(withFullScreen).not.toHaveBeenCalled();
     });
   });
