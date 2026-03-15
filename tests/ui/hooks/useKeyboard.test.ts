@@ -25,6 +25,19 @@ describe('handleKeypress', () => {
     expect(store.getState().mode).toBe('normal');
   });
 
+  it('requests graceful quit on q from approval mode when a quit callback is provided', () => {
+    const store = createUIStore();
+    const requests: string[] = [];
+    store.getState().setMode('approval');
+    const result = handleKeypress(store, 'q', {
+      onQuit: (reason) => {
+        requests.push(reason);
+      }
+    });
+    expect(result).toBe('handled');
+    expect(requests).toEqual(['keyboard']);
+  });
+
   it('returns to normal on Esc from help', () => {
     const store = createUIStore();
     store.getState().setShowHelp(true);
@@ -36,6 +49,18 @@ describe('handleKeypress', () => {
     const store = createUIStore();
     const result = handleKeypress(store, 'q');
     expect(result).toBe('quit');
+  });
+
+  it('requests graceful quit when a quit callback is provided', () => {
+    const store = createUIStore();
+    const requests: string[] = [];
+    const result = handleKeypress(store, 'q', {
+      onQuit: (reason) => {
+        requests.push(reason);
+      }
+    });
+    expect(result).toBe('handled');
+    expect(requests).toEqual(['keyboard']);
   });
 
   it('navigates down through agents with arrow keys when sidebar focused', () => {
@@ -74,5 +99,40 @@ describe('handleKeypress', () => {
     store.getState().togglePanel(); // main panel
     handleKeypress(store, 'up');
     expect(store.getState().scrollOffset).toBe(0);
+  });
+
+  it('resolves approval decisions through callbacks', () => {
+    const store = createUIStore();
+    const decisions: string[] = [];
+    store.getState().addAgent({ id: 'a1', name: 'Alpha', feature: 'auth' });
+    store.getState().setFocusedAgent('a1');
+    store.getState().updateAgent('a1', {
+      status: 'approval',
+      approvalRequest: { file: 'src/index.ts', action: 'write', detail: 'Add auth import' }
+    });
+    store.getState().setMode('approval');
+
+    expect(handleKeypress(store, 'y', {
+      onApprovalDecision: (decision) => {
+        decisions.push(decision);
+      }
+    })).toBe('handled');
+    expect(handleKeypress(store, 'n', {
+      onApprovalDecision: (decision) => {
+        decisions.push(decision);
+      }
+    })).toBe('handled');
+    expect(handleKeypress(store, 's', {
+      onApprovalDecision: (decision) => {
+        decisions.push(decision);
+      }
+    })).toBe('handled');
+    expect(handleKeypress(store, 'a', {
+      onApprovalDecision: (decision) => {
+        decisions.push(decision);
+      }
+    })).toBe('handled');
+
+    expect(decisions).toEqual(['approve', 'deny', 'skip', 'always']);
   });
 });

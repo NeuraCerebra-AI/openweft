@@ -10,7 +10,15 @@ export const createEventHandler = (store: StoreApi<UIStore>): OrchestratorEventH
 
     switch (event.type) {
       case 'agent:started':
-        getState().addAgent({ id: event.agentId, name: event.name, feature: event.feature });
+        if (getState().agents.some((agent) => agent.id === event.agentId)) {
+          getState().updateAgent(event.agentId, {
+            status: 'running',
+            currentTool: null,
+            approvalRequest: null
+          });
+        } else {
+          getState().addAgent({ id: event.agentId, name: event.name, feature: event.feature });
+        }
         if (getState().focusedAgentId === null) {
           getState().setFocusedAgent(event.agentId);
         }
@@ -58,6 +66,11 @@ export const createEventHandler = (store: StoreApi<UIStore>): OrchestratorEventH
           type: 'approval',
           content: `${event.request.action}: ${event.request.file}`,
           timestamp: now,
+          meta: {
+            file: event.request.file,
+            action: event.request.action,
+            detail: event.request.detail
+          }
         });
         getState().setMode('approval');
         getState().setFocusedAgent(event.agentId);
@@ -85,6 +98,7 @@ export const createEventHandler = (store: StoreApi<UIStore>): OrchestratorEventH
         break;
 
       case 'phase:completed':
+        getState().setPhase(null);
         break;
 
       case 'session:cost-update':

@@ -16,7 +16,7 @@ const baseRequest = (): AdapterTurnRequest => ({
   auth: { method: 'subscription' },
   persistSession: false,
   isolatedHomeDir: '/tmp/codex-home',
-  sandboxMode: 'workspace-write',
+  sandboxMode: 'danger-full-access',
   additionalDirectories: ['/tmp/shared']
 });
 
@@ -28,7 +28,7 @@ describe('codex adapter', () => {
     expect(command.args).toEqual([
       'exec',
       '--sandbox',
-      'workspace-write',
+      'danger-full-access',
       '-C',
       '/tmp/openweft-test',
       '--ephemeral',
@@ -43,6 +43,15 @@ describe('codex adapter', () => {
     ]);
     expect(command.input).toBe('Reply with OK.');
     expect(command.env).toEqual({ CODEX_HOME: '/tmp/codex-home' });
+  });
+
+  it('defaults new sessions to danger-full-access when sandbox mode is omitted', () => {
+    const request = baseRequest();
+    delete request.sandboxMode;
+
+    const command = buildCodexCommand(request);
+
+    expect(command.args).toContain('danger-full-access');
   });
 
   it('builds a resume command without new-session flags', () => {

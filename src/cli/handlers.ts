@@ -21,7 +21,8 @@ import {
   writeTextFileAtomic
 } from '../fs/index.js';
 import { buildRuntimePaths } from '../fs/paths.js';
-import { runDryRunOrchestration, runRealOrchestration, StopController } from '../orchestrator/index.js';
+import { ApprovalController, runDryRunOrchestration, runRealOrchestration, StopController } from '../orchestrator/index.js';
+import { createDefaultNotificationDependencies } from '../notifications/index.js';
 import { loadCheckpoint } from '../state/index.js';
 import { renderStatusReport } from '../status/renderStatus.js';
 import {
@@ -586,28 +587,51 @@ export const createCommandHandlers = (
 
         const uiStore = createUIStore();
         const onEvent = createEventHandler(uiStore);
+        const stopController = new StopController();
+        const approvalController = new ApprovalController(onEvent);
+        const notificationDependencies = createDefaultNotificationDependencies();
 
         const app = withFullScreen(
-          React.createElement(App, { store: uiStore }),
+          React.createElement(App, {
+            store: uiStore,
+            onQuitRequest: () => {
+              stopController.request('signal');
+            },
+            onApprovalDecision: (decision) => {
+              approvalController.resolveCurrent(decision);
+            },
+          }),
           { exitOnCtrlC: false }
         );
         await app.start();
 
-        // Run orchestration with event bridge
-        await runRealOrchestration({
-          config,
-          configHash,
-          adapter: selectAdapter({ backend: config.backend, streamOutput: false }),
-          stopController: new StopController(),
-          streamOutput: false,
-          tmuxRequested: false,
-          writeLine: resolvedDependencies.writeLine,
-          sleep: resolvedDependencies.sleep,
-          onEvent,
-        });
+        const tuiSignalHandler = () => {
+          if (!stopController.isRequested) {
+            stopController.request('signal');
+          }
+        };
+        process.on('SIGINT', tuiSignalHandler);
+        process.on('SIGTERM', tuiSignalHandler);
 
-        // Wait for user to quit
-        await app.waitUntilExit();
+        try {
+          await runRealOrchestration({
+            config,
+            configHash,
+            adapter: selectAdapter({ backend: config.backend, streamOutput: false }),
+            stopController,
+            approvalController,
+            notificationDependencies,
+            streamOutput: false,
+            tmuxRequested: false,
+            sleep: resolvedDependencies.sleep,
+            onEvent,
+          });
+        } finally {
+          process.off('SIGINT', tuiSignalHandler);
+          process.off('SIGTERM', tuiSignalHandler);
+          app.instance.unmount();
+          await app.waitUntilExit();
+        }
         return;
       }
 

@@ -56,6 +56,11 @@ describe('createEventHandler', () => {
     const agent = store.getState().agents[0];
     expect(agent?.status).toBe('approval');
     expect(agent?.approvalRequest).not.toBeNull();
+    expect(agent?.outputLines[0]?.meta).toEqual({
+      file: 'src/index.ts',
+      action: 'write',
+      detail: 'Add auth import'
+    });
   });
 
   it('handles phase:started by updating phase', () => {
@@ -63,6 +68,14 @@ describe('createEventHandler', () => {
     const handler = createEventHandler(store);
     handler({ type: 'phase:started', phase: 2, total: 4, featureIds: ['f1', 'f2'] });
     expect(store.getState().phase).toEqual({ current: 2, total: 4 });
+  });
+
+  it('handles phase:completed by clearing phase state', () => {
+    const store = createUIStore();
+    const handler = createEventHandler(store);
+    handler({ type: 'phase:started', phase: 2, total: 4, featureIds: ['f1', 'f2'] });
+    handler({ type: 'phase:completed', phase: 2 });
+    expect(store.getState().phase).toBeNull();
   });
 
   it('handles session:cost-update by updating totalCost', () => {

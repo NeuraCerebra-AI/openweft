@@ -29,6 +29,7 @@ export interface UIStore {
   phase: { current: number; total: number } | null;
   totalCost: number;
   elapsed: number;
+  notice: { level: 'info' | 'error'; message: string } | null;
   agents: AgentState[];
   focusedAgentId: string | null;
   mode: 'normal' | 'approval' | 'input';
@@ -45,9 +46,11 @@ export interface UIStore {
   setPhase: (phase: { current: number; total: number } | null) => void;
   setTotalCost: (cost: number) => void;
   setElapsed: (elapsed: number) => void;
+  tickAgentElapsed: () => void;
   setScrollOffset: (offset: number) => void;
   setShowHelp: (show: boolean) => void;
   setFilterText: (text: string) => void;
+  setNotice: (notice: UIStore['notice']) => void;
 }
 
 export const createUIStore = () =>
@@ -55,6 +58,7 @@ export const createUIStore = () =>
     phase: null,
     totalCost: 0,
     elapsed: 0,
+    notice: null,
     agents: [],
     focusedAgentId: null,
     mode: 'normal',
@@ -102,7 +106,16 @@ export const createUIStore = () =>
     setPhase: (phase) => set({ phase }),
     setTotalCost: (cost) => set({ totalCost: cost }),
     setElapsed: (elapsed) => set({ elapsed }),
+    tickAgentElapsed: () =>
+      set((state) => ({
+        agents: state.agents.map((agent) =>
+          agent.status === 'running' || agent.status === 'approval'
+            ? { ...agent, elapsed: agent.elapsed + 1 }
+            : agent
+        )
+      })),
     setScrollOffset: (offset) => set({ scrollOffset: offset }),
     setShowHelp: (show) => set({ showHelp: show }),
     setFilterText: (text) => set({ filterText: text }),
+    setNotice: (notice) => set({ notice }),
   }));

@@ -99,7 +99,7 @@ export const buildCodexCommand = (request: AdapterTurnRequest): AdapterCommandSp
   } else {
     args.push(
       '--sandbox',
-      request.sandboxMode ?? 'workspace-write',
+      request.sandboxMode ?? 'danger-full-access',
       '-C',
       request.cwd
     );

@@ -56,6 +56,8 @@ import {
 } from '../state/checkpoint.js';
 import { getTmuxSlotLogFile, type TmuxMonitor } from '../tmux/index.js';
 import { appendAuditEntry } from './audit.js';
+import { TurnApprovalError } from './approval.js';
+import type { ApprovalController } from './approval.js';
 import type { StopController } from './stop.js';
 
 const ORCHESTRATOR_VERSION = '0.1.0';
@@ -79,6 +81,7 @@ interface RealRunInput {
   notificationDependencies?: NotificationDependencies;
   sleep?: (ms: number) => Promise<void>;
   onEvent?: OrchestratorEventHandler;
+  approvalController?: ApprovalController;
 }
 
 interface RealRunContext extends RealRunInput {
@@ -294,6 +297,96 @@ const emitProgress = (input: RealRunInput, message: string): void => {
 const announceProgress = async (input: RealRunInput, message: string): Promise<void> => {
   emitProgress(input, message);
   await maybeNotify(input, message);
+};
+
+const emitOrchestratorEvent = (
+  input: RealRunInput,
+  event: Parameters<OrchestratorEventHandler>[0]
+): void => {
+  input.onEvent?.(event);
+};
+
+const getAgentName = (
+  checkpoint: OrchestratorCheckpoint,
+  featureId: string
+): string => {
+  const feature = checkpoint.features[featureId];
+  if (!feature) {
+    return featureId;
+  }
+
+  return `${feature.id} ${feature.title?.trim() || feature.request.trim()}`;
+};
+
+const getAgentFeature = (
+  checkpoint: OrchestratorCheckpoint,
+  featureId: string,
+  stage: AdapterTurnRequest['stage']
+): string => {
+  const feature = checkpoint.features[featureId];
+  if (!feature) {
+    return stage;
+  }
+
+  return feature.title?.trim() || feature.request.trim();
+};
+
+const getFeatureCostUsd = (
+  checkpoint: OrchestratorCheckpoint,
+  featureId: string
+): number => {
+  return checkpoint.cost.perFeature[featureId]?.usd ?? 0;
+};
+
+const turnNeedsApproval = (stage: AdapterTurnRequest['stage']): boolean => {
+  return stage === 'execution' || stage === 'adjustment' || stage === 'conflict-resolution';
+};
+
+const buildApprovalRequest = (
+  input: RealRunInput,
+  request: AdapterTurnRequest
+): { file: string; action: string; detail: string } => {
+  const relativeCwd = path.relative(input.config.repoRoot, request.cwd) || '.';
+
+  return {
+    file: relativeCwd,
+    action: request.stage,
+    detail: `Allow ${input.adapter.backend} to run ${request.stage} for feature ${request.featureId} in ${relativeCwd}.`
+  };
+};
+
+const maybeAwaitTurnApproval = async (
+  input: RealRunInput,
+  request: AdapterTurnRequest
+): Promise<void> => {
+  if (!input.approvalController || !turnNeedsApproval(request.stage)) {
+    return;
+  }
+
+  const decision = await input.approvalController.requestApproval({
+    agentId: request.featureId,
+    request: buildApprovalRequest(input, request)
+  });
+
+  if (decision === 'approve') {
+    return;
+  }
+
+  const skipWasRequestedForShutdown =
+    decision === 'skip' && (input.stopController?.isRequested ?? false);
+
+  if (!skipWasRequestedForShutdown) {
+    emitOrchestratorEvent(input, {
+      type: 'agent:failed',
+      agentId: request.featureId,
+      error:
+        decision === 'deny'
+          ? `User denied ${request.stage} for feature ${request.featureId}.`
+          : `User skipped ${request.stage} for feature ${request.featureId}.`
+    });
+  }
+
+  throw new TurnApprovalError(request.featureId, request.stage, decision);
 };
 
 const appendTmuxSlotLine = async (
@@ -519,13 +612,13 @@ const buildPlanningStageOneRequest = (
   persistSession: false,
   ...(input.adapter.backend === 'codex'
     ? {
-        sandboxMode: 'read-only' as const,
+        sandboxMode: 'danger-full-access' as const,
         isolatedHomeDir: buildCodexHomeDir(input.config, featureId, 'planning-s1')
       }
     : {}),
   ...(input.adapter.backend === 'claude'
     ? {
-        claudePermissionMode: 'plan' as const
+        claudePermissionMode: 'default' as const
       }
     : {})
 });
@@ -544,7 +637,7 @@ const buildPlanningStageTwoRequest = (
   persistSession: false,
   ...(input.adapter.backend === 'codex'
     ? {
-        sandboxMode: 'workspace-write' as const,
+        sandboxMode: 'danger-full-access' as const,
         isolatedHomeDir: buildCodexHomeDir(input.config, featureId, 'planning-s2')
       }
     : {}),
@@ -571,7 +664,7 @@ const buildExecutionRequest = (
   sessionId,
   ...(input.adapter.backend === 'codex'
     ? {
-        sandboxMode: 'workspace-write' as const,
+        sandboxMode: 'danger-full-access' as const,
         isolatedHomeDir: buildCodexHomeDir(input.config, featureId, 'session')
       }
     : {}),
@@ -597,7 +690,7 @@ const buildAdjustmentRequest = (
   sessionId,
   ...(input.adapter.backend === 'codex'
     ? {
-        sandboxMode: 'workspace-write' as const,
+        sandboxMode: 'danger-full-access' as const,
         isolatedHomeDir: buildCodexHomeDir(input.config, featureId, 'session')
       }
     : {}),
@@ -624,7 +717,7 @@ const buildConflictResolutionRequest = (
   sessionId,
   ...(input.adapter.backend === 'codex'
     ? {
-        sandboxMode: 'workspace-write' as const,
+        sandboxMode: 'danger-full-access' as const,
         isolatedHomeDir: buildCodexHomeDir(input.config, featureId, 'session')
       }
     : {}),
@@ -663,6 +756,13 @@ const runTurnAndRecord = async (
   }
 
   const commandPreview = input.adapter.buildCommand(request);
+  emitOrchestratorEvent(input, {
+    type: 'agent:started',
+    agentId: request.featureId,
+    name: getAgentName(checkpoint, request.featureId),
+    feature: getAgentFeature(checkpoint, request.featureId, request.stage)
+  });
+  await maybeAwaitTurnApproval(input, request);
   await appendAudit(input.config, {
     level: 'info',
     event: 'agent.turn.start',
@@ -680,6 +780,20 @@ const runTurnAndRecord = async (
 
   if (result.ok) {
     await appendCostRecord(input.config, checkpoint, result.costRecord);
+    emitOrchestratorEvent(input, {
+      type: 'session:cost-update',
+      totalCost: checkpoint.cost.totalEstimatedUsd
+    });
+    emitOrchestratorEvent(input, {
+      type: 'agent:text',
+      agentId: request.featureId,
+      text: result.finalMessage
+    });
+    emitOrchestratorEvent(input, {
+      type: 'agent:completed',
+      agentId: request.featureId,
+      cost: getFeatureCostUsd(checkpoint, request.featureId)
+    });
     await appendAudit(input.config, {
       level: 'info',
       event: 'agent.turn.completed',
@@ -700,6 +814,11 @@ const runTurnAndRecord = async (
       }
     });
   } else {
+    emitOrchestratorEvent(input, {
+      type: 'agent:failed',
+      agentId: request.featureId,
+      error: result.error
+    });
     await appendAudit(input.config, {
       level: result.classified.tier === 'fatal' ? 'error' : 'warn',
       event: 'agent.turn.failed',
@@ -995,7 +1114,7 @@ const runFeatureExecutionAttempt = async (
   baseBranch: string
 ): Promise<{
   featureId: string;
-  status: 'completed' | 'failed' | 'fatal';
+  status: 'completed' | 'failed' | 'fatal' | 'aborted';
   branchName: string | null;
   worktreePath: string | null;
   sessionId: string | null;
@@ -1038,17 +1157,33 @@ const runFeatureExecutionAttempt = async (
   let agentRetryUsed = false;
 
   while (true) {
-    const result = await runTurnAndRecord(
-      context,
-      checkpoint,
-      buildExecutionRequest(
+    let result: AdapterTurnResult;
+    try {
+      result = await runTurnAndRecord(
         context,
-        feature.id,
-        worktreeState.worktreePath,
-        executionPrompt,
-        sessionId
-      )
-    );
+        checkpoint,
+        buildExecutionRequest(
+          context,
+          feature.id,
+          worktreeState.worktreePath,
+          executionPrompt,
+          sessionId
+        )
+      );
+    } catch (error) {
+      if (error instanceof TurnApprovalError) {
+        return {
+          featureId: feature.id,
+          status: context.stopController?.isRequested ? 'aborted' : 'failed',
+          branchName: worktreeState.branchName,
+          worktreePath: worktreeState.worktreePath,
+          sessionId,
+          baselineCommit: worktreeState.baselineCommit,
+          error: error.message
+        };
+      }
+      throw error;
+    }
 
     if (result.ok) {
       sessionId = result.sessionId;
@@ -1127,17 +1262,33 @@ const runFeatureExecutionAttempt = async (
       ].join('\n\n');
 
       const retryPrompt = `${executionPrompt}\n\n${freshPrompt}`;
-      const retryResult = await runTurnAndRecord(
-        context,
-        checkpoint,
-        buildExecutionRequest(
+      let retryResult: AdapterTurnResult;
+      try {
+        retryResult = await runTurnAndRecord(
           context,
-          feature.id,
-          worktreeState.worktreePath,
-          retryPrompt,
-          sessionId
-        )
-      );
+          checkpoint,
+          buildExecutionRequest(
+            context,
+            feature.id,
+            worktreeState.worktreePath,
+            retryPrompt,
+            sessionId
+          )
+        );
+      } catch (error) {
+        if (error instanceof TurnApprovalError) {
+          return {
+            featureId: feature.id,
+            status: context.stopController?.isRequested ? 'aborted' : 'failed',
+            branchName: worktreeState.branchName,
+            worktreePath: worktreeState.worktreePath,
+            sessionId,
+            baselineCommit: worktreeState.baselineCommit,
+            error: error.message
+          };
+        }
+        throw error;
+      }
 
       if (retryResult.ok) {
         sessionId = retryResult.sessionId;
@@ -1224,6 +1375,12 @@ const executePhases = async (
         featureIds: phase.featureIds,
         startedAt: timestamp()
       };
+      emitOrchestratorEvent(context, {
+        type: 'phase:started',
+        phase: phase.index,
+        total: phases.length,
+        featureIds: [...phase.featureIds]
+      });
       await announceProgress(
         context,
         `Phase ${phase.index} starting (${phase.featureIds.length} feature${phase.featureIds.length === 1 ? '' : 's'}).`
@@ -1318,23 +1475,39 @@ const executePhases = async (
           status:
             result.status === 'completed'
               ? 'planned'
+              : result.status === 'aborted'
+                ? 'planned'
               : result.status === 'fatal'
                 ? 'failed'
                 : 'failed',
-          attempts: (checkpoint.features[result.featureId]?.attempts ?? 0) + 1,
+          attempts:
+            result.status === 'aborted'
+              ? (checkpoint.features[result.featureId]?.attempts ?? 0)
+              : (checkpoint.features[result.featureId]?.attempts ?? 0) + 1,
           branchName: result.branchName,
           worktreePath: result.worktreePath,
           sessionId: result.sessionId,
           sessionScope: result.sessionId ? 'worktree' : null,
-          lastError: result.error ?? null
+          lastError: result.status === 'aborted' ? null : (result.error ?? null)
         });
 
-        if (result.status !== 'completed' && feature) {
+        if (result.status !== 'completed' && result.status !== 'aborted' && feature) {
           await announceProgress(
             context,
             `Feature ${getFeatureLabel(feature)} failed${result.error ? `: ${result.error}` : '.'}`
           );
         }
+      }
+
+      if (context.stopController?.isRequested) {
+        checkpoint.status = 'stopped';
+        checkpoint.currentState = 'stopped';
+        checkpoint.currentPhase = null;
+        await saveCheckpointSnapshot(context.config, checkpoint);
+        return {
+          checkpoint,
+          mergedCount
+        };
       }
 
       if (fatalFailure) {
@@ -1402,17 +1575,43 @@ const executePhases = async (
               continue;
             }
 
-            const conflictResolution = await runTurnAndRecord(
-              context,
-              checkpoint,
-              buildConflictResolutionRequest(
+            let conflictResolution: AdapterTurnResult;
+            try {
+              conflictResolution = await runTurnAndRecord(
                 context,
-                featureId,
-                feature.worktreePath,
-                'The latest changes from main have been merged into your branch. Resolve all conflict markers, preserve both sides, then commit.',
-                resolveReusableSessionId(feature, 'worktree')
-              )
-            );
+                checkpoint,
+                buildConflictResolutionRequest(
+                  context,
+                  featureId,
+                  feature.worktreePath,
+                  'The latest changes from main have been merged into your branch. Resolve all conflict markers, preserve both sides, then commit.',
+                  resolveReusableSessionId(feature, 'worktree')
+                )
+              );
+            } catch (error) {
+              if (error instanceof TurnApprovalError) {
+                if (context.stopController?.isRequested) {
+                  checkpoint.status = 'stopped';
+                  checkpoint.currentState = 'stopped';
+                  checkpoint.currentPhase = null;
+                  await saveCheckpointSnapshot(context.config, checkpoint);
+                  return {
+                    checkpoint,
+                    mergedCount
+                  };
+                }
+                updateFeatureCheckpoint(checkpoint, featureId, {
+                  status: 'failed',
+                  lastError: error.message
+                });
+                await announceProgress(
+                  context,
+                  `Feature ${getFeatureLabel(feature)} failed during merge conflict resolution: ${error.message}`
+                );
+                continue;
+              }
+              throw error;
+            }
 
             if (!conflictResolution.ok) {
               updateFeatureCheckpoint(checkpoint, featureId, {
@@ -1538,16 +1737,41 @@ const executePhases = async (
             planContent: currentPlan,
             codeEditSummaryJson: JSON.stringify(mergedSummary.summary, null, 2)
           });
-          const adjustment = await runTurnAndRecord(
-            context,
-            checkpoint,
-            buildAdjustmentRequest(
+          let adjustment: AdapterTurnResult;
+          try {
+            adjustment = await runTurnAndRecord(
               context,
-              feature.id,
-              prompt,
-              resolveReusableSessionId(feature, 'repo')
-            )
-          );
+              checkpoint,
+              buildAdjustmentRequest(
+                context,
+                feature.id,
+                prompt,
+                resolveReusableSessionId(feature, 'repo')
+              )
+            );
+          } catch (error) {
+            if (error instanceof TurnApprovalError) {
+              if (context.stopController?.isRequested) {
+                checkpoint.status = 'stopped';
+                checkpoint.currentState = 'stopped';
+                checkpoint.currentPhase = null;
+                await saveCheckpointSnapshot(context.config, checkpoint);
+                return {
+                  checkpoint,
+                  mergedCount
+                };
+              }
+              updateFeatureCheckpoint(checkpoint, feature.id, {
+                lastError: error.message
+              });
+              await announceProgress(
+                context,
+                `Plan adjustment for ${getFeatureLabel(feature)} failed: ${error.message}`
+              );
+              continue;
+            }
+            throw error;
+          }
 
           if (!adjustment.ok) {
             updateFeatureCheckpoint(checkpoint, feature.id, {
@@ -1609,6 +1833,11 @@ const executePhases = async (
           mergedCount
         };
       }
+
+      emitOrchestratorEvent(context, {
+        type: 'phase:completed',
+        phase: phase.index
+      });
 
       checkpoint.currentPhase = null;
       checkpoint.currentState = 'queue-management';

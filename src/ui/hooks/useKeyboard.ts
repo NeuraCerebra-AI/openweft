@@ -4,7 +4,16 @@ import type { UIStore } from '../store.js';
 
 export type KeypressResult = 'handled' | 'quit' | 'unhandled';
 
-export const handleKeypress = (store: StoreApi<UIStore>, key: string): KeypressResult => {
+export interface KeypressHandlers {
+  onQuit?: (reason: 'keyboard') => void;
+  onApprovalDecision?: (decision: 'approve' | 'deny' | 'skip' | 'always') => void;
+}
+
+export const handleKeypress = (
+  store: StoreApi<UIStore>,
+  key: string,
+  handlers: KeypressHandlers = {}
+): KeypressResult => {
   const state = store.getState();
 
   // Help overlay takes priority
@@ -22,7 +31,12 @@ export const handleKeypress = (store: StoreApi<UIStore>, key: string): KeypressR
       switch (key) {
         case 'tab': state.togglePanel(); return 'handled';
         case '?': state.setShowHelp(true); return 'handled';
-        case 'q': return 'quit';
+        case 'q':
+          if (handlers.onQuit) {
+            handlers.onQuit('keyboard');
+            return 'handled';
+          }
+          return 'quit';
         case '/': state.setMode('input'); return 'handled';
 
         case 'up':
@@ -63,6 +77,24 @@ export const handleKeypress = (store: StoreApi<UIStore>, key: string): KeypressR
     case 'approval':
       switch (key) {
         case 'escape': state.setMode('normal'); return 'handled';
+        case 'q':
+          if (handlers.onQuit) {
+            handlers.onQuit('keyboard');
+            return 'handled';
+          }
+          return 'quit';
+        case 'y':
+          handlers.onApprovalDecision?.('approve');
+          return handlers.onApprovalDecision ? 'handled' : 'unhandled';
+        case 'n':
+          handlers.onApprovalDecision?.('deny');
+          return handlers.onApprovalDecision ? 'handled' : 'unhandled';
+        case 's':
+          handlers.onApprovalDecision?.('skip');
+          return handlers.onApprovalDecision ? 'handled' : 'unhandled';
+        case 'a':
+          handlers.onApprovalDecision?.('always');
+          return handlers.onApprovalDecision ? 'handled' : 'unhandled';
         default: return 'unhandled';
       }
 

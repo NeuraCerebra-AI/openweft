@@ -115,6 +115,82 @@ describe('git detection dependencies', () => {
 });
 
 describe('command handlers', () => {
+  it('bootstraps a new repo from bare launch and prints guided next steps', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-launch-'));
+    const output: string[] = [];
+    const handlers = createCommandHandlers({
+      getCwd: () => repoRoot,
+      writeLine: (message) => {
+        output.push(message);
+      },
+      detectCodex: async () => ({
+        installed: true,
+        authenticated: true
+      }),
+      detectClaude: async () => ({
+        installed: true,
+        authenticated: true
+      })
+    });
+
+    await handlers.launch();
+
+    expect(await readFile(path.join(repoRoot, '.openweftrc.json'), 'utf8')).toContain('"backend"');
+    expect(await readFile(path.join(repoRoot, 'prompts', 'prompt-a.md'), 'utf8')).toContain(
+      '{{USER_REQUEST}}'
+    );
+    expect(output.some((line) => line.includes('Initialized OpenWeft'))).toBe(true);
+    expect(
+      output.some((line) =>
+        line.includes('OpenWeft is ready. Run "openweft add" to queue work, then "openweft start".')
+      )
+    ).toBe(true);
+  });
+
+  it('shows status from bare launch when a background run is already active', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-launch-status-'));
+    const output: string[] = [];
+    const program = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        isPidAlive: () => true
+      })
+    );
+
+    await program.parseAsync(['init'], { from: 'user' });
+    await writeFile(path.join(repoRoot, '.openweft', 'pid'), '4242\n', 'utf8');
+
+    output.length = 0;
+    await createCommandHandlers({
+      getCwd: () => repoRoot,
+      writeLine: (message) => {
+        output.push(message);
+      },
+      detectCodex: async () => ({
+        installed: true,
+        authenticated: true
+      }),
+      detectClaude: async () => ({
+        installed: true,
+        authenticated: true
+      }),
+      isPidAlive: () => true
+    }).launch();
+
+    expect(output.join('\n')).toContain('Background: running (PID 4242)');
+  });
+
   it('scaffolds starter prompt files on init without overwriting existing prompts', async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-init-'));
     const output: string[] = [];

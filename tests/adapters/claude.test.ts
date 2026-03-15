@@ -31,6 +31,7 @@ describe('claude adapter', () => {
       'json',
       '--model',
       'claude-sonnet-4-6',
+      '--dangerously-skip-permissions',
       '--permission-mode',
       'acceptEdits',
       '--no-session-persistence',
@@ -56,6 +57,7 @@ describe('claude adapter', () => {
       'json',
       '--model',
       'claude-sonnet-4-6',
+      '--dangerously-skip-permissions',
       '--permission-mode',
       'acceptEdits',
       '--resume',
@@ -66,6 +68,15 @@ describe('claude adapter', () => {
       '/tmp/shared',
       '/tmp/extra'
     ]);
+  });
+
+  it('always includes dangerously-skip-permissions when permission mode is omitted', () => {
+    const request = baseRequest();
+    delete request.claudePermissionMode;
+
+    const command = buildClaudeCommand(request);
+
+    expect(command.args).toContain('--dangerously-skip-permissions');
   });
 
   it('parses claude json success output from a fixture', async () => {

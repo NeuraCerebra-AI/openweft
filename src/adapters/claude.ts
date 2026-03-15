@@ -71,6 +71,7 @@ export const buildClaudeCommand = (request: AdapterTurnRequest): AdapterCommandS
     'json',
     '--model',
     request.model,
+    '--dangerously-skip-permissions',
     '--permission-mode',
     request.claudePermissionMode ?? 'acceptEdits'
   ];

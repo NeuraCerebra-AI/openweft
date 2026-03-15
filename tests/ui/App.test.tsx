@@ -17,4 +17,16 @@ describe('App', () => {
     const { lastFrame } = render(<App store={store} />);
     expect(lastFrame()).toContain('NORMAL');
   });
+
+  it('accepts runtime control callbacks without affecting render', () => {
+    const store = createUIStore();
+    const { lastFrame } = render(
+      <App
+        store={store}
+        onQuitRequest={() => {}}
+        onApprovalDecision={() => {}}
+      />
+    );
+    expect(lastFrame()).toContain('openweft');
+  });
 });

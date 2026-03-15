@@ -32,9 +32,9 @@ You write a list. You walk away. You come back to commits.
 
 ```bash
 npm install -g openweft
-openweft init
-$EDITOR feature_requests/queue.txt    # write your requests, one per line
-openweft start --bg                   # go do literally anything else
+openweft                              # first run auto-inits and tells you what to do next
+openweft add "ship the thing"
+openweft                              # starts the queued run
 ```
 
 ---
@@ -61,7 +61,40 @@ Builds on install. No `dist/` in the repo.
 git clone https://github.com/NeuraCerebra-AI/openweft.git
 cd openweft
 npm install
-node dist/bin/openweft.js --help
+npm link
+npm run openweft -- --help
+```
+
+If you want it to behave like `codex` or `claude` so you can just type `openweft` in any new terminal, `npm link` is the source-repo workflow:
+
+```bash
+git clone https://github.com/NeuraCerebra-AI/openweft.git
+cd openweft
+npm install
+npm link
+
+# now available by name
+openweft --help
+```
+
+If you do not want to link it globally, you can still run it directly from source:
+
+```bash
+npm run openweft -- --help
+```
+
+To run OpenWeft from source against another repo without installing it globally:
+
+```bash
+# terminal 1
+cd /path/to/openweft
+npm install
+
+# terminal 2
+cd /path/to/the-project-you-want-to-orchestrate
+node /path/to/openweft/node_modules/tsx/dist/cli.mjs /path/to/openweft/src/bin/openweft.ts init
+node /path/to/openweft/node_modules/tsx/dist/cli.mjs /path/to/openweft/src/bin/openweft.ts add "your feature request"
+node /path/to/openweft/node_modules/tsx/dist/cli.mjs /path/to/openweft/src/bin/openweft.ts start
 ```
 
 ## Requirements
@@ -80,7 +113,7 @@ OpenWeft uses your existing CLI sessions. Subscription-first by default. No sepa
 
 ```bash
 # Set up the project
-openweft init
+openweft
 
 # Look at the starter prompts (you'll want to edit these)
 $EDITOR prompts/prompt-a.md
@@ -94,7 +127,10 @@ openweft add "add audit log export"
 # Or just write a list
 $EDITOR feature_requests/queue.txt
 
-# Let it rip
+# Let it rip in a real TTY for the interactive dashboard
+openweft
+
+# Or detach it
 openweft start --bg
 
 # Check in whenever
@@ -136,7 +172,8 @@ $ openweft status
 ```
 openweft init                  set up config, directories, starter prompts
 openweft add "feature"         queue a request (also accepts stdin)
-openweft start                 run the queue (foreground, progress output)
+openweft                       guided startup: auto-init, auto-start queued work, or show next step
+openweft start                 run the queue in the foreground; in a real TTY this opens the interactive dashboard
 openweft start --bg            detached, PID tracked, logs to .openweft/output.log
 openweft start --stream        stream raw backend output to your terminal
 openweft start --tmux          spawn a tmux session; falls back if tmux is missing
