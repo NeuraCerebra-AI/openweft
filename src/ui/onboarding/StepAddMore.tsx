@@ -54,6 +54,7 @@ export const StepAddMore: React.FC<StepAddMoreProps> = ({
     if (value === 'launch') {
       onAdvance();
     } else {
+      setInputValue('');
       setMode('input');
     }
   };

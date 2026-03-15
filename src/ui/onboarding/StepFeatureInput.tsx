@@ -29,6 +29,7 @@ export const StepFeatureInput: React.FC<StepFeatureInputProps> = ({
   });
 
   const handleSubmit = (text: string) => {
+    setValue('');
     void onQueueRequest(text).then(() => {
       onAdvance();
     });
