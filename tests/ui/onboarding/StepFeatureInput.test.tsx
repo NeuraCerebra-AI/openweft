@@ -162,4 +162,82 @@ describe('StepFeatureInput', () => {
       expect(onAdvance).not.toHaveBeenCalled();
     });
   });
+
+  describe('paste handling', () => {
+    it('submits short pasted text directly via onQueueRequest', async () => {
+      const onQueueRequest = vi.fn().mockResolvedValue(undefined);
+      const onAdvance = vi.fn();
+      const { stdin } = renderWithTheme(
+        <StepFeatureInput
+          {...defaultProps}
+          onQueueRequest={onQueueRequest}
+          onAdvance={onAdvance}
+        />,
+      );
+
+      await waitForMount();
+      stdin.write('Add authentication');
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+      await waitForUpdate();
+
+      expect(onQueueRequest).toHaveBeenCalledOnce();
+      expect(onQueueRequest).toHaveBeenCalledWith('Add authentication');
+      expect(onAdvance).toHaveBeenCalledOnce();
+    });
+
+    it('submits resolved content when long paste is collapsed', async () => {
+      const longText = 'x'.repeat(1000);
+      const onQueueRequest = vi.fn().mockResolvedValue(undefined);
+      const onAdvance = vi.fn();
+      const { stdin } = renderWithTheme(
+        <StepFeatureInput
+          {...defaultProps}
+          onQueueRequest={onQueueRequest}
+          onAdvance={onAdvance}
+        />,
+      );
+
+      await waitForMount();
+      stdin.write(longText);
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+      await waitForUpdate();
+
+      expect(onQueueRequest).toHaveBeenCalledOnce();
+      expect(onQueueRequest).toHaveBeenCalledWith(longText);
+      expect(onAdvance).toHaveBeenCalledOnce();
+    });
+
+    it('submits resolved text when typed characters precede a pasted token', async () => {
+      const longText = 'z'.repeat(801);
+      const onQueueRequest = vi.fn().mockResolvedValue(undefined);
+      const { stdin } = renderWithTheme(
+        <StepFeatureInput
+          {...defaultProps}
+          onQueueRequest={onQueueRequest}
+        />,
+      );
+
+      await waitForMount();
+      stdin.write('B');
+      await waitForUpdate();
+      stdin.write('u');
+      await waitForUpdate();
+      stdin.write('g');
+      await waitForUpdate();
+      stdin.write(' ');
+      await waitForUpdate();
+      stdin.write(longText);
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+      await waitForUpdate();
+
+      expect(onQueueRequest).toHaveBeenCalledOnce();
+      expect(onQueueRequest).toHaveBeenCalledWith('Bug ' + longText);
+    });
+  });
 });

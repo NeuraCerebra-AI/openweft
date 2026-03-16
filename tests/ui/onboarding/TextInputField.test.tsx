@@ -4,6 +4,7 @@ import { render } from 'ink-testing-library';
 
 import { ThemeContext, catppuccinMocha } from '../../../src/ui/theme.js';
 import { TextInputField } from '../../../src/ui/onboarding/TextInputField.js';
+import { MAX_PASTE_CHARS } from '../../../src/ui/onboarding/paste.js';
 
 const renderWithTheme = (element: React.ReactElement) =>
   render(<ThemeContext.Provider value={catppuccinMocha}>{element}</ThemeContext.Provider>);
@@ -215,5 +216,266 @@ describe('TextInputField', () => {
     // Round border top-left corner character
     expect(frame).toContain('╭');
     expect(frame).toContain('╰');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Paste handling integration tests
+// ---------------------------------------------------------------------------
+
+/** Wrapper that manages its own state so paste refs (map, ID counter) work end-to-end. */
+const StatefulWrapper: React.FC<{
+  onSubmit?: (text: string) => void;
+  onExit?: () => void;
+}> = ({ onSubmit = vi.fn(), onExit = vi.fn() }) => {
+  const [value, setValue] = React.useState('');
+  return (
+    <ThemeContext.Provider value={catppuccinMocha}>
+      <TextInputField value={value} onChange={setValue} onSubmit={onSubmit} onExit={onExit} />
+    </ThemeContext.Provider>
+  );
+};
+
+describe('paste handling', () => {
+  describe('(a) inline paste (below threshold)', () => {
+    it('inlines short multi-char paste via onChange', async () => {
+      const handleChange = vi.fn();
+      const { stdin } = renderWithTheme(
+        <TextInputField value="" onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
+      );
+      await waitForMount();
+      stdin.write('hi');
+      await waitForUpdate();
+      expect(handleChange).toHaveBeenCalledWith('hi');
+    });
+
+    it('converts tab characters to four spaces in pasted text', async () => {
+      const handleChange = vi.fn();
+      const { stdin } = renderWithTheme(
+        <TextInputField value="" onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
+      );
+      await waitForMount();
+      stdin.write('a\tb');
+      await waitForUpdate();
+      expect(handleChange).toHaveBeenCalledWith('a    b');
+    });
+
+    it('appends inlined paste after existing text', async () => {
+      const handleChange = vi.fn();
+      const { stdin } = renderWithTheme(
+        <TextInputField value="hello " onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
+      );
+      await waitForMount();
+      stdin.write('world');
+      await waitForUpdate();
+      expect(handleChange).toHaveBeenCalledWith('hello world');
+    });
+
+    it('inlines paste at exactly 800 characters (boundary)', async () => {
+      const handleChange = vi.fn();
+      const { stdin } = renderWithTheme(
+        <TextInputField value="" onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
+      );
+      await waitForMount();
+      stdin.write('x'.repeat(800));
+      await waitForUpdate();
+      expect(handleChange).toHaveBeenCalledWith('x'.repeat(800));
+    });
+
+    it('inlines paste with exactly 2 newlines (boundary)', async () => {
+      const handleChange = vi.fn();
+      const { stdin } = renderWithTheme(
+        <TextInputField value="" onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
+      );
+      await waitForMount();
+      stdin.write('a\nb\nc');
+      await waitForUpdate();
+      expect(handleChange).toHaveBeenCalledWith('a\nb\nc');
+    });
+  });
+
+  describe('(b) collapsed paste (above threshold)', () => {
+    it('collapses paste at 801 characters into a token (boundary)', async () => {
+      const handleChange = vi.fn();
+      const { stdin } = renderWithTheme(
+        <TextInputField value="" onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
+      );
+      await waitForMount();
+      stdin.write('x'.repeat(801));
+      await waitForUpdate();
+      expect(handleChange).toHaveBeenCalledWith('[Pasted text #1]');
+    });
+
+    it('collapses paste with 3 newlines into token with line count (boundary)', async () => {
+      const handleChange = vi.fn();
+      const { stdin } = renderWithTheme(
+        <TextInputField value="" onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
+      );
+      await waitForMount();
+      stdin.write('a\nb\nc\nd');
+      await waitForUpdate();
+      expect(handleChange).toHaveBeenCalledWith('[Pasted text #1 +3 lines]');
+    });
+
+    it('includes correct line count for multi-line paste', async () => {
+      const handleChange = vi.fn();
+      const { stdin } = renderWithTheme(
+        <TextInputField value="" onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
+      );
+      await waitForMount();
+      const lines = Array.from({ length: 11 }, (_, i) => 'line' + String(i)).join('\n');
+      stdin.write(lines);
+      await waitForUpdate();
+      expect(handleChange).toHaveBeenCalledWith('[Pasted text #1 +10 lines]');
+    });
+
+    it('truncates paste exceeding MAX_PASTE_CHARS before collapsing', async () => {
+      const handleChange = vi.fn();
+      const { stdin } = renderWithTheme(
+        <TextInputField value="" onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
+      );
+      await waitForMount();
+      stdin.write('x'.repeat(11_000));
+      await waitForUpdate();
+      expect(handleChange).toHaveBeenCalledWith('[Pasted text #1]');
+    });
+
+    it('appends collapse token after existing text', async () => {
+      const handleChange = vi.fn();
+      const { stdin } = renderWithTheme(
+        <TextInputField value="prefix " onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
+      );
+      await waitForMount();
+      stdin.write('x'.repeat(801));
+      await waitForUpdate();
+      expect(handleChange).toHaveBeenCalledWith('prefix [Pasted text #1]');
+    });
+  });
+
+  describe('(c) token display', () => {
+    it('displays paste token verbatim in the rendered frame', () => {
+      const { lastFrame } = renderWithTheme(
+        <TextInputField
+          value="typed [Pasted text #1]"
+          onChange={vi.fn()}
+          onSubmit={vi.fn()}
+          onExit={vi.fn()}
+        />,
+      );
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('[Pasted text #1]');
+    });
+  });
+
+  describe('(d) backspace with tokens', () => {
+    it('deletes entire paste token on backspace when value ends with token', async () => {
+      const handleChange = vi.fn();
+      const { stdin } = renderWithTheme(
+        <TextInputField
+          value="prefix [Pasted text #1]"
+          onChange={handleChange}
+          onSubmit={vi.fn()}
+          onExit={vi.fn()}
+        />,
+      );
+      await waitForMount();
+      stdin.write('\u007F');
+      await waitForUpdate();
+      expect(handleChange).toHaveBeenCalledWith('prefix ');
+    });
+
+    it('performs normal single-char delete when token is not at end', async () => {
+      const handleChange = vi.fn();
+      const { stdin } = renderWithTheme(
+        <TextInputField
+          value="[Pasted text #1] x"
+          onChange={handleChange}
+          onSubmit={vi.fn()}
+          onExit={vi.fn()}
+        />,
+      );
+      await waitForMount();
+      stdin.write('\u007F');
+      await waitForUpdate();
+      expect(handleChange).toHaveBeenCalledWith('[Pasted text #1] ');
+    });
+  });
+
+  describe('(e) stateful paste flows', () => {
+    it('assigns unique sequential IDs to multiple pastes', async () => {
+      const { stdin, lastFrame } = render(<StatefulWrapper />);
+      await waitForMount();
+      stdin.write('x'.repeat(801));
+      await waitForUpdate();
+      stdin.write('y'.repeat(801));
+      await waitForUpdate();
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('[Pasted text #1]');
+      expect(frame).toContain('[Pasted text #2]');
+    });
+
+    it('resolves collapsed token to actual content on submit', async () => {
+      const handleSubmit = vi.fn();
+      const longText = 'a'.repeat(801);
+      const { stdin } = render(<StatefulWrapper onSubmit={handleSubmit} />);
+      await waitForMount();
+      stdin.write(longText);
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+      expect(handleSubmit).toHaveBeenCalledOnce();
+      expect(handleSubmit).toHaveBeenCalledWith(longText);
+    });
+
+    it('resolves mixed typed text and paste token on submit', async () => {
+      const handleSubmit = vi.fn();
+      const longText = 'z'.repeat(801);
+      const { stdin } = render(<StatefulWrapper onSubmit={handleSubmit} />);
+      await waitForMount();
+      stdin.write('A');
+      await waitForUpdate();
+      stdin.write('d');
+      await waitForUpdate();
+      stdin.write('d');
+      await waitForUpdate();
+      stdin.write(' ');
+      await waitForUpdate();
+      stdin.write(longText);
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+      expect(handleSubmit).toHaveBeenCalledOnce();
+      expect(handleSubmit).toHaveBeenCalledWith('Add ' + longText);
+    });
+
+    it('resets paste IDs after Esc clears value', async () => {
+      const { stdin, lastFrame } = render(<StatefulWrapper />);
+      await waitForMount();
+      stdin.write('x'.repeat(801));
+      await waitForUpdate();
+      expect((lastFrame() ?? '')).toContain('[Pasted text #1]');
+      // Esc clears value → useEffect resets refs
+      stdin.write('\u001B');
+      await waitForUpdate();
+      // Paste again — should get #1, not #2
+      stdin.write('y'.repeat(801));
+      await waitForUpdate();
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('[Pasted text #1]');
+      expect(frame).not.toContain('[Pasted text #2]');
+    });
+
+    it('resolves truncated paste to exactly MAX_PASTE_CHARS on submit', async () => {
+      const handleSubmit = vi.fn();
+      const { stdin } = render(<StatefulWrapper onSubmit={handleSubmit} />);
+      await waitForMount();
+      stdin.write('a'.repeat(11_000));
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+      expect(handleSubmit).toHaveBeenCalledOnce();
+      const submitted = handleSubmit.mock.calls[0]?.[0] as string;
+      expect(submitted.length).toBe(MAX_PASTE_CHARS);
+    });
   });
 });

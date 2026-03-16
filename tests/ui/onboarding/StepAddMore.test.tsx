@@ -357,4 +357,101 @@ describe('StepAddMore', () => {
       expect(onExit).toHaveBeenCalledOnce();
     });
   });
+
+  describe('paste handling', () => {
+    // Helper: navigate to input mode (down arrow to "Add another request" + Enter)
+    const enterInputMode = async (stdin: { write: (data: string) => void }) => {
+      stdin.write('\u001B[B');
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+    };
+
+    it('submits short pasted text in input mode via onQueueRequest', async () => {
+      const onQueueRequest = vi.fn().mockResolvedValue(undefined);
+      const { stdin } = renderWithTheme(
+        <StepAddMore {...defaultProps} onQueueRequest={onQueueRequest} />,
+      );
+
+      await waitForMount();
+      await enterInputMode(stdin);
+      stdin.write('Fix login bug');
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+      await waitForUpdate();
+
+      expect(onQueueRequest).toHaveBeenCalledOnce();
+      expect(onQueueRequest).toHaveBeenCalledWith('Fix login bug');
+    });
+
+    it('submits resolved content when long paste is collapsed in input mode', async () => {
+      const longText = 'x'.repeat(1000);
+      const onQueueRequest = vi.fn().mockResolvedValue(undefined);
+      const { stdin } = renderWithTheme(
+        <StepAddMore {...defaultProps} onQueueRequest={onQueueRequest} />,
+      );
+
+      await waitForMount();
+      await enterInputMode(stdin);
+      stdin.write(longText);
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+      await waitForUpdate();
+
+      expect(onQueueRequest).toHaveBeenCalledOnce();
+      expect(onQueueRequest).toHaveBeenCalledWith(longText);
+    });
+
+    it('returns to select mode after submitting pasted content', async () => {
+      const longText = 'x'.repeat(1000);
+      const onQueueRequest = vi.fn().mockResolvedValue(undefined);
+      const { stdin, lastFrame } = renderWithTheme(
+        <StepAddMore {...defaultProps} onQueueRequest={onQueueRequest} />,
+      );
+
+      await waitForMount();
+      await enterInputMode(stdin);
+      stdin.write(longText);
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+      await waitForUpdate();
+
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('Continue to launch');
+    });
+
+    it('has clean paste state when re-entering input mode after paste submit', async () => {
+      const longText = 'y'.repeat(801);
+      const onQueueRequest = vi.fn().mockResolvedValue(undefined);
+      const { stdin, lastFrame } = renderWithTheme(
+        <StepAddMore {...defaultProps} onQueueRequest={onQueueRequest} />,
+      );
+
+      await waitForMount();
+      await enterInputMode(stdin);
+
+      // First paste
+      stdin.write(longText);
+      await waitForUpdate();
+      expect((lastFrame() ?? '')).toContain('[Pasted text #1]');
+
+      // Submit → returns to select mode, inputValue cleared → useEffect resets refs
+      stdin.write('\r');
+      await waitForUpdate();
+      await waitForUpdate();
+
+      // Re-enter input mode
+      await enterInputMode(stdin);
+
+      // Second paste — should get #1 again (ID counter reset)
+      stdin.write(longText);
+      await waitForUpdate();
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('[Pasted text #1]');
+      expect(frame).not.toContain('[Pasted text #2]');
+    });
+  });
 });
