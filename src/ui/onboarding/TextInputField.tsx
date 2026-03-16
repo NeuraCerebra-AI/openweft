@@ -74,8 +74,7 @@ export const TextInputField: React.FC<TextInputFieldProps> = ({
     // Paste detection: multiple characters arrive at once
     if (input && input.length > 1) {
       const text = input.replaceAll('\t', '    ');
-      const truncated =
-        text.length > MAX_PASTE_CHARS ? text.slice(0, MAX_PASTE_CHARS) : text;
+      const truncated = text.slice(0, MAX_PASTE_CHARS);
 
       if (shouldCollapse(truncated)) {
         const id = nextPasteId.current++;

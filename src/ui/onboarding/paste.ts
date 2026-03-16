@@ -22,8 +22,8 @@ export function countNewlines(text: string): number {
 }
 
 export function formatPasteToken(id: number, lineCount: number): string {
-  if (lineCount === 0) return `[Pasted text #${String(id)}]`;
-  return `[Pasted text #${String(id)} +${String(lineCount)} lines]`;
+  if (lineCount === 0) return `[Pasted text #${id}]`;
+  return `[Pasted text #${id} +${lineCount} lines]`;
 }
 
 export function shouldCollapse(text: string): boolean {
