@@ -7,6 +7,7 @@ export type KeypressResult = 'handled' | 'quit' | 'unhandled';
 export interface KeypressHandlers {
   onQuit?: (reason: 'keyboard') => void;
   onApprovalDecision?: (decision: 'approve' | 'deny' | 'skip' | 'always') => void;
+  onStartRequest?: () => void;
 }
 
 export const handleKeypress = (
@@ -64,6 +65,13 @@ export const handleKeypress = (
             state.setScrollOffset(Math.min(state.scrollOffset + 1, maxOffset));
           }
           return 'handled';
+
+        case 's':
+          if (!state.executionRequested && handlers.onStartRequest) {
+            handlers.onStartRequest();
+            return 'handled';
+          }
+          return 'unhandled';
 
         case 'return':
           if (state.sidebarFocused) {

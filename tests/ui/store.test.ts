@@ -67,4 +67,29 @@ describe('UIStore', () => {
     store.getState().setPhase({ current: 2, total: 4 });
     expect(store.getState().phase).toEqual({ current: 2, total: 4 });
   });
+
+  it('initializes executionRequested as false', () => {
+    expect(store.getState().executionRequested).toBe(false);
+  });
+
+  it('sets executionRequested via requestExecution', () => {
+    store.getState().requestExecution();
+    expect(store.getState().executionRequested).toBe(true);
+  });
+
+  it('requestExecution is idempotent', () => {
+    store.getState().requestExecution();
+    store.getState().requestExecution();
+    expect(store.getState().executionRequested).toBe(true);
+  });
+
+  it('adds agent with custom status when provided', () => {
+    store.getState().addAgent({ id: 'beta', name: 'Beta', feature: 'api', status: 'queued' });
+    expect(store.getState().agents[0]?.status).toBe('queued');
+  });
+
+  it('adds agent with running status by default', () => {
+    store.getState().addAgent({ id: 'gamma', name: 'Gamma', feature: 'auth' });
+    expect(store.getState().agents[0]?.status).toBe('running');
+  });
 });

@@ -37,7 +37,8 @@ export interface UIStore {
   filterText: string;
   scrollOffset: number;
   showHelp: boolean;
-  addAgent: (init: { id: string; name: string; feature: string }) => void;
+  executionRequested: boolean;
+  addAgent: (init: { id: string; name: string; feature: string; status?: AgentStatus }) => void;
   updateAgent: (id: string, patch: Partial<Pick<AgentState, 'status' | 'cost' | 'elapsed' | 'currentTool' | 'approvalRequest'>>) => void;
   appendOutput: (agentId: string, line: OutputLine) => void;
   setFocusedAgent: (id: string | null) => void;
@@ -51,6 +52,7 @@ export interface UIStore {
   setShowHelp: (show: boolean) => void;
   setFilterText: (text: string) => void;
   setNotice: (notice: UIStore['notice']) => void;
+  requestExecution: () => void;
 }
 
 export const createUIStore = () =>
@@ -66,6 +68,7 @@ export const createUIStore = () =>
     filterText: '',
     scrollOffset: 0,
     showHelp: false,
+    executionRequested: false,
 
     addAgent: (init) =>
       set((state) => ({
@@ -73,7 +76,7 @@ export const createUIStore = () =>
           ...state.agents,
           {
             ...init,
-            status: 'running' as const,
+            status: init.status ?? ('running' as const),
             currentTool: null,
             cost: 0,
             elapsed: 0,
@@ -118,4 +121,5 @@ export const createUIStore = () =>
     setShowHelp: (show) => set({ showHelp: show }),
     setFilterText: (text) => set({ filterText: text }),
     setNotice: (notice) => set({ notice }),
+    requestExecution: () => set({ executionRequested: true }),
   }));

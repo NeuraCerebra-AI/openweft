@@ -135,4 +135,36 @@ describe('handleKeypress', () => {
 
     expect(decisions).toEqual(['approve', 'deny', 'skip', 'always']);
   });
+
+  it('fires onStartRequest on s in normal mode when execution not yet requested', () => {
+    const store = createUIStore();
+    const starts: boolean[] = [];
+    const result = handleKeypress(store, 's', {
+      onStartRequest: () => { starts.push(true); }
+    });
+    expect(result).toBe('handled');
+    expect(starts).toEqual([true]);
+  });
+
+  it('ignores s in normal mode when execution already requested', () => {
+    const store = createUIStore();
+    store.getState().requestExecution();
+    const starts: boolean[] = [];
+    const result = handleKeypress(store, 's', {
+      onStartRequest: () => { starts.push(true); }
+    });
+    expect(result).toBe('unhandled');
+    expect(starts).toEqual([]);
+  });
+
+  it('s still means skip in approval mode', () => {
+    const store = createUIStore();
+    store.getState().setMode('approval');
+    const decisions: string[] = [];
+    const result = handleKeypress(store, 's', {
+      onApprovalDecision: (d) => { decisions.push(d); }
+    });
+    expect(result).toBe('handled');
+    expect(decisions).toEqual(['skip']);
+  });
 });
