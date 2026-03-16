@@ -23,6 +23,9 @@ import {
   readTextFileIfExists,
   writeTextFileAtomic
 } from '../fs/index.js';
+import type { ResolvedOpenWeftConfig } from '../config/schema.js';
+import type { UIStore } from '../ui/store.js';
+import type { StoreApi } from 'zustand/vanilla';
 import { ApprovalController, runDryRunOrchestration, runRealOrchestration, StopController } from '../orchestrator/index.js';
 import { createDefaultNotificationDependencies } from '../notifications/index.js';
 import { loadCheckpoint } from '../state/index.js';
@@ -323,11 +326,92 @@ export const createCommandHandlers = (
     ...dependencies
   };
 
+  const startTuiSession = async (input: {
+    config: ResolvedOpenWeftConfig;
+    configHash: string;
+    gated?: boolean;
+    prePopulate?: (store: StoreApi<UIStore>) => void;
+  }): Promise<void> => {
+    const { withFullScreen } = await import('fullscreen-ink');
+    const { App } = await import('../ui/App.js');
+    const { createUIStore } = await import('../ui/store.js');
+    const { createEventHandler } = await import('../ui/hooks/useOrchestratorBridge.js');
+    const React = await import('react');
+
+    const uiStore = createUIStore();
+    const onEvent = createEventHandler(uiStore);
+    const stopController = new StopController();
+    const approvalController = new ApprovalController(onEvent);
+    const notificationDependencies = createDefaultNotificationDependencies();
+
+    input.prePopulate?.(uiStore);
+
+    // Subscribe before app.start() to avoid missing a fast s press
+    let gateResolve: ((action: 'start' | 'quit') => void) | null = null;
+    const gatePromise = input.gated
+      ? new Promise<'start' | 'quit'>((resolve) => { gateResolve = resolve; })
+      : null;
+
+    if (input.gated) {
+      uiStore.subscribe((s) => {
+        if (s.executionRequested) gateResolve?.('start');
+      });
+    }
+
+    const app = withFullScreen(
+      React.createElement(App, {
+        store: uiStore,
+        onQuitRequest: () => {
+          stopController.request('signal');
+          gateResolve?.('quit');
+        },
+        onApprovalDecision: (decision) => { approvalController.resolveCurrent(decision); },
+        ...(input.gated ? { onStartRequest: () => { uiStore.getState().requestExecution(); } } : {}),
+      }),
+      { exitOnCtrlC: false }
+    );
+    await app.start();
+
+    const signalHandler = () => {
+      if (!stopController.isRequested) {
+        stopController.request('signal');
+        gateResolve?.('quit');
+      }
+    };
+    process.on('SIGINT', signalHandler);
+    process.on('SIGTERM', signalHandler);
+
+    try {
+      if (gatePromise) {
+        const action = await gatePromise;
+        if (action === 'quit') return;
+      }
+
+      await runRealOrchestration({
+        config: input.config,
+        configHash: input.configHash,
+        adapter: selectAdapter({ backend: input.config.backend, streamOutput: false }),
+        stopController,
+        approvalController,
+        notificationDependencies,
+        streamOutput: false,
+        tmuxRequested: false,
+        sleep: resolvedDependencies.sleep,
+        onEvent,
+      });
+    } finally {
+      process.off('SIGINT', signalHandler);
+      process.off('SIGTERM', signalHandler);
+      app.instance.unmount();
+      await app.waitUntilExit();
+    }
+  };
+
   // handlers is declared here so that `launch` can call sibling handlers.
   const handlers: CommandHandlers = {
     launch: async () => {
       const cwd = resolvedDependencies.getCwd();
-      const { config } = await loadOpenWeftConfig(cwd);
+      const { config, configHash } = await loadOpenWeftConfig(cwd);
 
       // No config — first-time user
       if (config.configFilePath === null) {
@@ -355,17 +439,49 @@ export const createCommandHandlers = (
 
       const queueContent = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
       const { pending } = parseQueueFile(queueContent);
-      if (pending.length > 0) {
-        await handlers.start({});
-        return;
-      }
-
       const checkpointResult = await loadCheckpoint({
         checkpointFile: config.paths.checkpointFile,
         checkpointBackupFile: config.paths.checkpointBackupFile,
       });
-      if (checkpointResult.checkpoint) {
-        await handlers.status();
+
+      const hasWork = pending.length > 0 || (checkpointResult.checkpoint !== null &&
+        Object.values(checkpointResult.checkpoint.features).some((f) =>
+          f.status === 'planned' || f.status === 'executing' || f.status === 'pending'
+        ));
+
+      if (hasWork) {
+        if (!process.stdout.isTTY) {
+          await handlers.start({});
+          return;
+        }
+        await startTuiSession({
+          config,
+          configHash,
+          gated: true,
+          prePopulate: (store) => {
+            if (checkpointResult.checkpoint) {
+              for (const feature of Object.values(checkpointResult.checkpoint.features)) {
+                store.getState().addAgent({
+                  id: feature.id,
+                  name: feature.title ?? feature.request,
+                  feature: feature.request,
+                  status: 'queued',
+                });
+              }
+            } else {
+              pending.forEach((line, index) => {
+                store.getState().addAgent({
+                  id: `pending-${index}`,
+                  name: line.request,
+                  feature: line.request,
+                  status: 'queued',
+                });
+              });
+            }
+            const first = store.getState().agents[0];
+            if (first) store.getState().setFocusedAgent(first.id);
+          },
+        });
         return;
       }
 
@@ -552,60 +668,7 @@ export const createCommandHandlers = (
       }
 
       if (process.stdout.isTTY && !options.bg && !options.tmux && !tmuxMonitor && !options.dryRun) {
-        // Dynamic import to avoid loading Ink for non-TUI paths
-        const { withFullScreen } = await import('fullscreen-ink');
-        const { App } = await import('../ui/App.js');
-        const { createUIStore } = await import('../ui/store.js');
-        const { createEventHandler } = await import('../ui/hooks/useOrchestratorBridge.js');
-        const React = await import('react');
-
-        const uiStore = createUIStore();
-        const onEvent = createEventHandler(uiStore);
-        const stopController = new StopController();
-        const approvalController = new ApprovalController(onEvent);
-        const notificationDependencies = createDefaultNotificationDependencies();
-
-        const app = withFullScreen(
-          React.createElement(App, {
-            store: uiStore,
-            onQuitRequest: () => {
-              stopController.request('signal');
-            },
-            onApprovalDecision: (decision) => {
-              approvalController.resolveCurrent(decision);
-            },
-          }),
-          { exitOnCtrlC: false }
-        );
-        await app.start();
-
-        const tuiSignalHandler = () => {
-          if (!stopController.isRequested) {
-            stopController.request('signal');
-          }
-        };
-        process.on('SIGINT', tuiSignalHandler);
-        process.on('SIGTERM', tuiSignalHandler);
-
-        try {
-          await runRealOrchestration({
-            config,
-            configHash,
-            adapter: selectAdapter({ backend: config.backend, streamOutput: false }),
-            stopController,
-            approvalController,
-            notificationDependencies,
-            streamOutput: false,
-            tmuxRequested: false,
-            sleep: resolvedDependencies.sleep,
-            onEvent,
-          });
-        } finally {
-          process.off('SIGINT', tuiSignalHandler);
-          process.off('SIGTERM', tuiSignalHandler);
-          app.instance.unmount();
-          await app.waitUntilExit();
-        }
+        await startTuiSession({ config, configHash });
         return;
       }
 
