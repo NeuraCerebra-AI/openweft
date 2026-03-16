@@ -8,7 +8,7 @@ describe('Footer', () => {
   it('renders NORMAL mode keybindings', () => {
     const { lastFrame } = render(
       <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="normal" />
+        <Footer mode="normal" executionStarted={false} />
       </ThemeContext.Provider>
     );
     const frame = lastFrame() ?? '';
@@ -20,7 +20,7 @@ describe('Footer', () => {
   it('renders APPROVAL mode keybindings', () => {
     const { lastFrame } = render(
       <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="approval" />
+        <Footer mode="approval" executionStarted={false} />
       </ThemeContext.Provider>
     );
     const frame = lastFrame() ?? '';
@@ -29,10 +29,31 @@ describe('Footer', () => {
     expect(frame).toContain('deny');
   });
 
+  it('shows s start hint in normal mode when execution not started', () => {
+    const { lastFrame } = render(
+      <ThemeContext.Provider value={catppuccinMocha}>
+        <Footer mode="normal" executionStarted={false} />
+      </ThemeContext.Provider>
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('s');
+    expect(frame).toContain('start');
+  });
+
+  it('hides s start hint in normal mode when execution started', () => {
+    const { lastFrame } = render(
+      <ThemeContext.Provider value={catppuccinMocha}>
+        <Footer mode="normal" executionStarted={true} />
+      </ThemeContext.Provider>
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).not.toContain('start');
+  });
+
   it('renders INPUT mode keybindings', () => {
     const { lastFrame } = render(
       <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="input" />
+        <Footer mode="input" executionStarted={false} />
       </ThemeContext.Provider>
     );
     const frame = lastFrame() ?? '';

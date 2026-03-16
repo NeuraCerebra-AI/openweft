@@ -16,6 +16,7 @@ export const HelpOverlay: React.FC = React.memo(() => {
       <Text><Text bold>{'/'}</Text><Text color={colors.subtext}>{'       Filter agents'}</Text></Text>
       <Text><Text bold>{'q'}</Text><Text color={colors.subtext}>{'       Quit'}</Text></Text>
       <Text><Text bold>{'?'}</Text><Text color={colors.subtext}>{'       Toggle this help'}</Text></Text>
+      <Text><Text bold>{'s'}</Text><Text color={colors.subtext}>{'       Start execution'}</Text></Text>
       <Text>{''}</Text>
       <Text color={colors.muted}>{'Press ? or Esc to dismiss'}</Text>
     </Box>

@@ -5,6 +5,7 @@ import { useTheme } from './theme.js';
 
 interface FooterProps {
   readonly mode: 'normal' | 'approval' | 'input';
+  readonly executionStarted: boolean;
 }
 
 type KeyBinding = readonly [key: string, description: string];
@@ -50,15 +51,18 @@ const modeConfig: Record<FooterProps['mode'], ModeConfig> = {
   },
 };
 
-export const Footer: React.FC<FooterProps> = React.memo(({ mode }) => {
+export const Footer: React.FC<FooterProps> = React.memo(({ mode, executionStarted }) => {
   const { colors } = useTheme();
   const config = modeConfig[mode];
   const modeColor = colors[config.colorKey];
+  const keys = mode === 'normal' && !executionStarted
+    ? [['s', 'start'] as const, ...config.keys]
+    : config.keys;
 
   return (
     <Box flexDirection="row" gap={1}>
       <Text bold color={modeColor}>{` ${config.label} `}</Text>
-      {config.keys.map((binding) => (
+      {keys.map((binding) => (
         <Text key={binding[0]}>
           <Text bold>{binding[0]}</Text>
           <Text color={colors.subtext}>{` ${binding[1]}`}</Text>
