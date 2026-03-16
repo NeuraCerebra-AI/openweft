@@ -20,7 +20,9 @@ export const AgentRow: React.FC<AgentRowProps> = React.memo(({ name, status, ela
     <Box>
       <Text color={focused ? colors.blue : colors.text}>{focused ? '> ' : '  '}</Text>
       <Text color={colors[colorKey]}>{icon} </Text>
-      <Text bold={focused}>{name}</Text>
+      <Box flexGrow={1} flexShrink={1}>
+        <Text bold={focused} wrap="truncate">{name}</Text>
+      </Box>
       <Text color={colors.muted}>{` ${formatTime(elapsed)}`}</Text>
     </Box>
   );
