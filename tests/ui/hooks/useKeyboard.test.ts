@@ -167,4 +167,76 @@ describe('handleKeypress', () => {
     expect(result).toBe('handled');
     expect(decisions).toEqual(['skip']);
   });
+
+  it('d removes focused agent in ready state', () => {
+    const store = createUIStore();
+    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1', status: 'queued' });
+    store.getState().addAgent({ id: 'a2', name: 'A2', feature: 'f2', status: 'queued' });
+    store.getState().setFocusedAgent('a1');
+    const removed: string[] = [];
+    const result = handleKeypress(store, 'd', {
+      onRemoveAgent: (id) => { removed.push(id); }
+    });
+    expect(result).toBe('handled');
+    expect(removed).toEqual(['a1']);
+  });
+
+  it('d does nothing during execution', () => {
+    const store = createUIStore();
+    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1', status: 'queued' });
+    store.getState().setFocusedAgent('a1');
+    store.getState().requestExecution();
+    const removed: string[] = [];
+    const result = handleKeypress(store, 'd', {
+      onRemoveAgent: (id) => { removed.push(id); }
+    });
+    expect(result).toBe('unhandled');
+    expect(removed).toEqual([]);
+  });
+
+  it('d does nothing with no focused agent', () => {
+    const store = createUIStore();
+    const removed: string[] = [];
+    const result = handleKeypress(store, 'd', {
+      onRemoveAgent: (id) => { removed.push(id); }
+    });
+    expect(result).toBe('unhandled');
+    expect(removed).toEqual([]);
+  });
+
+  it('q in ready state quits immediately', () => {
+    const store = createUIStore();
+    const result = handleKeypress(store, 'q');
+    expect(result).toBe('quit');
+    expect(store.getState().quitConfirmPending).toBe(false);
+  });
+
+  it('q during execution shows confirmation', () => {
+    const store = createUIStore();
+    store.getState().requestExecution();
+    const result = handleKeypress(store, 'q');
+    expect(result).toBe('handled');
+    expect(store.getState().quitConfirmPending).toBe(true);
+    expect(store.getState().notice).not.toBeNull();
+  });
+
+  it('second q during execution confirms quit', () => {
+    const store = createUIStore();
+    store.getState().requestExecution();
+    handleKeypress(store, 'q'); // first q — sets confirmation
+    const result = handleKeypress(store, 'q'); // second q — confirms
+    expect(result).toBe('quit');
+    expect(store.getState().quitConfirmPending).toBe(false);
+  });
+
+  it('Esc cancels quit confirmation', () => {
+    const store = createUIStore();
+    store.getState().requestExecution();
+    handleKeypress(store, 'q'); // sets confirmation
+    expect(store.getState().quitConfirmPending).toBe(true);
+    const result = handleKeypress(store, 'escape');
+    expect(result).toBe('handled');
+    expect(store.getState().quitConfirmPending).toBe(false);
+    expect(store.getState().notice).toBeNull();
+  });
 });

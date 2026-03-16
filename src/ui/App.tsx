@@ -18,12 +18,13 @@ interface AppProps {
   readonly onQuitRequest?: (reason: 'keyboard') => void;
   readonly onApprovalDecision?: (decision: 'approve' | 'deny' | 'skip' | 'always') => void;
   readonly onStartRequest?: () => void;
+  readonly onRemoveAgent?: (agentId: string) => void;
 }
 
 // StatusBar (1 line) + Footer (1 line) + borders (2 lines) = 4 lines reserved
 const BASE_CHROME_LINES = 4;
 
-export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecision, onStartRequest }) => {
+export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecision, onStartRequest, onRemoveAgent }) => {
   const state = useStore(store);
   const { exit } = useApp();
   const { rows } = useTerminalSize();
@@ -59,6 +60,7 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
       ...(onQuitRequest ? { onQuit: onQuitRequest } : {}),
       ...(onApprovalDecision ? { onApprovalDecision } : {}),
       ...(onStartRequest ? { onStartRequest } : {}),
+      ...(onRemoveAgent ? { onRemoveAgent } : {}),
     });
     if (result === 'quit') {
       exit();

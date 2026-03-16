@@ -56,7 +56,7 @@ export const Footer: React.FC<FooterProps> = React.memo(({ mode, executionStarte
   const config = modeConfig[mode];
   const modeColor = colors[config.colorKey];
   const keys = mode === 'normal' && !executionStarted
-    ? [['s', 'start'] as const, ...config.keys]
+    ? [['s', 'start'] as const, ['d', 'remove'] as const, ...config.keys]
     : config.keys;
 
   return (

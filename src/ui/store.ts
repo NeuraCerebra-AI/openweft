@@ -38,7 +38,9 @@ export interface UIStore {
   scrollOffset: number;
   showHelp: boolean;
   executionRequested: boolean;
+  quitConfirmPending: boolean;
   addAgent: (init: { id: string; name: string; feature: string; status?: AgentStatus }) => void;
+  removeAgent: (id: string) => void;
   updateAgent: (id: string, patch: Partial<Pick<AgentState, 'status' | 'cost' | 'elapsed' | 'currentTool' | 'approvalRequest'>>) => void;
   appendOutput: (agentId: string, line: OutputLine) => void;
   setFocusedAgent: (id: string | null) => void;
@@ -53,6 +55,7 @@ export interface UIStore {
   setFilterText: (text: string) => void;
   setNotice: (notice: UIStore['notice']) => void;
   requestExecution: () => void;
+  setQuitConfirmPending: (pending: boolean) => void;
 }
 
 export const createUIStore = () =>
@@ -69,6 +72,7 @@ export const createUIStore = () =>
     scrollOffset: 0,
     showHelp: false,
     executionRequested: false,
+    quitConfirmPending: false,
 
     addAgent: (init) =>
       set((state) => ({
@@ -85,6 +89,18 @@ export const createUIStore = () =>
           },
         ],
       })),
+
+    removeAgent: (id) =>
+      set((state) => {
+        const filtered = state.agents.filter((a) => a.id !== id);
+        let nextFocused = state.focusedAgentId;
+        if (state.focusedAgentId === id) {
+          const idx = state.agents.findIndex((a) => a.id === id);
+          const next = filtered[idx] ?? filtered[idx - 1] ?? null;
+          nextFocused = next?.id ?? null;
+        }
+        return { agents: filtered, focusedAgentId: nextFocused, scrollOffset: 0 };
+      }),
 
     updateAgent: (id, patch) =>
       set((state) => ({
@@ -122,4 +138,5 @@ export const createUIStore = () =>
     setFilterText: (text) => set({ filterText: text }),
     setNotice: (notice) => set({ notice }),
     requestExecution: () => set({ executionRequested: true }),
+    setQuitConfirmPending: (pending) => set({ quitConfirmPending: pending }),
   }));

@@ -8,6 +8,7 @@ export interface KeypressHandlers {
   onQuit?: (reason: 'keyboard') => void;
   onApprovalDecision?: (decision: 'approve' | 'deny' | 'skip' | 'always') => void;
   onStartRequest?: () => void;
+  onRemoveAgent?: (agentId: string) => void;
 }
 
 export const handleKeypress = (
@@ -33,12 +34,41 @@ export const handleKeypress = (
         case 'tab': state.togglePanel(); return 'handled';
         case '?': state.setShowHelp(true); return 'handled';
         case 'q':
+          if (state.quitConfirmPending) {
+            // Second q confirms quit
+            state.setQuitConfirmPending(false);
+            if (handlers.onQuit) {
+              handlers.onQuit('keyboard');
+              return 'handled';
+            }
+            return 'quit';
+          }
+          if (state.executionRequested) {
+            // During execution, require confirmation
+            state.setQuitConfirmPending(true);
+            state.setNotice({ level: 'info', message: 'Press q again to stop after current phase, Esc to cancel' });
+            return 'handled';
+          }
+          // Ready state — quit immediately
           if (handlers.onQuit) {
             handlers.onQuit('keyboard');
             return 'handled';
           }
           return 'quit';
+        case 'escape':
+          if (state.quitConfirmPending) {
+            state.setQuitConfirmPending(false);
+            state.setNotice(null);
+            return 'handled';
+          }
+          return 'unhandled';
         case '/': state.setMode('input'); return 'handled';
+        case 'd':
+          if (!state.executionRequested && state.focusedAgentId && handlers.onRemoveAgent) {
+            handlers.onRemoveAgent(state.focusedAgentId);
+            return 'handled';
+          }
+          return 'unhandled';
 
         case 'up':
           if (state.sidebarFocused) {

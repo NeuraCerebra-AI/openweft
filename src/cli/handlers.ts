@@ -331,6 +331,7 @@ export const createCommandHandlers = (
     configHash: string;
     gated?: boolean;
     prePopulate?: (store: StoreApi<UIStore>) => void;
+    onRemoveAgent?: (agentId: string, store: StoreApi<UIStore>) => Promise<void>;
   }): Promise<void> => {
     const { withFullScreen } = await import('fullscreen-ink');
     const { App } = await import('../ui/App.js');
@@ -367,6 +368,7 @@ export const createCommandHandlers = (
         },
         onApprovalDecision: (decision) => { approvalController.resolveCurrent(decision); },
         ...(input.gated ? { onStartRequest: () => { uiStore.getState().requestExecution(); } } : {}),
+        ...(input.onRemoveAgent ? { onRemoveAgent: (agentId: string) => { void input.onRemoveAgent!(agentId, uiStore); } } : {}),
       }),
       { exitOnCtrlC: false }
     );
@@ -480,6 +482,20 @@ export const createCommandHandlers = (
             }
             const first = store.getState().agents[0];
             if (first) store.getState().setFocusedAgent(first.id);
+          },
+          onRemoveAgent: async (agentId, store) => {
+            const agent = store.getState().agents.find((a) => a.id === agentId);
+            if (!agent) return;
+            store.getState().removeAgent(agentId);
+            // Remove matching pending line from queue.txt
+            const currentQueue = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
+            const parsed = parseQueueFile(currentQueue);
+            const match = parsed.pending.find((line) => line.request === agent.feature);
+            if (match) {
+              const lines = currentQueue.split('\n');
+              lines.splice(match.lineIndex, 1);
+              await writeTextFileAtomic(config.paths.queueFile, lines.join('\n'));
+            }
           },
         });
         return;

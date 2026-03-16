@@ -92,4 +92,41 @@ describe('UIStore', () => {
     store.getState().addAgent({ id: 'gamma', name: 'Gamma', feature: 'auth' });
     expect(store.getState().agents[0]?.status).toBe('running');
   });
+
+  it('removes agent and moves focus to next', () => {
+    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1', status: 'queued' });
+    store.getState().addAgent({ id: 'a2', name: 'A2', feature: 'f2', status: 'queued' });
+    store.getState().addAgent({ id: 'a3', name: 'A3', feature: 'f3', status: 'queued' });
+    store.getState().setFocusedAgent('a2');
+    store.getState().removeAgent('a2');
+    expect(store.getState().agents).toHaveLength(2);
+    expect(store.getState().focusedAgentId).toBe('a3');
+  });
+
+  it('removes last agent and focuses previous', () => {
+    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1', status: 'queued' });
+    store.getState().addAgent({ id: 'a2', name: 'A2', feature: 'f2', status: 'queued' });
+    store.getState().setFocusedAgent('a2');
+    store.getState().removeAgent('a2');
+    expect(store.getState().focusedAgentId).toBe('a1');
+  });
+
+  it('removes only agent and clears focus', () => {
+    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1', status: 'queued' });
+    store.getState().setFocusedAgent('a1');
+    store.getState().removeAgent('a1');
+    expect(store.getState().agents).toHaveLength(0);
+    expect(store.getState().focusedAgentId).toBeNull();
+  });
+
+  it('initializes quitConfirmPending as false', () => {
+    expect(store.getState().quitConfirmPending).toBe(false);
+  });
+
+  it('sets quitConfirmPending', () => {
+    store.getState().setQuitConfirmPending(true);
+    expect(store.getState().quitConfirmPending).toBe(true);
+    store.getState().setQuitConfirmPending(false);
+    expect(store.getState().quitConfirmPending).toBe(false);
+  });
 });
