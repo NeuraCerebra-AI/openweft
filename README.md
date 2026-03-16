@@ -32,10 +32,10 @@ You write a list. You walk away. You come back to commits.
 
 ```bash
 npm install -g openweft
-openweft                              # first run auto-inits and tells you what to do next
-openweft add "ship the thing"
-openweft                              # starts the queued run
+openweft                              # first run launches the setup wizard
 ```
+
+First run in a terminal launches an interactive setup wizard — it detects your installed backends, initializes the project, and lets you type your first feature request. One flow, no manual config. For returning users, `openweft` opens the dashboard with your queue visible — press `s` to start execution when you're ready.
 
 ---
 
@@ -112,14 +112,10 @@ OpenWeft uses your existing CLI sessions. Subscription-first by default. No sepa
 ## Quick start
 
 ```bash
-# Set up the project
+# First run — wizard handles everything
 openweft
 
-# Look at the starter prompts (you'll want to edit these)
-$EDITOR prompts/prompt-a.md
-$EDITOR prompts/plan-adjustment.md
-
-# Queue some work
+# Queue more work
 openweft add "add password reset flow"
 openweft add "refactor auth middleware for oauth2"
 openweft add "add audit log export"
@@ -157,12 +153,18 @@ The loop runs until the queue is empty or you tell it to stop.
 ```
 $ openweft status
 
-  State: executing (phase 2 of 4)
-  PID: 38291 (background)
-  Features: 3 active · 2 pending · 3 done
-
-  Tokens: 847,203 input · 312,456 output
-  Estimated cost: $2.14
+Status: completed
+Machine State: idle
+Background: not running
+Pending Queue: 0
+Processed Queue Entries: 1
+Features: 1 total (1 completed)
+Cost: $0.246549 (129221 input / 1458 output tokens)
+Executing: none
+Planned: none
+Failed: none
+Completed:
+  [001] Add a multiply function to index.js (high 0.693)
 ```
 
 ---
@@ -170,15 +172,15 @@ $ openweft status
 ## Commands
 
 ```
+openweft                       first run: interactive wizard · returning: opens dashboard, press s to start
 openweft init                  set up config, directories, starter prompts
 openweft add "feature"         queue a request (also accepts stdin)
-openweft                       guided startup: auto-init, auto-start queued work, or show next step
 openweft start                 run the queue in the foreground; in a real TTY this opens the interactive dashboard
 openweft start --bg            detached, PID tracked, logs to .openweft/output.log
 openweft start --stream        stream raw backend output to your terminal
 openweft start --tmux          spawn a tmux session; falls back if tmux is missing
 openweft start --dry-run       full pipeline against the mock adapter, no cost
-openweft status                queue state, PID, tokens, cost
+openweft status                queue state, tokens, cost, feature breakdown
 openweft stop                  finish the current phase, then stop
 ```
 
@@ -342,22 +344,29 @@ State machine (XState) manages the phase lifecycle. Session chains (not long-liv
 
 ---
 
-## Development
+## Why "OpenWeft"?
+
+A weft is the horizontal thread on a loom. It runs through the vertical warp threads and binds them into fabric. Without it, you just have a bunch of parallel strings that don't hold together.
+
+That's the job.
+
+---
+
+<details>
+<summary>Development</summary>
 
 ```bash
-npm run typecheck
-npm test
-npm run build
-npm pack --dry-run
+npm run typecheck      # tsc --noEmit
+npm test               # vitest
+npm run build          # tsc → dist/
+npm pack --dry-run     # verify package contents
 ```
 
 Release gate (single command):
 
 ```bash
-npm run release:check
+npm run release:check  # typecheck + test + build + npm publish --dry-run
 ```
-
-This runs typecheck, tests, build, and `npm publish --dry-run` in one shot.
 
 Fastest local validation:
 
@@ -373,26 +382,18 @@ npm run smoke:live:codex:resume
 npm run smoke:live:claude
 ```
 
-## Publishing
+### Publishing
 
 ```bash
 npm run release:check
 npm publish
 ```
 
----
+### Contributing
 
-## Why "OpenWeft"?
+PRs welcome. Run `npm run release:check` before submitting — it covers typecheck, tests, build, and package validation in one shot.
 
-A weft is the horizontal thread on a loom. It runs through the vertical warp threads and binds them into fabric. Without it, you just have a bunch of parallel strings that don't hold together.
-
-That's the job.
-
----
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md).
+</details>
 
 ## License
 
