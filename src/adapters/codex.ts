@@ -111,9 +111,7 @@ export const buildCodexCommand = (request: AdapterTurnRequest): AdapterCommandSp
     for (const directory of request.additionalDirectories ?? []) {
       args.push('--add-dir', directory);
     }
-  }
 
-  if (!request.sessionId) {
     args.push('--json', '--color', 'never', '--model', request.model);
   }
   args.push('-');

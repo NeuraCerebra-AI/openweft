@@ -17,12 +17,12 @@ export interface AgentState {
   readonly id: string;
   readonly name: string;
   readonly feature: string;
-  status: AgentStatus;
-  currentTool: string | null;
-  cost: number;
-  elapsed: number;
-  outputLines: OutputLine[];
-  approvalRequest: ApprovalRequest | null;
+  readonly status: AgentStatus;
+  readonly currentTool: string | null;
+  readonly cost: number;
+  readonly elapsed: number;
+  readonly outputLines: OutputLine[];
+  readonly approvalRequest: ApprovalRequest | null;
 }
 
 export interface UIStore {

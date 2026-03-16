@@ -53,11 +53,14 @@ export const readTextFileWithRetry = async (
 };
 
 export const readTextFileIfExists = async (filePath: string): Promise<string | null> => {
-  if (!(await pathExists(filePath))) {
-    return null;
+  try {
+    return await readFile(filePath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
+    throw error;
   }
-
-  return readFile(filePath, 'utf8');
 };
 
 export const writeTextFileAtomic = async (filePath: string, content: string): Promise<void> => {

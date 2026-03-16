@@ -36,7 +36,6 @@ const modeConfig: Record<FooterProps['mode'], ModeConfig> = {
       ['n', 'deny'],
       ['a', 'always'],
       ['s', 'skip'],
-      ['d', 'diff'],
       ['Esc', 'back'],
     ],
   },

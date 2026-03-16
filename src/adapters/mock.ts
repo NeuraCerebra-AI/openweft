@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { slugifyFeatureRequest } from '../domain/featureIds.js';
@@ -133,11 +133,6 @@ const resolveMockConflicts = async (cwd: string): Promise<void> => {
   const files = await walkFiles(cwd);
 
   for (const filePath of files) {
-    const details = await stat(filePath).catch(() => null);
-    if (!details?.isFile()) {
-      continue;
-    }
-
     const content = await readFile(filePath, 'utf8').catch(() => '');
     if (!content.includes('<<<<<<<') || !content.includes('>>>>>>>')) {
       continue;

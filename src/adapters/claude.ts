@@ -96,9 +96,7 @@ export const buildClaudeCommand = (request: AdapterTurnRequest): AdapterCommandS
     args,
     cwd: request.cwd,
     input: request.prompt,
-    env: {
-      ...resolveAuthEnvironment(request.auth, 'ANTHROPIC_API_KEY')
-    }
+    env: resolveAuthEnvironment(request.auth, 'ANTHROPIC_API_KEY')
   };
 };
 

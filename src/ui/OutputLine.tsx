@@ -3,7 +3,6 @@ import { Text } from 'ink';
 import { marked, type MarkedExtension } from 'marked';
 import { markedTerminal } from 'marked-terminal';
 
-import { useTheme } from './theme.js';
 import { ToolBlock } from './ToolBlock.js';
 import { CodeBlock } from './CodeBlock.js';
 import { ApprovalPrompt } from './ApprovalPrompt.js';
@@ -18,8 +17,6 @@ interface OutputLineProps {
 }
 
 export const OutputLine: React.FC<OutputLineProps> = React.memo(({ line }) => {
-  const { colors } = useTheme();
-
   const renderedText = useMemo(() => {
     if (line.type !== 'text') return '';
     return (marked.parse(line.content, { async: false }) as string).trimEnd();
@@ -61,12 +58,9 @@ export const OutputLine: React.FC<OutputLineProps> = React.memo(({ line }) => {
         <ApprovalPrompt
           file={line.meta?.['file'] ?? ''}
           action={line.meta?.['action'] ?? line.content}
-          detail={line.content}
+          detail={line.meta?.['detail'] ?? ''}
         />
       );
-
-    default:
-      return <Text>{line.content}</Text>;
   }
 });
 

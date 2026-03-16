@@ -67,10 +67,6 @@ export const StepAddMore: React.FC<StepAddMoreProps> = ({
     });
   };
 
-  const handleInputExit = () => {
-    onExit();
-  };
-
   const footerKeys =
     mode === 'input'
       ? (['submit', 'quit'] as const)
@@ -112,7 +108,7 @@ export const StepAddMore: React.FC<StepAddMoreProps> = ({
           value={inputValue}
           onChange={setInputValue}
           onSubmit={handleInputSubmit}
-          onExit={handleInputExit}
+          onExit={onExit}
         />
       )}
 

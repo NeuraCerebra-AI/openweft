@@ -33,7 +33,6 @@ export const slugifyFeatureRequest = (request: string, maxLength = SLUG_LIMIT): 
   const trimmed = request.trim().toLowerCase();
   const slug = trimmed
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/-+/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, maxLength)
     .replace(/-$/g, '');

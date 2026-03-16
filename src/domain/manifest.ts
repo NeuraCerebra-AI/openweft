@@ -101,7 +101,7 @@ export const parseManifestJson = (
 
   if (lastKnownGood) {
     return {
-      manifest: normalizeManifest(ManifestSchema.parse(lastKnownGood)),
+      manifest: normalizeManifest(lastKnownGood),
       method: 'last-known-good'
     };
   }

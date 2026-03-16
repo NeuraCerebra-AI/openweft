@@ -159,7 +159,7 @@ export const calculateBlastRadius = (manifest: Manifest, repoContext: RepoAnalys
       const fanIn = repoContext.fanInByPath[normalizeRelativePath(filePath)] ?? 0;
       const normalizedFanIn = repoContext.maxFanIn > 0 ? fanIn / repoContext.maxFanIn : 0;
       const fanInScore = operation === 'create' ? 0.1 : Math.max(normalizedFanIn, 0.1);
-      fileRisks.push(typeWeight * OP_WEIGHTS[operation as keyof typeof OP_WEIGHTS] * fanInScore);
+      fileRisks.push(typeWeight * OP_WEIGHTS[operation] * fanInScore);
     }
   }
 
@@ -184,7 +184,7 @@ export const calculateSuccessLikelihood = (feature: QueueFeatureInput, repoConte
   score -= 0.1 * (fileCount - 1);
   score -= 0.15 * modifyRatio;
   score += 0.1 * createRatio;
-  score -= 0.2 * Number(Boolean(feature.hasExternalApi));
+  if (feature.hasExternalApi) score -= 0.2;
   score -= 0.05 * Math.max(0, stepCount - 3);
   score -= 0.1 * highCouplingRatio;
   score -= feature.successPenalty ?? 0;
@@ -278,7 +278,7 @@ export const scoreQueueFeatures = (
     };
   });
 
-  return [...scored].sort((left, right) => {
+  return scored.sort((left, right) => {
     const delta = right.smoothedPriority - left.smoothedPriority;
     if (Math.abs(delta) <= 0.03) {
       return (left.previousRank ?? Number.MAX_SAFE_INTEGER) - (right.previousRank ?? Number.MAX_SAFE_INTEGER);

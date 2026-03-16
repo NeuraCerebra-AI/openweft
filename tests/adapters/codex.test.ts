@@ -83,6 +83,15 @@ describe('codex adapter', () => {
     expect(parsed.usage.outputTokens).toBe(32);
   });
 
+  it('throws on a malformed (non-JSON) JSONL line', () => {
+    expect(() => parseCodexJsonlOutput('not-json\n')).toThrow('Failed to parse Codex JSONL line: not-json');
+  });
+
+  it('throws when output has no turn.completed usage payload', () => {
+    const output = JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'hi' } });
+    expect(() => parseCodexJsonlOutput(output)).toThrow('Codex output did not include a turn.completed usage payload.');
+  });
+
   it('classifies non-zero exit failures', async () => {
     const adapter = new CodexCliAdapter(async () => ({
       stdout: '',

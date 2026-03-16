@@ -225,12 +225,9 @@ const defaultDependencies: CliDependencies = {
       throw new Error('Cannot determine the OpenWeft entrypoint for background execution.');
     }
 
-    const resolvedInvocationPath = invocationPath;
-    const useTsx = resolvedInvocationPath.endsWith('.ts');
+    const useTsx = invocationPath.endsWith('.ts');
     const command = useTsx ? 'tsx' : process.execPath;
-    const childArgs: string[] = useTsx
-      ? [resolvedInvocationPath, ...input.args]
-      : [resolvedInvocationPath, ...input.args];
+    const childArgs = [invocationPath, ...input.args];
     const child = execa(command, childArgs, {
       cwd: input.cwd,
       detached: true,
@@ -317,9 +314,6 @@ const cleanupBackgroundPidIfOwned = async (pidFile: string): Promise<void> => {
   }
 };
 
-const resolveTmuxMonitor = (env: NodeJS.ProcessEnv): TmuxMonitor | null => {
-  return readTmuxMonitorEnv(env);
-};
 
 export const createCommandHandlers = (
   dependencies: Partial<CliDependencies> = {}
@@ -494,7 +488,7 @@ export const createCommandHandlers = (
         config.paths.pidFile,
         resolvedDependencies.isPidAlive
       );
-      const tmuxMonitor = resolveTmuxMonitor(resolvedDependencies.getEnv());
+      const tmuxMonitor = readTmuxMonitorEnv(resolvedDependencies.getEnv());
 
       if (existingBackground?.alive && !tmuxMonitor) {
         throw new Error(`OpenWeft is already running with PID ${existingBackground.pid}.`);

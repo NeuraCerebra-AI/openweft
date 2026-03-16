@@ -46,10 +46,6 @@ export const StepLaunch: React.FC<StepLaunchProps> = ({
     }
   });
 
-  const handleSelect = (value: LaunchOptionValue) => {
-    onLaunch(value);
-  };
-
   const startLabel =
     queuedCount === 1
       ? `Start now — 1 request queued`
@@ -98,7 +94,7 @@ export const StepLaunch: React.FC<StepLaunchProps> = ({
       </Box>
 
       {/* Select input */}
-      <SelectInput<LaunchOptionValue> options={launchOptions} onSelect={handleSelect} />
+      <SelectInput<LaunchOptionValue> options={launchOptions} onSelect={onLaunch} />
 
       {/* Footer */}
       <WizardFooter keys={['select', 'confirm', 'back', 'quit']} />

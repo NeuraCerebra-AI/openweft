@@ -104,6 +104,11 @@ export const createEventHandler = (store: StoreApi<UIStore>): OrchestratorEventH
       case 'session:cost-update':
         getState().setTotalCost(event.totalCost);
         break;
+
+      default: {
+        const _exhaustive: never = event;
+        void _exhaustive;
+      }
     }
   };
 };

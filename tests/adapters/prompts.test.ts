@@ -17,6 +17,12 @@ describe('adapter prompt helpers', () => {
     ).toBe('Adjust: {"files":[]}');
   });
 
+  it('replaces only the first occurrence when the marker appears multiple times', () => {
+    const template = `${USER_REQUEST_MARKER} and also ${USER_REQUEST_MARKER}`;
+    const result = injectPromptTemplate(template, USER_REQUEST_MARKER, 'x');
+    expect(result).toBe(`x and also ${USER_REQUEST_MARKER}`);
+  });
+
   it('fails when the requested marker is missing', () => {
     expect(() =>
       injectPromptTemplate('No marker here', USER_REQUEST_MARKER, 'x')

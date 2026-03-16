@@ -92,6 +92,21 @@ describe('claude adapter', () => {
     expect(parsed.usage.totalCostUsd).toBe(0.2677775);
   });
 
+  it('throws when claude output has is_error: true with a result message', () => {
+    const errorOutput = JSON.stringify({ is_error: true, result: 'API rate limit hit' });
+    expect(() => parseClaudeJsonOutput(errorOutput, 'claude-sonnet-4-6')).toThrow('API rate limit hit');
+  });
+
+  it('throws when claude output has is_error: true without a result string', () => {
+    const errorOutput = JSON.stringify({ is_error: true });
+    expect(() => parseClaudeJsonOutput(errorOutput, 'claude-sonnet-4-6')).toThrow('Claude returned an error result.');
+  });
+
+  it('throws when claude output has no result field', () => {
+    const output = JSON.stringify({ is_error: false, session_id: 'x', usage: {} });
+    expect(() => parseClaudeJsonOutput(output, 'claude-sonnet-4-6')).toThrow('Claude output did not include a result string.');
+  });
+
   it('classifies missing-auth failures as fatal', async () => {
     const adapter = new ClaudeCliAdapter(async () => ({
       stdout: '',
