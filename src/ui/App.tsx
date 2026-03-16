@@ -19,12 +19,13 @@ interface AppProps {
   readonly onApprovalDecision?: (decision: 'approve' | 'deny' | 'skip' | 'always') => void;
   readonly onStartRequest?: () => void;
   readonly onRemoveAgent?: (agentId: string) => void;
+  readonly onAddRequest?: (request: string) => void;
 }
 
 // StatusBar (1 line) + Footer (1 line) + borders (2 lines) = 4 lines reserved
 const BASE_CHROME_LINES = 4;
 
-export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecision, onStartRequest, onRemoveAgent }) => {
+export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecision, onStartRequest, onRemoveAgent, onAddRequest }) => {
   const state = useStore(store);
   const { exit } = useApp();
   const { rows } = useTerminalSize();
@@ -49,6 +50,28 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
   }, [store, state.executionRequested]);
 
   useInput((_input, key) => {
+    // Compose mode — swallow ALL keys
+    const currentAddText = store.getState().addInputText;
+    if (currentAddText !== null) {
+      if (key.escape) {
+        store.getState().setAddInputText(null);
+        return;
+      }
+      if (key.return) {
+        const trimmed = currentAddText.trim();
+        if (trimmed && onAddRequest) onAddRequest(trimmed);
+        return;
+      }
+      if (key.backspace || key.delete) {
+        store.getState().setAddInputText(currentAddText.slice(0, -1));
+        return;
+      }
+      if (_input && !key.ctrl && !key.meta) {
+        store.getState().setAddInputText(currentAddText + _input);
+      }
+      return;
+    }
+
     const keyName = key.tab ? 'tab'
       : key.escape ? 'escape'
       : key.return ? 'return'
@@ -91,6 +114,7 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
             phase={state.phase}
             totalCost={state.totalCost}
             isFocused={state.sidebarFocused}
+            addInputText={state.addInputText}
           />
           {state.showHelp ? (
             <HelpOverlay />
@@ -103,7 +127,7 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
             />
           )}
         </Box>
-        <Footer mode={state.mode} executionStarted={state.executionRequested} />
+        <Footer mode={state.mode} executionStarted={state.executionRequested} composing={state.addInputText !== null} />
       </Box>
     </ThemeContext.Provider>
   );

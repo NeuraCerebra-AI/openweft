@@ -12,9 +12,10 @@ interface SidebarProps {
   readonly phase: { current: number; total: number } | null;
   readonly totalCost: number;
   readonly isFocused: boolean;
+  readonly addInputText: string | null;
 }
 
-export const Sidebar: React.FC<SidebarProps> = React.memo(({ agents, focusedAgentId, phase, totalCost, isFocused }) => {
+export const Sidebar: React.FC<SidebarProps> = React.memo(({ agents, focusedAgentId, phase, totalCost, isFocused, addInputText }) => {
   const { colors, borders } = useTheme();
 
   return (
@@ -24,6 +25,15 @@ export const Sidebar: React.FC<SidebarProps> = React.memo(({ agents, focusedAgen
       borderStyle={isFocused ? borders.panelActive : borders.panel}
       borderColor={isFocused ? colors.blue : colors.surface1}
     >
+      {addInputText !== null ? (
+        <Box borderStyle={borders.prompt} borderColor={colors.green} paddingLeft={1} paddingRight={1}>
+          <Text color={colors.green}>{'> '}</Text>
+          <Box flexGrow={1} flexShrink={1}>
+            <Text wrap="truncate">{addInputText}</Text>
+          </Box>
+          <Text color={colors.muted}>{'█'}</Text>
+        </Box>
+      ) : null}
       {agents.map((agent) => {
         const focused = agent.id === focusedAgentId;
         return (

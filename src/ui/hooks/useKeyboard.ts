@@ -65,7 +65,16 @@ export const handleKeypress = (
         case '/': state.setMode('input'); return 'handled';
         case 'd':
           if (!state.executionRequested && state.focusedAgentId && handlers.onRemoveAgent) {
-            handlers.onRemoveAgent(state.focusedAgentId);
+            const focused = state.agents.find((a) => a.id === state.focusedAgentId);
+            if (focused?.removable) {
+              handlers.onRemoveAgent(state.focusedAgentId);
+              return 'handled';
+            }
+          }
+          return 'unhandled';
+        case 'a':
+          if (!state.executionRequested) {
+            state.setAddInputText('');
             return 'handled';
           }
           return 'unhandled';

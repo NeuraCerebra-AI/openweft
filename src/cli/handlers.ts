@@ -332,6 +332,7 @@ export const createCommandHandlers = (
     gated?: boolean;
     prePopulate?: (store: StoreApi<UIStore>) => void;
     onRemoveAgent?: (agentId: string, store: StoreApi<UIStore>) => Promise<void>;
+    onAddRequest?: (request: string, store: StoreApi<UIStore>) => Promise<void>;
   }): Promise<void> => {
     const { withFullScreen } = await import('fullscreen-ink');
     const { App } = await import('../ui/App.js');
@@ -346,6 +347,11 @@ export const createCommandHandlers = (
     const notificationDependencies = createDefaultNotificationDependencies();
 
     input.prePopulate?.(uiStore);
+
+    // Non-gated (openweft start): execution is already requested
+    if (!input.gated) {
+      uiStore.getState().requestExecution();
+    }
 
     // Subscribe before app.start() to avoid missing a fast s press
     let gateResolve: ((action: 'start' | 'quit') => void) | null = null;
@@ -369,6 +375,7 @@ export const createCommandHandlers = (
         onApprovalDecision: (decision) => { approvalController.resolveCurrent(decision); },
         ...(input.gated ? { onStartRequest: () => { uiStore.getState().requestExecution(); } } : {}),
         ...(input.onRemoveAgent ? { onRemoveAgent: (agentId: string) => { void input.onRemoveAgent!(agentId, uiStore); } } : {}),
+        ...(input.onAddRequest ? { onAddRequest: (request: string) => { void input.onAddRequest!(request, uiStore); } } : {}),
       }),
       { exitOnCtrlC: false }
     );
@@ -387,6 +394,8 @@ export const createCommandHandlers = (
       if (gatePromise) {
         const action = await gatePromise;
         if (action === 'quit') return;
+        // Clear placeholder queued agents — orchestrator will emit real ones
+        uiStore.getState().clearQueuedAgents();
       }
 
       await runRealOrchestration({
@@ -456,11 +465,16 @@ export const createCommandHandlers = (
           await handlers.start({});
           return;
         }
+
+        let nextQueuedRowId = 1;
+        const queuedRequestMap = new Map<string, string>();
+
         await startTuiSession({
           config,
           configHash,
           gated: true,
           prePopulate: (store) => {
+            // Checkpoint features (not removable)
             if (checkpointResult.checkpoint) {
               for (const feature of Object.values(checkpointResult.checkpoint.features)) {
                 store.getState().addAgent({
@@ -468,33 +482,51 @@ export const createCommandHandlers = (
                   name: feature.title ?? feature.request,
                   feature: feature.request,
                   status: 'queued',
+                  removable: false,
                 });
               }
-            } else {
-              pending.forEach((line, index) => {
-                store.getState().addAgent({
-                  id: `pending-${index}`,
-                  name: line.request,
-                  feature: line.request,
-                  status: 'queued',
-                });
+            }
+            // Queue pending items (removable)
+            for (const line of pending) {
+              const id = `queued-${nextQueuedRowId++}`;
+              store.getState().addAgent({
+                id,
+                name: line.request,
+                feature: line.request,
+                status: 'queued',
+                removable: true,
               });
+              queuedRequestMap.set(id, line.request);
             }
             const first = store.getState().agents[0];
             if (first) store.getState().setFocusedAgent(first.id);
           },
           onRemoveAgent: async (agentId, store) => {
-            const agent = store.getState().agents.find((a) => a.id === agentId);
-            if (!agent) return;
+            const request = queuedRequestMap.get(agentId);
+            if (!request) return;
             store.getState().removeAgent(agentId);
-            // Remove matching pending line from queue.txt
+            queuedRequestMap.delete(agentId);
             const currentQueue = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
             const parsed = parseQueueFile(currentQueue);
-            const match = parsed.pending.find((line) => line.request === agent.feature);
+            const match = parsed.pending.find((l) => l.request === request);
             if (match) {
               const lines = currentQueue.split('\n');
               lines.splice(match.lineIndex, 1);
               await writeTextFileAtomic(config.paths.queueFile, lines.join('\n'));
+            }
+          },
+          onAddRequest: async (request, store) => {
+            try {
+              const currentQueue = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
+              const updated = appendRequestsToQueueContent(currentQueue, [request]);
+              await writeTextFileAtomic(config.paths.queueFile, updated);
+              const id = `queued-${nextQueuedRowId++}`;
+              store.getState().addAgent({ id, name: request, feature: request, status: 'queued', removable: true });
+              queuedRequestMap.set(id, request);
+              store.getState().setFocusedAgent(id);
+              store.getState().setAddInputText(null);
+            } catch {
+              store.getState().setNotice({ level: 'error', message: 'Failed to write to queue file' });
             }
           },
         });

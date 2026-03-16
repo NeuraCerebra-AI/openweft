@@ -18,6 +18,7 @@ export interface AgentState {
   readonly name: string;
   readonly feature: string;
   readonly status: AgentStatus;
+  readonly removable: boolean;
   readonly currentTool: string | null;
   readonly cost: number;
   readonly elapsed: number;
@@ -39,7 +40,8 @@ export interface UIStore {
   showHelp: boolean;
   executionRequested: boolean;
   quitConfirmPending: boolean;
-  addAgent: (init: { id: string; name: string; feature: string; status?: AgentStatus }) => void;
+  addInputText: string | null;
+  addAgent: (init: { id: string; name: string; feature: string; status?: AgentStatus; removable?: boolean }) => void;
   removeAgent: (id: string) => void;
   updateAgent: (id: string, patch: Partial<Pick<AgentState, 'status' | 'cost' | 'elapsed' | 'currentTool' | 'approvalRequest'>>) => void;
   appendOutput: (agentId: string, line: OutputLine) => void;
@@ -56,6 +58,8 @@ export interface UIStore {
   setNotice: (notice: UIStore['notice']) => void;
   requestExecution: () => void;
   setQuitConfirmPending: (pending: boolean) => void;
+  setAddInputText: (text: string | null) => void;
+  clearQueuedAgents: () => void;
 }
 
 export const createUIStore = () =>
@@ -73,6 +77,7 @@ export const createUIStore = () =>
     showHelp: false,
     executionRequested: false,
     quitConfirmPending: false,
+    addInputText: null,
 
     addAgent: (init) =>
       set((state) => ({
@@ -81,6 +86,7 @@ export const createUIStore = () =>
           {
             ...init,
             status: init.status ?? ('running' as const),
+            removable: init.removable ?? false,
             currentTool: null,
             cost: 0,
             elapsed: 0,
@@ -139,4 +145,15 @@ export const createUIStore = () =>
     setNotice: (notice) => set({ notice }),
     requestExecution: () => set({ executionRequested: true }),
     setQuitConfirmPending: (pending) => set({ quitConfirmPending: pending }),
+    setAddInputText: (text) => set({ addInputText: text }),
+    clearQueuedAgents: () =>
+      set((state) => {
+        const filtered = state.agents.filter((a) => a.status !== 'queued');
+        const focusStillExists = filtered.some((a) => a.id === state.focusedAgentId);
+        return {
+          agents: filtered,
+          focusedAgentId: focusStillExists ? state.focusedAgentId : (filtered[0]?.id ?? null),
+          scrollOffset: 0,
+        };
+      }),
   }));

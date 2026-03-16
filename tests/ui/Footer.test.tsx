@@ -8,7 +8,7 @@ describe('Footer', () => {
   it('renders NORMAL mode keybindings', () => {
     const { lastFrame } = render(
       <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="normal" executionStarted={false} />
+        <Footer mode="normal" executionStarted={false} composing={false} />
       </ThemeContext.Provider>
     );
     const frame = lastFrame() ?? '';
@@ -20,7 +20,7 @@ describe('Footer', () => {
   it('renders APPROVAL mode keybindings', () => {
     const { lastFrame } = render(
       <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="approval" executionStarted={false} />
+        <Footer mode="approval" executionStarted={false} composing={false} />
       </ThemeContext.Provider>
     );
     const frame = lastFrame() ?? '';
@@ -32,7 +32,7 @@ describe('Footer', () => {
   it('shows s start hint in normal mode when execution not started', () => {
     const { lastFrame } = render(
       <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="normal" executionStarted={false} />
+        <Footer mode="normal" executionStarted={false} composing={false} />
       </ThemeContext.Provider>
     );
     const frame = lastFrame() ?? '';
@@ -43,7 +43,7 @@ describe('Footer', () => {
   it('hides s start hint in normal mode when execution started', () => {
     const { lastFrame } = render(
       <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="normal" executionStarted={true} />
+        <Footer mode="normal" executionStarted={true} composing={false} />
       </ThemeContext.Provider>
     );
     const frame = lastFrame() ?? '';
@@ -53,7 +53,7 @@ describe('Footer', () => {
   it('renders INPUT mode keybindings', () => {
     const { lastFrame } = render(
       <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="input" executionStarted={false} />
+        <Footer mode="input" executionStarted={false} composing={false} />
       </ThemeContext.Provider>
     );
     const frame = lastFrame() ?? '';

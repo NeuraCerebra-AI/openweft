@@ -18,6 +18,7 @@ export const HelpOverlay: React.FC = React.memo(() => {
       <Text><Text bold>{'?'}</Text><Text color={colors.subtext}>{'       Toggle this help'}</Text></Text>
       <Text><Text bold>{'s'}</Text><Text color={colors.subtext}>{'       Start execution'}</Text></Text>
       <Text><Text bold>{'d'}</Text><Text color={colors.subtext}>{'       Remove from queue'}</Text></Text>
+      <Text><Text bold>{'a'}</Text><Text color={colors.subtext}>{'       Add to queue'}</Text></Text>
       <Text>{''}</Text>
       <Text color={colors.muted}>{'Press ? or Esc to dismiss'}</Text>
     </Box>

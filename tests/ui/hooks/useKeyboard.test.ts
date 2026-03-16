@@ -170,8 +170,8 @@ describe('handleKeypress', () => {
 
   it('d removes focused agent in ready state', () => {
     const store = createUIStore();
-    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1', status: 'queued' });
-    store.getState().addAgent({ id: 'a2', name: 'A2', feature: 'f2', status: 'queued' });
+    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1', status: 'queued', removable: true });
+    store.getState().addAgent({ id: 'a2', name: 'A2', feature: 'f2', status: 'queued', removable: true });
     store.getState().setFocusedAgent('a1');
     const removed: string[] = [];
     const result = handleKeypress(store, 'd', {
@@ -238,5 +238,44 @@ describe('handleKeypress', () => {
     expect(result).toBe('handled');
     expect(store.getState().quitConfirmPending).toBe(false);
     expect(store.getState().notice).toBeNull();
+  });
+
+  it('a enters add mode in ready state', () => {
+    const store = createUIStore();
+    const result = handleKeypress(store, 'a');
+    expect(result).toBe('handled');
+    expect(store.getState().addInputText).toBe('');
+  });
+
+  it('a does nothing during execution', () => {
+    const store = createUIStore();
+    store.getState().requestExecution();
+    const result = handleKeypress(store, 'a');
+    expect(result).toBe('unhandled');
+    expect(store.getState().addInputText).toBeNull();
+  });
+
+  it('d blocked on non-removable agent', () => {
+    const store = createUIStore();
+    store.getState().addAgent({ id: 'cp1', name: 'CP', feature: 'f1', status: 'queued', removable: false });
+    store.getState().setFocusedAgent('cp1');
+    const removed: string[] = [];
+    const result = handleKeypress(store, 'd', {
+      onRemoveAgent: (id) => { removed.push(id); }
+    });
+    expect(result).toBe('unhandled');
+    expect(removed).toEqual([]);
+  });
+
+  it('d works on removable agent', () => {
+    const store = createUIStore();
+    store.getState().addAgent({ id: 'q1', name: 'Q1', feature: 'f1', status: 'queued', removable: true });
+    store.getState().setFocusedAgent('q1');
+    const removed: string[] = [];
+    const result = handleKeypress(store, 'd', {
+      onRemoveAgent: (id) => { removed.push(id); }
+    });
+    expect(result).toBe('handled');
+    expect(removed).toEqual(['q1']);
   });
 });

@@ -6,6 +6,7 @@ import { useTheme } from './theme.js';
 interface FooterProps {
   readonly mode: 'normal' | 'approval' | 'input';
   readonly executionStarted: boolean;
+  readonly composing: boolean;
 }
 
 type KeyBinding = readonly [key: string, description: string];
@@ -51,13 +52,15 @@ const modeConfig: Record<FooterProps['mode'], ModeConfig> = {
   },
 };
 
-export const Footer: React.FC<FooterProps> = React.memo(({ mode, executionStarted }) => {
+export const Footer: React.FC<FooterProps> = React.memo(({ mode, executionStarted, composing }) => {
   const { colors } = useTheme();
   const config = modeConfig[mode];
-  const modeColor = colors[config.colorKey];
-  const keys = mode === 'normal' && !executionStarted
-    ? [['s', 'start'] as const, ['d', 'remove'] as const, ...config.keys]
-    : config.keys;
+  const modeColor = composing ? colors.green : colors[config.colorKey];
+  const keys = composing
+    ? [['Enter', 'submit'] as const, ['Esc', 'cancel'] as const]
+    : mode === 'normal' && !executionStarted
+      ? [['s', 'start'] as const, ['d', 'remove'] as const, ['a', 'add'] as const, ...config.keys]
+      : config.keys;
 
   return (
     <Box flexDirection="row" gap={1}>

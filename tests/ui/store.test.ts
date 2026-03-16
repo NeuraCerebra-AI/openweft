@@ -129,4 +129,36 @@ describe('UIStore', () => {
     store.getState().setQuitConfirmPending(false);
     expect(store.getState().quitConfirmPending).toBe(false);
   });
+
+  it('initializes addInputText as null', () => {
+    expect(store.getState().addInputText).toBeNull();
+  });
+
+  it('sets addInputText', () => {
+    store.getState().setAddInputText('hello');
+    expect(store.getState().addInputText).toBe('hello');
+    store.getState().setAddInputText(null);
+    expect(store.getState().addInputText).toBeNull();
+  });
+
+  it('clears queued agents', () => {
+    store.getState().addAgent({ id: 'q1', name: 'Q1', feature: 'f1', status: 'queued' });
+    store.getState().addAgent({ id: 'r1', name: 'R1', feature: 'f2', status: 'running' });
+    store.getState().addAgent({ id: 'q2', name: 'Q2', feature: 'f3', status: 'queued' });
+    store.getState().setFocusedAgent('q1');
+    store.getState().clearQueuedAgents();
+    expect(store.getState().agents).toHaveLength(1);
+    expect(store.getState().agents[0]?.id).toBe('r1');
+    expect(store.getState().focusedAgentId).toBe('r1');
+  });
+
+  it('adds agent with removable flag', () => {
+    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1', removable: true });
+    expect(store.getState().agents[0]?.removable).toBe(true);
+  });
+
+  it('defaults removable to false', () => {
+    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1' });
+    expect(store.getState().agents[0]?.removable).toBe(false);
+  });
 });
