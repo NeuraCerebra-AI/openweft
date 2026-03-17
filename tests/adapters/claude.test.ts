@@ -32,8 +32,6 @@ describe('claude adapter', () => {
       '--model',
       'claude-sonnet-4-6',
       '--dangerously-skip-permissions',
-      '--permission-mode',
-      'acceptEdits',
       '--no-session-persistence',
       '--max-budget-usd',
       '1.5',
@@ -59,8 +57,6 @@ describe('claude adapter', () => {
       '--model',
       'claude-sonnet-4-6',
       '--dangerously-skip-permissions',
-      '--permission-mode',
-      'acceptEdits',
       '--resume',
       'session-456',
       '--max-budget-usd',
@@ -81,15 +77,14 @@ describe('claude adapter', () => {
     expect(command.idleTimeoutMs).toBe(30 * 60 * 1000);
   });
 
-  it('does not skip permissions for plan-mode turns', () => {
+  it('skips permissions for plan-mode turns (headless execution)', () => {
     const command = buildClaudeCommand({
       ...baseRequest(),
       claudePermissionMode: 'plan'
     });
 
-    expect(command.args).toContain('--permission-mode');
-    expect(command.args).toContain('plan');
-    expect(command.args).not.toContain('--dangerously-skip-permissions');
+    expect(command.args).toContain('--dangerously-skip-permissions');
+    expect(command.args).not.toContain('--permission-mode');
   });
 
   it('always includes dangerously-skip-permissions when permission mode is omitted', () => {

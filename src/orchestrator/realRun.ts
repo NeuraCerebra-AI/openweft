@@ -1064,10 +1064,17 @@ const planPendingRequests = async (
         throw new Error(`Planning stage 1 returned too little output for feature ${featureId}.`);
       }
 
+      const stageTwoPrompt = [
+        stageOne.finalMessage.trim(),
+        '',
+        'IMPORTANT: Do NOT write any files. Do NOT enter plan mode. Do NOT use tools like Write, Edit, or ExitPlanMode.',
+        'Output the complete Markdown plan as your text response, including a ## Manifest section with a JSON code block containing create, modify, and delete arrays.'
+      ].join('\n');
+
       const stageTwo = await runTurnAndRecord(
         context,
         checkpoint,
-        buildPlanningStageTwoRequest(context, featureId, stageOne.finalMessage.trim())
+        buildPlanningStageTwoRequest(context, featureId, stageTwoPrompt)
       );
 
       if (!stageTwo.ok) {

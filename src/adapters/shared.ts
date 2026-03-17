@@ -30,8 +30,18 @@ const buildErrorMessage = (input: {
   execution?: CommandExecutionResult;
   error?: unknown;
 }): string => {
-  const stdout = input.execution?.stdout?.trim();
   const stderr = input.execution?.stderr?.trim();
+  const stdout = input.execution?.stdout?.trim();
+
+  // When we have a thrown Error alongside execution output, the Error's
+  // message is more descriptive than raw stdout (which may be a JSON blob)
+  if (input.error instanceof Error) {
+    return input.error.message;
+  }
+
+  if (typeof input.error === 'string') {
+    return input.error;
+  }
 
   if (stderr) {
     return stderr;
@@ -39,14 +49,6 @@ const buildErrorMessage = (input: {
 
   if (stdout) {
     return stdout;
-  }
-
-  if (input.error instanceof Error) {
-    return input.error.message;
-  }
-
-  if (typeof input.error === 'string') {
-    return input.error;
   }
 
   return 'Unknown adapter failure';

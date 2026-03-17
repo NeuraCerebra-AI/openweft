@@ -70,9 +70,8 @@ export const parseClaudeJsonOutput = (
 };
 
 export const buildClaudeCommand = (request: AdapterTurnRequest): AdapterCommandSpec => {
-  const shouldSkipPermissions =
-    request.claudePermissionMode !== 'plan' &&
-    request.claudePermissionMode !== 'default';
+  // All headless modes skip permissions; only 'default' defers to Claude's own prompting
+  const shouldSkipPermissions = request.claudePermissionMode !== 'default';
   const args = [
     '-p',
     '--output-format',
@@ -80,8 +79,6 @@ export const buildClaudeCommand = (request: AdapterTurnRequest): AdapterCommandS
     '--model',
     request.model,
     ...(shouldSkipPermissions ? ['--dangerously-skip-permissions'] : []),
-    '--permission-mode',
-    request.claudePermissionMode ?? 'acceptEdits'
   ];
 
   if (request.sessionId) {
