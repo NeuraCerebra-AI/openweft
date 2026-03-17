@@ -55,4 +55,25 @@ describe('checkpoint persistence', () => {
     expect(loaded.source).toBe('backup');
     expect(loaded.checkpoint?.checkpointId).toBe('chk-1');
   });
+
+  it('fails closed when the primary checkpoint is corrupted and no backup exists', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-checkpoint-corrupt-primary-'));
+    const checkpointFile = path.join(tempDirectory, 'checkpoint.json');
+    const backupFile = path.join(tempDirectory, 'checkpoint.json.backup');
+
+    await writeFile(checkpointFile, '{not valid json', 'utf8');
+
+    await expect(loadCheckpoint(checkpointFile, backupFile)).rejects.toThrow(/checkpoint/i);
+  });
+
+  it('fails closed when both the primary and backup checkpoints are corrupted', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-checkpoint-corrupt-both-'));
+    const checkpointFile = path.join(tempDirectory, 'checkpoint.json');
+    const backupFile = path.join(tempDirectory, 'checkpoint.json.backup');
+
+    await writeFile(checkpointFile, '{not valid json', 'utf8');
+    await writeFile(backupFile, '{also not valid json', 'utf8');
+
+    await expect(loadCheckpoint(checkpointFile, backupFile)).rejects.toThrow(/checkpoint/i);
+  });
 });

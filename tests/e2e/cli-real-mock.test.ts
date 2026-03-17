@@ -2,14 +2,15 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { simpleGit } from 'simple-git';
 
-import { buildProgram } from '../../src/cli/buildProgram.js';
-import { createCommandHandlers } from '../../src/cli/handlers.js';
+import { parseQueueFile } from '../../src/domain/queue.js';
 
 const runCli = async (cwd: string, args: string[]): Promise<string[]> => {
   const output: string[] = [];
+  const { buildProgram } = await import('../../src/cli/buildProgram.js');
+  const { createCommandHandlers } = await import('../../src/cli/handlers.js');
   const program = buildProgram(
     createCommandHandlers({
       getCwd: () => cwd,
@@ -33,6 +34,31 @@ const runCli = async (cwd: string, args: string[]): Promise<string[]> => {
   return output;
 };
 
+const installMockCliAdapters = async (): Promise<void> => {
+  vi.resetModules();
+  const actualAdapters = await vi.importActual<typeof import('../../src/adapters/index.js')>(
+    '../../src/adapters/index.js'
+  );
+
+  class MockCodexCliAdapter extends actualAdapters.MockAgentAdapter {
+    constructor(..._args: unknown[]) {
+      super();
+    }
+  }
+
+  class MockClaudeCliAdapter extends actualAdapters.MockAgentAdapter {
+    constructor(..._args: unknown[]) {
+      super();
+    }
+  }
+
+  vi.doMock('../../src/adapters/index.js', () => ({
+    ...actualAdapters,
+    CodexCliAdapter: MockCodexCliAdapter,
+    ClaudeCliAdapter: MockClaudeCliAdapter
+  }));
+};
+
 const createTempRepo = async (): Promise<string> => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-real-e2e-'));
   const git = simpleGit(repoRoot);
@@ -48,7 +74,14 @@ const createTempRepo = async (): Promise<string> => {
 };
 
 describe('openweft CLI real mock flow', () => {
+  afterEach(() => {
+    vi.doUnmock('../../src/adapters/index.js');
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
+
   it('plans, executes, merges, and reports a real mock-backed run', async () => {
+    await installMockCliAdapters();
     const repoRoot = await createTempRepo();
 
     await runCli(repoRoot, ['init']);
@@ -56,7 +89,7 @@ describe('openweft CLI real mock flow', () => {
       path.join(repoRoot, '.openweftrc.json'),
       `${JSON.stringify(
         {
-          backend: 'mock',
+          backend: 'codex',
           concurrency: {
             maxParallelAgents: 2,
             staggerDelayMs: 0
@@ -81,8 +114,9 @@ describe('openweft CLI real mock flow', () => {
     expect(startOutput).toContain('Run complete: planned 2, merged 2, status completed.');
 
     const queueContent = await readFile(path.join(repoRoot, 'feature_requests', 'queue.txt'), 'utf8');
-    expect(queueContent).toContain('# ✓ [001] add dashboard filters');
-    expect(queueContent).toContain('# ✓ [002] add export controls');
+    expect(queueContent).toContain('# openweft queue format: v1');
+    expect(parseQueueFile(queueContent).processed).toHaveLength(2);
+    expect(parseQueueFile(queueContent).processed.map((entry) => entry.featureId)).toEqual(['001', '002']);
 
     const createdFeatureOne = await readFile(
       path.join(repoRoot, 'src', 'features', '001-runtime-generated-prompt-b-for-001.ts'),

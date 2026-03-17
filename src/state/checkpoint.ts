@@ -109,8 +109,51 @@ interface CheckpointPathInput {
   checkpointBackupFile?: string;
 }
 
+class CheckpointLoadError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'CheckpointLoadError';
+  }
+}
+
 const parseCheckpointText = (content: string): OrchestratorCheckpoint => {
   return CheckpointSchema.parse(JSON.parse(content));
+};
+
+const isMissingFileError = (error: unknown): boolean => {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    error.code === 'ENOENT'
+  );
+};
+
+const readCheckpointCandidate = async (
+  filePath: string
+): Promise<
+  | { kind: 'valid'; checkpoint: OrchestratorCheckpoint }
+  | { kind: 'missing' }
+  | { kind: 'invalid'; error: unknown }
+> => {
+  try {
+    const content = await readFile(filePath, 'utf8');
+    return {
+      kind: 'valid',
+      checkpoint: parseCheckpointText(content)
+    };
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return {
+        kind: 'missing'
+      };
+    }
+
+    return {
+      kind: 'invalid',
+      error
+    };
+  }
 };
 
 export const createEmptyCheckpoint = (input: {
@@ -203,24 +246,51 @@ export const loadCheckpoint = async (
 ): Promise<LoadCheckpointResult> => {
   const paths = resolveCheckpointPaths(checkpointInput, backupFile);
 
-  try {
-    const primary = await readFile(paths.checkpointFile, 'utf8');
+  const primary = await readCheckpointCandidate(paths.checkpointFile);
+  if (primary.kind === 'valid') {
     return {
-      checkpoint: parseCheckpointText(primary),
+      checkpoint: primary.checkpoint,
       source: 'primary'
     };
-  } catch {
-    try {
-      const backup = await readFile(paths.backupFile, 'utf8');
-      return {
-        checkpoint: parseCheckpointText(backup),
-        source: 'backup'
-      };
-    } catch {
-      return {
-        checkpoint: null,
-        source: 'none'
-      };
-    }
   }
+
+  const backup = await readCheckpointCandidate(paths.backupFile);
+  if (backup.kind === 'valid') {
+    return {
+      checkpoint: backup.checkpoint,
+      source: 'backup'
+    };
+  }
+
+  if (primary.kind === 'missing' && backup.kind === 'missing') {
+    return {
+      checkpoint: null,
+      source: 'none'
+    };
+  }
+
+  if (primary.kind === 'invalid' && backup.kind === 'invalid') {
+    throw new CheckpointLoadError(
+      `Both checkpoint files are corrupted or unreadable: ${paths.checkpointFile} and ${paths.backupFile}.`,
+      {
+        cause: new AggregateError([primary.error, backup.error], 'Invalid checkpoint files')
+      }
+    );
+  }
+
+  if (primary.kind === 'invalid') {
+    throw new CheckpointLoadError(
+      `Primary checkpoint is corrupted or unreadable and no valid backup exists: ${paths.checkpointFile}.`,
+      {
+        cause: primary.error
+      }
+    );
+  }
+
+  throw new CheckpointLoadError(
+    `Backup checkpoint is corrupted or unreadable: ${paths.backupFile}.`,
+    {
+      cause: backup.kind === 'invalid' ? backup.error : undefined
+    }
+  );
 };

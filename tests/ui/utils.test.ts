@@ -12,9 +12,11 @@ describe('formatTime', () => {
 });
 
 describe('getStatusIcon', () => {
-  it('returns spinner for running', () => {
-    const result = getStatusIcon('running');
-    expect(result.icon).toBe('⠋');
+  it('cycles spinner frames for running', () => {
+    expect(getStatusIcon('running', 0).icon).toBe('⠋');
+    expect(getStatusIcon('running', 1).icon).toBe('⠙');
+    expect(getStatusIcon('running', 9).icon).toBe('⠏');
+    expect(getStatusIcon('running', 10).icon).toBe('⠋');
   });
 
   it('returns checkmark for completed', () => {

@@ -1,5 +1,5 @@
 import { createEmptyCostTotals } from '../domain/costs.js';
-import { parseQueueFile } from '../domain/queue.js';
+import { parseQueueFile, summarizeQueueRequest } from '../domain/queue.js';
 import type { PriorityTier } from '../domain/primitives.js';
 import type { OrchestratorCheckpoint, FeatureCheckpoint } from '../state/checkpoint.js';
 
@@ -64,7 +64,8 @@ const formatFeatureList = (
     ...ordered.map((feature) => {
       const priority = formatPriority(feature.priorityScore, feature.priorityTier ?? null);
       const errorSuffix = feature.lastError ? ` | ${feature.lastError}` : '';
-      return `  [${feature.id}] ${feature.request} (${priority})${errorSuffix}`;
+      const requestLabel = feature.title?.trim() || summarizeQueueRequest(feature.request);
+      return `  [${feature.id}] ${requestLabel} (${priority})${errorSuffix}`;
     })
   ];
 };

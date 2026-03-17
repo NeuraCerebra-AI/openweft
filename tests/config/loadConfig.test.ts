@@ -62,4 +62,36 @@ describe('loadOpenWeftConfig', () => {
     expect(fromNested.config.repoRoot).toBe(tempDirectory);
     expect(fromNested.configHash).toBe(fromRoot.configHash);
   });
+
+  it('formats invalid config schema errors with the config file path', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-invalid-'));
+    const configPath = path.join(tempDirectory, '.openweftrc.json');
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        ...getDefaultConfig(),
+        backend: 'openai'
+      }),
+      'utf8'
+    );
+
+    await expect(loadOpenWeftConfig(tempDirectory)).rejects.toThrow(
+      new RegExp(`Error in ${configPath.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}`)
+    );
+    await expect(loadOpenWeftConfig(tempDirectory)).rejects.toThrow(/backend/);
+  });
+
+  it('rejects the internal mock backend in user config files', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-mock-backend-'));
+    await writeFile(
+      path.join(tempDirectory, '.openweftrc.json'),
+      JSON.stringify({
+        ...getDefaultConfig(),
+        backend: 'mock'
+      }),
+      'utf8'
+    );
+
+    await expect(loadOpenWeftConfig(tempDirectory)).rejects.toThrow(/backend/);
+  });
 });

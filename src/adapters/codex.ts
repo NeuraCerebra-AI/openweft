@@ -1,6 +1,11 @@
 import type { AgentAdapter, AdapterCommandSpec, AdapterTurnRequest, AdapterUsage, CommandRunner } from './types.js';
 
-import { createAdapterFailure, createAdapterSuccess, resolveAuthEnvironment } from './shared.js';
+import {
+  createAdapterFailure,
+  createAdapterSuccess,
+  getCommandIdleTimeoutMs,
+  resolveAuthEnvironment
+} from './shared.js';
 import { execaCommandRunner } from './runner.js';
 
 interface ParsedCodexJsonlOutput {
@@ -121,7 +126,8 @@ export const buildCodexCommand = (request: AdapterTurnRequest): AdapterCommandSp
     args,
     cwd: request.cwd,
     input: request.prompt,
-    env
+    env,
+    idleTimeoutMs: getCommandIdleTimeoutMs(request.stage)
   };
 };
 

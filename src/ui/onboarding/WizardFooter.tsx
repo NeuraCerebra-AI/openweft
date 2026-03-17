@@ -3,7 +3,7 @@ import { Box, Text } from 'ink';
 
 import { useTheme } from '../theme.js';
 
-export type FooterKey = 'select' | 'confirm' | 'submit' | 'continue' | 'back' | 'quit';
+export type FooterKey = 'select' | 'confirm' | 'submit' | 'continue' | 'back' | 'retry' | 'cancel' | 'quit';
 
 export interface WizardFooterProps {
   readonly keys: readonly FooterKey[];
@@ -15,6 +15,8 @@ const KEY_DISPLAY: Record<FooterKey, string> = {
   submit: 'Enter submit',
   continue: 'Enter continue',
   back: '← back',
+  retry: 'R retry',
+  cancel: 'Esc cancel',
   quit: 'Esc quit',
 };
 

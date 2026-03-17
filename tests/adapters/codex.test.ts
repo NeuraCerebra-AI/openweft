@@ -43,6 +43,7 @@ describe('codex adapter', () => {
     ]);
     expect(command.input).toBe('Reply with OK.');
     expect(command.env).toEqual({ CODEX_HOME: '/tmp/codex-home' });
+    expect(command.idleTimeoutMs).toBe(90 * 60 * 1000);
   });
 
   it('defaults new sessions to danger-full-access when sandbox mode is omitted', () => {
@@ -70,6 +71,16 @@ describe('codex adapter', () => {
       'gpt-5.3-codex',
       '-'
     ]);
+    expect(command.idleTimeoutMs).toBe(90 * 60 * 1000);
+  });
+
+  it('uses a shorter idle timeout for planning stages', () => {
+    const command = buildCodexCommand({
+      ...baseRequest(),
+      stage: 'planning-s1'
+    });
+
+    expect(command.idleTimeoutMs).toBe(30 * 60 * 1000);
   });
 
   it('parses codex JSONL success output from a fixture', async () => {

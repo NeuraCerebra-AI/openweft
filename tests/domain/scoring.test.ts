@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { assignPriorityTier, classifyFilePath, scoreQueueFeatures } from '../../src/domain/scoring.js';
+import { assignPriorityTier, classifyFilePath, scoreQueueFeatures, smoothPriority } from '../../src/domain/scoring.js';
 
 describe('scoring', () => {
   const repoContext = {
@@ -56,5 +56,30 @@ describe('scoring', () => {
     expect(assignPriorityTier(0.54, 'high')).toBe('high');
     expect(assignPriorityTier(0.5, 'high')).toBe('medium');
   });
-});
 
+  it('treats a single-feature queue as having non-zero normalized blast radius', () => {
+    const scored = scoreQueueFeatures(
+      [
+        {
+          featureId: '001',
+          title: 'Only feature',
+          manifest: {
+            create: ['src/features/b.ts'],
+            modify: [],
+            delete: []
+          }
+        }
+      ],
+      repoContext
+    );
+
+    expect(scored[0]?.normalizedBlastRadius).toBe(1);
+    expect(scored[0]?.rawPriority).toBeLessThan(1);
+  });
+
+  it('keeps smoothing fully responsive for the first two revisits before applying EWMA damping', () => {
+    expect(smoothPriority(0.9, 0.1, 0)).toBe(0.9);
+    expect(smoothPriority(0.9, 0.1, 1)).toBe(0.9);
+    expect(smoothPriority(0.9, 0.1, 2)).toBeCloseTo(0.3);
+  });
+});

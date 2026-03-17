@@ -2,17 +2,17 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/banner-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/banner-light.svg">
-    <img alt="OpenWeft" src="docs/banner-dark.svg" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/NeuraCerebra-AI/openweft/main/docs/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/NeuraCerebra-AI/openweft/main/docs/banner-light.svg">
+    <img alt="OpenWeft" src="https://raw.githubusercontent.com/NeuraCerebra-AI/openweft/main/docs/banner-dark.svg" width="100%">
   </picture>
 </p>
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/hero-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="docs/hero-light.svg">
-    <img alt="OpenWeft terminal demo" src="docs/hero-dark.svg" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/NeuraCerebra-AI/openweft/main/docs/hero-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/NeuraCerebra-AI/openweft/main/docs/hero-light.svg">
+    <img alt="OpenWeft terminal demo" src="https://raw.githubusercontent.com/NeuraCerebra-AI/openweft/main/docs/hero-dark.svg" width="100%">
   </picture>
 </p>
 

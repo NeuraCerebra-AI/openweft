@@ -2,11 +2,11 @@ export { createConfigHash, getDefaultConfig, loadOpenWeftConfig } from './loadCo
 export {
   AuthMethodSchema,
   BackendAuthConfigSchema,
-  BackendSchema,
   BudgetConfigSchema,
   DEFAULT_OPENWEFT_CONFIG,
   OpenWeftConfigSchema,
   RateLimitConfigSchema,
+  UserBackendSchema,
   type OpenWeftConfig,
   type ResolvedOpenWeftConfig
 } from './schema.js';

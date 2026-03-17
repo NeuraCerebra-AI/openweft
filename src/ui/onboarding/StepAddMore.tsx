@@ -48,6 +48,12 @@ export const StepAddMore: React.FC<StepAddMoreProps> = ({
       if (key.leftArrow) {
         onBack();
       }
+      return;
+    }
+
+    if (key.escape) {
+      setInputValue('');
+      setMode('select');
     }
   });
 
@@ -67,9 +73,14 @@ export const StepAddMore: React.FC<StepAddMoreProps> = ({
     });
   };
 
+  const handleInputExit = () => {
+    setInputValue('');
+    setMode('select');
+  };
+
   const footerKeys =
     mode === 'input'
-      ? (['submit', 'quit'] as const)
+      ? (['submit', 'cancel'] as const)
       : (['select', 'confirm', 'back', 'quit'] as const);
 
   return (
@@ -108,7 +119,7 @@ export const StepAddMore: React.FC<StepAddMoreProps> = ({
           value={inputValue}
           onChange={setInputValue}
           onSubmit={handleInputSubmit}
-          onExit={onExit}
+          onExit={handleInputExit}
         />
       )}
 

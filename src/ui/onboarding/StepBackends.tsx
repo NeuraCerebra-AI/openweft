@@ -70,13 +70,26 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
   // Local state that gets updated after redetection
   const [localCodex, setLocalCodex] = useState<BackendDetection>(codexStatus);
   const [localClaude, setLocalClaude] = useState<BackendDetection>(claudeStatus);
+  const [isRedetecting, setIsRedetecting] = useState(false);
+
+  const redetectBackends = async (): Promise<void> => {
+    if (isRedetecting) {
+      return;
+    }
+
+    setIsRedetecting(true);
+    try {
+      const { codex, claude } = await onRedetectBackends();
+      setLocalCodex(codex);
+      setLocalClaude(claude);
+    } finally {
+      setIsRedetecting(false);
+    }
+  };
 
   // On mount, re-run detection to pick up any auth changes since the prop was set
   useEffect(() => {
-    void onRedetectBackends().then(({ codex, claude }) => {
-      setLocalCodex(codex);
-      setLocalClaude(claude);
-    });
+    void redetectBackends();
     // Only run on mount
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -89,6 +102,11 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
   useInput((_input, key) => {
     if (key.escape) {
       onExit();
+      return;
+    }
+
+    if (_input.toLowerCase() === 'r') {
+      void redetectBackends();
       return;
     }
 
@@ -130,13 +148,13 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
   // Determine footer keys
   const footerKeys = (() => {
     if (viewMode === 'select') {
-      return ['select', 'confirm', 'back', 'quit'] as const;
+      return ['select', 'confirm', 'retry', 'back', 'quit'] as const;
     }
     if (viewMode === 'auto-select') {
-      return ['continue', 'back', 'quit'] as const;
+      return ['continue', 'retry', 'back', 'quit'] as const;
     }
     // error states
-    return ['quit'] as const;
+    return ['retry', 'quit'] as const;
   })();
 
   return (
@@ -149,6 +167,10 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
         {renderStatusRow('codex', localCodex, codexIcon)}
         {renderStatusRow('claude', localClaude, claudeIcon)}
       </Box>
+
+      {isRedetecting && (
+        <Text color={colors.subtext}>{'Rechecking backend detection...'}</Text>
+      )}
 
       {/* Content area based on view mode */}
       {viewMode === 'select' && (
@@ -201,9 +223,9 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
             )}
           </Box>
           <Text color={colors.subtext}>
-            {'Run '}
-            <Text color={colors.text}>{'`openweft`'}</Text>
-            {' again after authenticating.'}
+            {'Press '}
+            <Text color={colors.text}>{'R'}</Text>
+            {' to retry after authenticating a backend.'}
           </Text>
         </Box>
       )}
@@ -224,9 +246,9 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
             </Text>
           </Box>
           <Text color={colors.subtext}>
-            {'Run '}
-            <Text color={colors.text}>{'`openweft`'}</Text>
-            {' again after installing.'}
+            {'Press '}
+            <Text color={colors.text}>{'R'}</Text>
+            {' to retry after installing a backend.'}
           </Text>
         </Box>
       )}

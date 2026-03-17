@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Box, Text, useInput, useApp } from 'ink';
 import { useStore } from 'zustand/react';
 import type { StoreApi } from 'zustand/vanilla';
@@ -8,6 +8,7 @@ import { StatusBar } from './StatusBar.js';
 import { MeterBar } from './MeterBar.js';
 import { AgentCard } from './AgentCard.js';
 import { HelpOverlay } from './HelpOverlay.js';
+import { EmptyState } from './EmptyState.js';
 import { Footer } from './Footer.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
 import { filterAgents, handleKeypress } from './hooks/useKeyboard.js';
@@ -35,6 +36,14 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
   const state = useStore(store);
   const { exit } = useApp();
   const { rows } = useTerminalSize();
+
+  // Empty-state dissolve transition: triggered by S or A, hides loom after animation
+  const [loomDismissed, setLoomDismissed] = useState(false);
+  const [loomDissolving, setLoomDissolving] = useState(false);
+  const handleLoomDissolved = useCallback(() => {
+    setLoomDismissed(true);
+    setLoomDissolving(false);
+  }, []);
 
   const filteredAgents = filterAgents(state.agents, state.filterText);
   const activeCount = state.agents.filter((a) => a.status === 'running' || a.status === 'approval').length;
@@ -86,7 +95,27 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
     return () => clearTimeout(timer);
   }, [state.notice, store]);
 
+  // Determine if loom should show (no agents, not yet dismissed or dissolving)
+  const showLoom = filteredAgents.length === 0 && !loomDismissed && !state.executionRequested;
+
   useInput((_input, key) => {
+    // When loom is visible and user presses s or a, trigger dissolve first
+    if (showLoom && !loomDissolving && (_input === 's' || _input === 'a')) {
+      setLoomDissolving(true);
+      const pressedKey = _input;
+      // Defer the actual action until after dissolve animation (~480ms)
+      setTimeout(() => {
+        if (pressedKey === 's') {
+          handleKeypress(store, 's', {
+            ...(onStartRequest ? { onStartRequest } : {}),
+          });
+        } else {
+          store.getState().setAddInputText('');
+        }
+      }, 500);
+      return;
+    }
+
     // Compose mode — swallow ALL keys
     const currentAddText = store.getState().addInputText;
     if (currentAddText !== null) {
@@ -112,8 +141,15 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
         );
         return;
       }
+      // Ctrl+W — word delete (Unix standard)
+      if (_input === 'w' && key.ctrl) {
+        const nextState = deleteBackwardWord({ value: currentAddText, cursorOffset: currentAddCursorOffset });
+        store.getState().setAddInputText(nextState.value);
+        store.getState().setAddInputCursorOffset(nextState.cursorOffset);
+        return;
+      }
       if (key.backspace || key.delete) {
-        const nextState = key.meta
+        const nextState = (key.meta || key.ctrl)
           ? deleteBackwardWord({ value: currentAddText, cursorOffset: currentAddCursorOffset })
           : deleteBackward({ value: currentAddText, cursorOffset: currentAddCursorOffset });
         store.getState().setAddInputText(nextState.value);
@@ -147,7 +183,7 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
       ...(onApprovalDecision ? { onApprovalDecision } : {}),
       ...(onStartRequest ? { onStartRequest } : {}),
       ...(onRemoveAgent ? { onRemoveAgent } : {}),
-    }, { meta: key.meta });
+    }, { meta: key.meta, ctrl: key.ctrl });
     if (result === 'quit') {
       exit();
     }
@@ -233,27 +269,31 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
               </Box>
             ) : null}
             <Box flexDirection="column" flexGrow={1}>
-              {filteredAgents.map((agent) => (
-                <AgentCard
-                  key={agent.id}
-                  name={agent.name}
-                  feature={agent.feature}
-                  status={agent.status}
-                  focused={agent.id === state.focusedAgentId}
-                  files={agent.files}
-                  tokens={agent.tokens}
-                  cost={agent.cost}
-                  elapsed={agent.elapsed}
-                  currentTool={agent.currentTool}
-                  approvalRequest={agent.approvalRequest}
-                  spinnerFrame={state.spinnerFrame}
-                  readyStateDetail={
-                    !state.executionRequested && agent.status === 'queued'
-                      ? (agent.removable ? 'Press d to remove' : 'Resumable checkpoint')
-                      : null
-                  }
-                />
-              ))}
+              {(showLoom || loomDissolving) ? (
+                <EmptyState dissolving={loomDissolving} onDissolved={handleLoomDissolved} />
+              ) : (
+                filteredAgents.map((agent) => (
+                  <AgentCard
+                    key={agent.id}
+                    name={agent.name}
+                    feature={agent.feature}
+                    status={agent.status}
+                    focused={agent.id === state.focusedAgentId}
+                    files={agent.files}
+                    tokens={agent.tokens}
+                    cost={agent.cost}
+                    elapsed={agent.elapsed}
+                    currentTool={agent.currentTool}
+                    approvalRequest={agent.approvalRequest}
+                    spinnerFrame={state.spinnerFrame}
+                    readyStateDetail={
+                      !state.executionRequested && agent.status === 'queued'
+                        ? (agent.removable ? 'Press d to remove' : 'Resumable checkpoint')
+                        : null
+                    }
+                  />
+                ))
+              )}
             </Box>
           </Box>
         )}

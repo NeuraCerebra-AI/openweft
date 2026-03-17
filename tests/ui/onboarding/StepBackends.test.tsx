@@ -112,6 +112,7 @@ describe('StepBackends', () => {
       const frame = lastFrame() ?? '';
       expect(frame).toContain('↑↓ select');
       expect(frame).toContain('Enter confirm');
+      expect(frame).toContain('R retry');
       expect(frame).toContain('← back');
       expect(frame).toContain('Esc quit');
     });
@@ -221,6 +222,7 @@ describe('StepBackends', () => {
       await waitForMount();
       const frame = lastFrame() ?? '';
       expect(frame).toContain('Enter continue');
+      expect(frame).toContain('R retry');
       expect(frame).toContain('← back');
       expect(frame).toContain('Esc quit');
       expect(frame).not.toContain('↑↓ select');
@@ -317,7 +319,7 @@ describe('StepBackends', () => {
       expect(frame).toContain('claude auth login');
     });
 
-    it('shows "Run openweft again after authenticating" in error state', async () => {
+    it('shows retry guidance after authenticating in error state', async () => {
       const props = {
         ...neitherAuthedProps,
         onAdvance: vi.fn(),
@@ -327,11 +329,11 @@ describe('StepBackends', () => {
       const { lastFrame } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
       const frame = lastFrame() ?? '';
-      expect(frame).toContain('openweft');
+      expect(frame).toContain('Press R to retry');
       expect(frame).toContain('authenticating');
     });
 
-    it('renders footer with only Esc quit in error state', async () => {
+    it('renders footer with retry and Esc quit in error state', async () => {
       const props = {
         ...neitherAuthedProps,
         onAdvance: vi.fn(),
@@ -341,6 +343,7 @@ describe('StepBackends', () => {
       const { lastFrame } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
       const frame = lastFrame() ?? '';
+      expect(frame).toContain('R retry');
       expect(frame).toContain('Esc quit');
       expect(frame).not.toContain('Enter');
       expect(frame).not.toContain('← back');
@@ -404,7 +407,7 @@ describe('StepBackends', () => {
       expect(frame).toContain('✗');
     });
 
-    it('renders footer with only Esc quit when neither installed', async () => {
+    it('renders footer with retry and Esc quit when neither installed', async () => {
       const props = {
         ...neitherInstalledProps,
         onAdvance: vi.fn(),
@@ -414,9 +417,24 @@ describe('StepBackends', () => {
       const { lastFrame } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
       const frame = lastFrame() ?? '';
+      expect(frame).toContain('R retry');
       expect(frame).toContain('Esc quit');
       expect(frame).not.toContain('Enter');
       expect(frame).not.toContain('← back');
+    });
+
+    it('shows retry guidance after installing backends', async () => {
+      const props = {
+        ...neitherInstalledProps,
+        onAdvance: vi.fn(),
+        onExit: vi.fn(),
+        onRedetectBackends: makeRedetect(notInstalledStatus, notInstalledStatus),
+      };
+      const { lastFrame } = renderWithTheme(<StepBackends {...props} />);
+      await waitForMount();
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('Press R to retry');
+      expect(frame).toContain('installing');
     });
   });
 
@@ -449,6 +467,38 @@ describe('StepBackends', () => {
       await waitForMount();
       // After redetect resolves, should show select mode (both authed)
       const frame = lastFrame() ?? '';
+      expect(frame).toContain('Codex');
+      expect(frame).toContain('Claude');
+      expect(frame).toContain('›');
+    });
+
+    it('retries backend detection when r is pressed', async () => {
+      const onRedetectBackends = vi
+        .fn()
+        .mockResolvedValueOnce({
+          codex: neitherAuthedStatus,
+          claude: neitherAuthedStatus
+        })
+        .mockResolvedValueOnce({
+          codex: bothAuthedStatus,
+          claude: bothAuthedStatus
+        });
+      const props = {
+        codexStatus: neitherAuthedStatus,
+        claudeStatus: neitherAuthedStatus,
+        onAdvance: vi.fn(),
+        onExit: vi.fn(),
+        onRedetectBackends,
+      };
+      const { stdin, lastFrame } = renderWithTheme(<StepBackends {...props} />);
+      await waitForMount();
+
+      stdin.write('r');
+      await waitForUpdate();
+      await waitForUpdate();
+
+      const frame = lastFrame() ?? '';
+      expect(onRedetectBackends).toHaveBeenCalledTimes(2);
       expect(frame).toContain('Codex');
       expect(frame).toContain('Claude');
       expect(frame).toContain('›');

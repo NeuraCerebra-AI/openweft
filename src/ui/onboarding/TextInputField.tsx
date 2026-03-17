@@ -5,11 +5,18 @@ import { useTheme } from '../theme.js';
 import {
   MAX_PASTE_CHARS,
   countNewlines,
-  deleteTokenBefore,
   formatPasteToken,
+  getPasteTokenRanges,
   resolveTokens,
   shouldCollapse,
 } from './paste.js';
+import {
+  deleteBackward,
+  deleteBackwardWord,
+  insertAtCursor,
+  moveCursorLeft,
+  moveCursorRight,
+} from '../textEditing.js';
 
 interface TextInputFieldProps {
   readonly value: string;
@@ -29,6 +36,7 @@ export const TextInputField: React.FC<TextInputFieldProps> = ({
   const theme = useTheme();
   const pastedContents = useRef<Map<number, string>>(new Map());
   const nextPasteId = useRef(1);
+  const [cursorOffset, setCursorOffset] = React.useState(value.length);
 
   // Clear paste state when value is reset externally
   useEffect(() => {
@@ -36,12 +44,16 @@ export const TextInputField: React.FC<TextInputFieldProps> = ({
       pastedContents.current.clear();
       nextPasteId.current = 1;
     }
+    setCursorOffset((previous) => Math.min(previous, value.length));
   }, [value]);
 
   useInput((input, key) => {
+    const atomicRanges = getPasteTokenRanges(value);
+
     if (key.escape) {
       if (value.length > 0) {
         onChange('');
+        setCursorOffset(0);
       } else {
         onExit();
       }
@@ -57,14 +69,27 @@ export const TextInputField: React.FC<TextInputFieldProps> = ({
       return;
     }
 
+    if (key.leftArrow) {
+      setCursorOffset((previous) => moveCursorLeft({ value, cursorOffset: previous }, atomicRanges).cursorOffset);
+      return;
+    }
+
+    if (key.rightArrow) {
+      setCursorOffset((previous) => moveCursorRight({ value, cursorOffset: previous }, atomicRanges).cursorOffset);
+      return;
+    }
+
     if (key.backspace || key.delete) {
-      const tokenDel = deleteTokenBefore(value);
-      if (tokenDel !== null) {
-        pastedContents.current.delete(tokenDel.deletedId);
-        onChange(tokenDel.newValue);
-      } else {
-        onChange(value.slice(0, -1));
+      const nextState = key.meta
+        ? deleteBackwardWord({ value, cursorOffset }, atomicRanges)
+        : deleteBackward({ value, cursorOffset }, atomicRanges);
+      for (const range of atomicRanges) {
+        if (range.start >= nextState.cursorOffset && range.end <= cursorOffset) {
+          pastedContents.current.delete(range.id);
+        }
       }
+      onChange(nextState.value);
+      setCursorOffset(nextState.cursorOffset);
       return;
     }
 
@@ -81,20 +106,28 @@ export const TextInputField: React.FC<TextInputFieldProps> = ({
         const lineCount = countNewlines(truncated);
         const token = formatPasteToken(id, lineCount);
         pastedContents.current.set(id, truncated);
-        onChange(value + token);
+        const nextState = insertAtCursor({ value, cursorOffset }, token, atomicRanges);
+        onChange(nextState.value);
+        setCursorOffset(nextState.cursorOffset);
       } else {
-        onChange(value + truncated);
+        const nextState = insertAtCursor({ value, cursorOffset }, truncated, atomicRanges);
+        onChange(nextState.value);
+        setCursorOffset(nextState.cursorOffset);
       }
       return;
     }
 
     // Append regular character
     if (input) {
-      onChange(value + input);
+      const nextState = insertAtCursor({ value, cursorOffset }, input, atomicRanges);
+      onChange(nextState.value);
+      setCursorOffset(nextState.cursorOffset);
     }
   });
 
   const showPlaceholder = value.length === 0 && placeholder !== undefined;
+  const beforeCursor = value.slice(0, cursorOffset);
+  const afterCursor = value.slice(cursorOffset);
 
   return (
     <Box borderStyle="round" borderColor={theme.colors.surface2}>
@@ -102,9 +135,12 @@ export const TextInputField: React.FC<TextInputFieldProps> = ({
       {showPlaceholder ? (
         <Text color={theme.colors.muted}>{placeholder}</Text>
       ) : (
-        <Text color={theme.colors.text}>{value}</Text>
+        <Text color={theme.colors.text}>{beforeCursor}</Text>
       )}
       <Text color={theme.colors.text}>{'█'}</Text>
+      {!showPlaceholder ? (
+        <Text color={theme.colors.text}>{afterCursor}</Text>
+      ) : null}
     </Box>
   );
 };

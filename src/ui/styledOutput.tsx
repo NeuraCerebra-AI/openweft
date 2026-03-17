@@ -10,7 +10,11 @@ export const renderStyledOutput = async (element: React.ReactElement): Promise<v
       {element}
     </ThemeContext.Provider>
   );
-  await instance.waitUntilExit();
+  const exitPromise = instance.waitUntilExit();
+  queueMicrotask(() => {
+    instance.unmount();
+  });
+  await exitPromise;
 };
 
 interface StatusCardProps {
@@ -18,14 +22,21 @@ interface StatusCardProps {
   readonly phase: string;
   readonly cost: string;
   readonly agents: readonly { name: string; status: string }[];
+  readonly pendingRequests?: readonly string[];
 }
 
-export const StatusCard: React.FC<StatusCardProps> = ({ appName, phase, cost, agents }) => {
+export const StatusCard: React.FC<StatusCardProps> = ({ appName, phase, cost, agents, pendingRequests = [] }) => {
   const colors = catppuccinMocha.colors;
   return (
     <StyledCard borderColor={colors.blue}>
       <Text bold color={colors.blue}>{appName}</Text>
       <Text color={colors.subtext}>{`Phase: ${phase}  Cost: ${cost}`}</Text>
+      {pendingRequests.length > 0 && (
+        <Text color={colors.yellow}>{`Pending queue: ${pendingRequests.length}`}</Text>
+      )}
+      {pendingRequests.map((request, index) => (
+        <Text key={`pending-${index}`} color={colors.subtext}>{`  ○ ${request}`}</Text>
+      ))}
       {agents.map((a) => (
         <Text key={a.name} color={colors.text}>{`  ${a.status === 'running' ? '●' : '✓'} ${a.name}`}</Text>
       ))}

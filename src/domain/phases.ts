@@ -36,6 +36,7 @@ export const groupFeaturesIntoPhases = (
     }
 
     let placed = false;
+    // Intentionally greedy first-fit: priority-ordered features claim the earliest safe phase.
     for (const phase of phases) {
       if (phase.length >= maxParallelAgents) {
         continue;

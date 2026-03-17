@@ -1,18 +1,23 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
 import PQueue from 'p-queue';
-import { assign, createActor, fromPromise, setup } from 'xstate';
 import { simpleGit } from 'simple-git';
 
-import { buildExecutionPrompt, CODE_EDIT_SUMMARY_MARKER, injectPromptTemplate, USER_REQUEST_MARKER } from '../adapters/prompts.js';
+import {
+  buildConflictResolutionPrompt,
+  buildExecutionPrompt,
+  CODE_EDIT_SUMMARY_MARKER,
+  injectPromptTemplate,
+  USER_REQUEST_MARKER
+} from '../adapters/prompts.js';
 import type { AgentAdapter, AdapterCommandSpec, AdapterTurnRequest, AdapterTurnResult } from '../adapters/types.js';
 import type { OrchestratorEventHandler } from '../ui/events.js';
 import type { ResolvedOpenWeftConfig } from '../config/index.js';
 import { addCostRecordToTotals, type CostRecord } from '../domain/costs.js';
-import { circuitBreakerTripped } from '../domain/errors.js';
+import { circuitBreakerTripped, classifyError } from '../domain/errors.js';
 import { createPlanFilename, formatFeatureId, slugifyFeatureRequest } from '../domain/featureIds.js';
 import { parseManifestDocument, type Manifest, updateManifestInMarkdown } from '../domain/manifest.js';
 import { buildExecutionPhases } from '../domain/phases.js';
@@ -20,7 +25,8 @@ import type { PriorityTier } from '../domain/primitives.js';
 import {
   getNextFeatureIdFromQueue,
   markQueueLineProcessed,
-  parseQueueFile
+  parseQueueFile,
+  summarizeQueueRequest
 } from '../domain/queue.js';
 import { scoreQueue, type FeatureScoreBreakdown, type RepoRiskContext } from '../domain/scoring.js';
 import {
@@ -41,6 +47,7 @@ import {
   hasChangesSince,
   mergeBranchIntoCurrent,
   mergeBranchIntoWorktree,
+  pruneOrphanedOpenWeftArtifacts,
   removeWorktree,
   resetWorktreeToHead,
   restoreAutoGc,
@@ -55,13 +62,45 @@ import {
   type OrchestratorCheckpoint
 } from '../state/checkpoint.js';
 import { getTmuxSlotLogFile, type TmuxMonitor } from '../tmux/index.js';
+import { OPENWEFT_VERSION } from '../version.js';
 import { appendAuditEntry } from './audit.js';
 import { TurnApprovalError } from './approval.js';
 import type { ApprovalController } from './approval.js';
 import type { StopController } from './stop.js';
 
-const ORCHESTRATOR_VERSION = '0.1.0';
 const STAGE_ONE_MIN_LENGTH = 10;
+const MAX_SCORING_FILE_BYTES = 512 * 1024;
+const BINARY_SCORING_EXTENSIONS = new Set([
+  '.bmp',
+  '.class',
+  '.dll',
+  '.dylib',
+  '.exe',
+  '.gif',
+  '.ico',
+  '.jpeg',
+  '.jpg',
+  '.mov',
+  '.mp3',
+  '.mp4',
+  '.o',
+  '.otf',
+  '.pdf',
+  '.png',
+  '.so',
+  '.ttf',
+  '.wasm',
+  '.webp',
+  '.woff',
+  '.woff2',
+  '.zip'
+]);
+const ACTIONABLE_CHECKPOINT_FEATURE_STATUSES = new Set<FeatureCheckpoint['status']>([
+  'pending',
+  'planned',
+  'executing',
+  'failed'
+]);
 
 interface OrchestratorOutput {
   checkpoint: OrchestratorCheckpoint;
@@ -107,7 +146,7 @@ const createFreshCheckpoint = (configHash: string): OrchestratorCheckpoint => {
   const createdAt = timestamp();
 
   return createEmptyCheckpoint({
-    orchestratorVersion: ORCHESTRATOR_VERSION,
+    orchestratorVersion: OPENWEFT_VERSION,
     configHash,
     runId: randomUUID(),
     checkpointId: randomUUID(),
@@ -124,6 +163,55 @@ const saveCheckpointSnapshot = async (
     checkpoint,
     checkpointFile: config.paths.checkpointFile,
     checkpointBackupFile: config.paths.checkpointBackupFile
+  });
+};
+
+const getAutoGcBreadcrumbFile = (config: ResolvedOpenWeftConfig): string => {
+  return path.join(config.paths.openweftDir, 'gc-auto-previous.json');
+};
+
+const restoreAutoGcFromBreadcrumb = async (
+  config: ResolvedOpenWeftConfig
+): Promise<boolean> => {
+  const breadcrumbFile = getAutoGcBreadcrumbFile(config);
+  const breadcrumbText = await readTextFileIfExists(breadcrumbFile);
+  if (!breadcrumbText) {
+    return false;
+  }
+
+  const parsed = JSON.parse(breadcrumbText) as {
+    previousValue?: unknown;
+  };
+  if (parsed.previousValue !== null && typeof parsed.previousValue !== 'string') {
+    throw new Error(`Invalid gc.auto breadcrumb at ${breadcrumbFile}.`);
+  }
+
+  await restoreAutoGc(config.repoRoot, parsed.previousValue ?? null);
+  await rm(breadcrumbFile, { force: true });
+  return true;
+};
+
+const pruneOrphanedOpenWeftArtifactsAtStartup = async (
+  config: ResolvedOpenWeftConfig
+): Promise<{
+  removedWorktreePaths: string[];
+  removedBranchNames: string[];
+}> => {
+  const checkpointResult = await loadCheckpoint({
+    checkpointFile: config.paths.checkpointFile,
+    checkpointBackupFile: config.paths.checkpointBackupFile
+  });
+  const retainedFeatures = checkpointResult.checkpoint
+    ? Object.values(checkpointResult.checkpoint.features).filter((feature) =>
+        ACTIONABLE_CHECKPOINT_FEATURE_STATUSES.has(feature.status)
+      )
+    : [];
+
+  return pruneOrphanedOpenWeftArtifacts({
+    repoRoot: config.repoRoot,
+    worktreesDir: config.paths.worktreesDir,
+    retainedWorktreePaths: retainedFeatures.map((feature) => feature.worktreePath),
+    retainedBranchNames: retainedFeatures.map((feature) => feature.branchName)
   });
 };
 
@@ -416,8 +504,10 @@ const buildPlanAdjustmentPrompt = (input: {
 
   return [
     'You are re-evaluating a feature implementation plan after recent merged edits.',
-    `The plan file to inspect and update is at ${input.planFilePath}.`,
-    'Review the current repository state, determine whether the merged edits interfere with this plan, and update both the plan steps and manifest in place if needed.',
+    `The plan file to inspect is at ${input.planFilePath}.`,
+    'Review the current repository state and determine whether the merged edits interfere with this plan.',
+    'Do not write to disk. Return the full plan markdown, including the ## Manifest block.',
+    'If no changes are needed, return the original plan unchanged.',
     '',
     '=== CURRENT PLAN START ===',
     input.planContent,
@@ -492,7 +582,7 @@ const collectScoringPaths = async (
   paths: string[]
 ): Promise<RepoRiskContext> => {
   const uniquePaths = [...new Set(paths)];
-  const sourceFiles: string[] = [];
+  const sourceFiles: Array<{ path: string; skipContentScan: boolean }> = [];
   const directories = new Set<string>();
   const queue: string[] = [repoRoot];
 
@@ -516,7 +606,14 @@ const collectScoringPaths = async (
       }
 
       if (entry.isFile()) {
-        sourceFiles.push(entryPath);
+        const fileStats = await stat(entryPath).catch(() => null);
+        const skipContentScan =
+          (fileStats?.size ?? 0) > MAX_SCORING_FILE_BYTES ||
+          BINARY_SCORING_EXTENSIONS.has(path.extname(entry.name).toLowerCase());
+        sourceFiles.push({
+          path: entryPath,
+          skipContentScan
+        });
         directories.add(path.relative(repoRoot, path.dirname(entryPath)) || '.');
       }
     }
@@ -537,18 +634,24 @@ const collectScoringPaths = async (
   }
 
   for (const sourceFile of sourceFiles) {
-    const relativeSource = path.relative(repoRoot, sourceFile).replace(/\\/g, '/');
-    const content = await readFile(sourceFile, 'utf8').catch(() => '');
+    if (sourceFile.skipContentScan) {
+      continue;
+    }
 
-    for (const target of normalizedNeedles) {
-      if (relativeSource === target.path) {
-        continue;
-      }
+    const relativeSource = path.relative(repoRoot, sourceFile.path).replace(/\\/g, '/');
+    const content = await readFile(sourceFile.path, 'utf8').catch(() => '');
 
-      if (
-        content.includes(target.exact) ||
-        content.includes(target.withoutExtension)
-      ) {
+      for (const target of normalizedNeedles) {
+        if (relativeSource === target.path) {
+          continue;
+        }
+
+        // This is intentionally a lightweight heuristic, not a full import graph:
+        // substring matches are fast, repository-agnostic, and good enough for coarse fan-in scoring.
+        if (
+          content.includes(target.exact) ||
+          content.includes(target.withoutExtension)
+        ) {
         fanInByPath[target.path] = (fanInByPath[target.path] ?? 0) + 1;
       }
     }
@@ -612,13 +715,13 @@ const buildPlanningStageOneRequest = (
   persistSession: false,
   ...(input.adapter.backend === 'codex'
     ? {
-        sandboxMode: 'danger-full-access' as const,
+        sandboxMode: 'read-only' as const,
         isolatedHomeDir: buildCodexHomeDir(input.config, featureId, 'planning-s1')
       }
     : {}),
   ...(input.adapter.backend === 'claude'
     ? {
-        claudePermissionMode: 'default' as const
+        claudePermissionMode: 'plan' as const
       }
     : {})
 });
@@ -637,13 +740,13 @@ const buildPlanningStageTwoRequest = (
   persistSession: false,
   ...(input.adapter.backend === 'codex'
     ? {
-        sandboxMode: 'danger-full-access' as const,
+        sandboxMode: 'read-only' as const,
         isolatedHomeDir: buildCodexHomeDir(input.config, featureId, 'planning-s2')
       }
     : {}),
   ...(input.adapter.backend === 'claude'
     ? {
-        claudePermissionMode: 'bypassPermissions' as const
+        claudePermissionMode: 'plan' as const
       }
     : {})
 });
@@ -690,13 +793,13 @@ const buildAdjustmentRequest = (
   sessionId,
   ...(input.adapter.backend === 'codex'
     ? {
-        sandboxMode: 'danger-full-access' as const,
+        sandboxMode: 'read-only' as const,
         isolatedHomeDir: buildCodexHomeDir(input.config, featureId, 'session')
       }
     : {}),
   ...(input.adapter.backend === 'claude'
     ? {
-        claudePermissionMode: 'acceptEdits' as const
+        claudePermissionMode: 'plan' as const
       }
     : {})
 });
@@ -760,7 +863,8 @@ const runTurnAndRecord = async (
     type: 'agent:started',
     agentId: request.featureId,
     name: getAgentName(checkpoint, request.featureId),
-    feature: getAgentFeature(checkpoint, request.featureId, request.stage)
+    feature: getAgentFeature(checkpoint, request.featureId, request.stage),
+    stage: request.stage
   });
   await maybeAwaitTurnApproval(input, request);
   await appendAudit(input.config, {
@@ -787,7 +891,8 @@ const runTurnAndRecord = async (
     emitOrchestratorEvent(input, {
       type: 'agent:text',
       agentId: request.featureId,
-      text: result.finalMessage
+      text: result.finalMessage,
+      stage: request.stage
     });
     emitOrchestratorEvent(input, {
       type: 'agent:completed',
@@ -916,80 +1021,118 @@ const planPendingRequests = async (
   const usedPlanFiles = new Set(existingPlanFiles);
   let nextFeatureId = getNextFeatureIdFromQueue(existingPlanFiles, queueContent);
   let updatedQueueContent = queueContent;
+  let plannedCount = 0;
+  let workingQueue = parsedQueue;
 
   checkpoint.status = 'in-progress';
   checkpoint.currentState = 'planning';
+  checkpoint.pendingRequests = workingQueue.pending.map((line) => ({
+    request: line.request,
+    queuedAt: checkpoint.createdAt
+  }));
 
-  for (const pending of parsedQueue.pending) {
-    const featureId = formatFeatureId(nextFeatureId);
-    nextFeatureId += 1;
-
-    const stageOnePrompt = injectPromptTemplate(
-      promptTemplate,
-      USER_REQUEST_MARKER,
-      pending.request
-    );
-    const stageOne = await runTurnAndRecord(
-      context,
-      checkpoint,
-      buildPlanningStageOneRequest(context, featureId, stageOnePrompt)
-    );
-
-    if (!stageOne.ok) {
-      throw new Error(stageOne.error);
+  while (workingQueue.pending.length > 0) {
+    if (context.stopController?.isRequested) {
+      break;
     }
 
-    if (stageOne.finalMessage.trim().length < STAGE_ONE_MIN_LENGTH) {
-      throw new Error(`Planning stage 1 returned too little output for feature ${featureId}.`);
+    const pending = workingQueue.pending[0];
+    if (!pending) {
+      break;
     }
 
-    const stageTwo = await runTurnAndRecord(
-      context,
-      checkpoint,
-      buildPlanningStageTwoRequest(context, featureId, stageOne.finalMessage.trim())
-    );
+    try {
+      const featureId = formatFeatureId(nextFeatureId);
+      nextFeatureId += 1;
 
-    if (!stageTwo.ok) {
-      throw new Error(stageTwo.error);
+      const stageOnePrompt = injectPromptTemplate(
+        promptTemplate,
+        USER_REQUEST_MARKER,
+        pending.request
+      );
+      const stageOne = await runTurnAndRecord(
+        context,
+        checkpoint,
+        buildPlanningStageOneRequest(context, featureId, stageOnePrompt)
+      );
+
+      if (!stageOne.ok) {
+        throw new Error(stageOne.error);
+      }
+
+      if (stageOne.finalMessage.trim().length < STAGE_ONE_MIN_LENGTH) {
+        throw new Error(`Planning stage 1 returned too little output for feature ${featureId}.`);
+      }
+
+      const stageTwo = await runTurnAndRecord(
+        context,
+        checkpoint,
+        buildPlanningStageTwoRequest(context, featureId, stageOne.finalMessage.trim())
+      );
+
+      if (!stageTwo.ok) {
+        throw new Error(stageTwo.error);
+      }
+
+      const shadowMarkdown = await maybeReadShadowPlan(context.config, featureId);
+      const repairedPlan = await repairPlanMarkdownIfNeeded(
+        context,
+        checkpoint,
+        featureId,
+        pending.request,
+        stageTwo.finalMessage,
+        shadowMarkdown
+      );
+
+      const planFilename = createPlanFilename(Number.parseInt(featureId, 10), pending.request, usedPlanFiles);
+      usedPlanFiles.add(planFilename);
+      const planFilePath = path.join(context.config.paths.featureRequestsDir, planFilename);
+
+      await writeTextFileAtomic(planFilePath, repairedPlan.markdown);
+      await writeShadowPlan(context.config, featureId, repairedPlan.markdown);
+
+      updatedQueueContent = markQueueLineProcessed(
+        updatedQueueContent,
+        pending.lineIndex,
+        featureId,
+        pending.request,
+        pending.request
+      );
+
+      checkpoint.features[featureId] = {
+        id: featureId,
+        title: summarizeQueueRequest(pending.request),
+        request: pending.request,
+        status: 'planned',
+        attempts: 0,
+        planFile: planFilePath,
+        branchName: null,
+        worktreePath: null,
+        sessionId: repairedPlan.sessionId,
+        sessionScope: repairedPlan.sessionId ? 'repo' : null,
+        backend: context.adapter.backend,
+        manifest: repairedPlan.manifest,
+        priorityScore: null,
+        priorityTier: null,
+        scoringCycles: 0,
+        updatedAt: timestamp()
+      };
+      plannedCount += 1;
+      workingQueue = parseQueueFile(updatedQueueContent);
+      checkpoint.pendingRequests = workingQueue.pending.map((line) => ({
+        request: line.request,
+        queuedAt: checkpoint.createdAt
+      }));
+    } catch (error) {
+      if (plannedCount > 0) {
+        await writeTextFileAtomic(
+          context.config.paths.queueFile,
+          updatedQueueContent || '# OpenWeft feature queue\n'
+        );
+        await saveCheckpointSnapshot(context.config, checkpoint);
+      }
+      throw error;
     }
-
-    const shadowMarkdown = await maybeReadShadowPlan(context.config, featureId);
-    const repairedPlan = await repairPlanMarkdownIfNeeded(
-      context,
-      checkpoint,
-      featureId,
-      pending.request,
-      stageTwo.finalMessage,
-      shadowMarkdown
-    );
-
-    const planFilename = createPlanFilename(Number.parseInt(featureId, 10), pending.request, usedPlanFiles);
-    usedPlanFiles.add(planFilename);
-    const planFilePath = path.join(context.config.paths.featureRequestsDir, planFilename);
-
-    await writeTextFileAtomic(planFilePath, repairedPlan.markdown);
-    await writeShadowPlan(context.config, featureId, repairedPlan.markdown);
-
-    updatedQueueContent = markQueueLineProcessed(updatedQueueContent, pending.lineIndex, featureId, pending.request);
-
-    checkpoint.features[featureId] = {
-      id: featureId,
-      title: pending.request,
-      request: pending.request,
-      status: 'planned',
-      attempts: 0,
-      planFile: planFilePath,
-      branchName: null,
-      worktreePath: null,
-      sessionId: repairedPlan.sessionId,
-      sessionScope: repairedPlan.sessionId ? 'repo' : null,
-      backend: context.adapter.backend,
-      manifest: repairedPlan.manifest,
-      priorityScore: null,
-      priorityTier: null,
-      scoringCycles: 0,
-      updatedAt: timestamp()
-    };
   }
 
   await writeTextFileAtomic(
@@ -997,11 +1140,18 @@ const planPendingRequests = async (
     updatedQueueContent || '# OpenWeft feature queue\n'
   );
 
-  checkpoint.pendingRequests = [];
+  if (context.stopController?.isRequested) {
+    checkpoint.status = 'stopped';
+    checkpoint.currentState = 'stopped';
+    checkpoint.currentPhase = null;
+  } else {
+    checkpoint.pendingRequests = [];
+  }
+  await saveCheckpointSnapshot(context.config, checkpoint);
 
   return {
     checkpoint,
-    plannedCount: parsedQueue.pending.length
+    plannedCount
   };
 };
 
@@ -1107,6 +1257,11 @@ const createOrResetFeatureWorktree = async (
   };
 };
 
+const getManifestPaths = (feature: FeatureCheckpoint): string[] => {
+  const manifest = feature.manifest ?? { create: [], modify: [], delete: [] };
+  return [...manifest.create, ...manifest.modify, ...manifest.delete];
+};
+
 const runFeatureExecutionAttempt = async (
   context: RealRunContext,
   checkpoint: OrchestratorCheckpoint,
@@ -1206,7 +1361,8 @@ const runFeatureExecutionAttempt = async (
 
       const commit = await commitAllChanges(
         worktreeState.worktreePath,
-        `openweft: complete feature ${feature.id}`
+        `openweft: complete feature ${feature.id}`,
+        getManifestPaths(feature)
       );
 
       if (!commit) {
@@ -1240,6 +1396,17 @@ const runFeatureExecutionAttempt = async (
         sessionId: result.sessionId,
         baselineCommit: worktreeState.baselineCommit,
         error: result.error
+      };
+    }
+
+    if (context.stopController?.isRequested) {
+      return {
+        featureId: feature.id,
+        status: 'aborted',
+        branchName: worktreeState.branchName,
+        worktreePath: worktreeState.worktreePath,
+        sessionId: result.sessionId,
+        baselineCommit: worktreeState.baselineCommit
       };
     }
 
@@ -1294,7 +1461,8 @@ const runFeatureExecutionAttempt = async (
         sessionId = retryResult.sessionId;
         const commit = await commitAllChanges(
           worktreeState.worktreePath,
-          `openweft: complete feature ${feature.id}`
+          `openweft: complete feature ${feature.id}`,
+          getManifestPaths(feature)
         );
 
         if (!commit) {
@@ -1342,6 +1510,32 @@ const runFeatureExecutionAttempt = async (
   }
 };
 
+type ExecutionAttemptResult = Awaited<ReturnType<typeof runFeatureExecutionAttempt>>;
+
+const createUnexpectedExecutionFailure = (
+  config: ResolvedOpenWeftConfig,
+  feature: Pick<FeatureCheckpoint, 'id' | 'request' | 'branchName' | 'worktreePath'>,
+  error: unknown
+): {
+  classified: ReturnType<typeof classifyError>;
+  result: ExecutionAttemptResult;
+} => {
+  const classified = classifyError(error);
+
+  return {
+    classified,
+    result: {
+      featureId: feature.id,
+      status: classified.tier === 'fatal' ? 'fatal' : 'failed',
+      branchName: feature.branchName ?? createFeatureBranchName(feature.id, feature.request),
+      worktreePath: feature.worktreePath ?? buildWorktreePath(config, feature.id),
+      sessionId: null,
+      baselineCommit: null,
+      error: classified.reason
+    }
+  };
+};
+
 const executePhases = async (
   context: RealRunContext,
   scores: FeatureScoreBreakdown[],
@@ -1352,9 +1546,17 @@ const executePhases = async (
   const scoreById = new Map(scores.map((score) => [score.id, score]));
   let mergedCount = 0;
   const previousGc = await getAutoGcSetting(context.config.repoRoot);
-  await setAutoGc(context.config.repoRoot, '0');
+  const gcBreadcrumbFile = getAutoGcBreadcrumbFile(context.config);
+  await writeTextFileAtomic(
+    gcBreadcrumbFile,
+    `${JSON.stringify({ previousValue: previousGc, savedAt: timestamp() })}\n`
+  );
+  let gcDisabled = false;
 
   try {
+    await setAutoGc(context.config.repoRoot, '0');
+    gcDisabled = true;
+
     for (const phase of phases) {
       if (context.stopController?.isRequested) {
         checkpoint.status = 'stopped';
@@ -1435,6 +1637,20 @@ const executePhases = async (
                 );
               }
               return result;
+            } catch (error) {
+              const unexpectedFailure = createUnexpectedExecutionFailure(context.config, feature, error);
+              await appendAudit(context.config, {
+                level: unexpectedFailure.result.status === 'fatal' ? 'error' : 'warn',
+                event: 'feature.execution.failed',
+                message: `Feature ${feature.id} failed before an execution result was recorded.`,
+                data: {
+                  featureId: feature.id,
+                  phase: phase.index,
+                  error: unexpectedFailure.result.error,
+                  errorTier: unexpectedFailure.classified.tier
+                }
+              });
+              return unexpectedFailure.result;
             } finally {
               if (tmuxSlot !== null) {
                 await appendTmuxSlotLine(
@@ -1457,19 +1673,65 @@ const executePhases = async (
       const settled = await Promise.allSettled(promises);
       await queue.onIdle();
 
-      const fatalFailure = settled.find(
-        (entry) => entry.status === 'fulfilled' && entry.value.status === 'fatal'
-      );
-      const failedCount = settled.filter(
-        (entry) => entry.status === 'rejected' || (entry.status === 'fulfilled' && entry.value.status !== 'completed')
-      ).length;
-
-      for (const settledFeature of settled) {
-        if (settledFeature.status === 'rejected') {
+      const results: ExecutionAttemptResult[] = [];
+      for (const [index, settledFeature] of settled.entries()) {
+        if (settledFeature.status === 'fulfilled') {
+          results.push(settledFeature.value);
           continue;
         }
 
-        const result = settledFeature.value;
+        const featureId = phase.features[index]?.id;
+        if (!featureId) {
+          await appendAudit(context.config, {
+            level: 'error',
+            event: 'feature.execution.failed',
+            message: `A queued execution task rejected without a matching feature in phase ${phase.index}.`,
+            data: {
+              phase: phase.index,
+              error: classifyError(settledFeature.reason).reason
+            }
+          });
+          continue;
+        }
+
+        const feature = checkpoint.features[featureId];
+        if (!feature) {
+          await appendAudit(context.config, {
+            level: 'error',
+            event: 'feature.execution.failed',
+            message: `Execution task for feature ${featureId} rejected before the checkpoint entry could be loaded.`,
+            data: {
+              featureId,
+              phase: phase.index,
+              error: classifyError(settledFeature.reason).reason
+            }
+          });
+          continue;
+        }
+
+        const unexpectedFailure = createUnexpectedExecutionFailure(
+          context.config,
+          feature,
+          settledFeature.reason
+        );
+        await appendAudit(context.config, {
+          level: unexpectedFailure.result.status === 'fatal' ? 'error' : 'warn',
+          event: 'feature.execution.failed',
+          message: `Feature ${featureId} rejected after leaving the execution queue callback.`,
+          data: {
+            featureId,
+            phase: phase.index,
+            error: unexpectedFailure.result.error,
+            errorTier: unexpectedFailure.classified.tier
+          }
+        });
+        results.push(unexpectedFailure.result);
+      }
+
+      const fatalFailure = results.find((entry) => entry.status === 'fatal');
+      const failedCount = results.filter((entry) => entry.status !== 'completed').length;
+
+      for (const result of results) {
         const feature = checkpoint.features[result.featureId];
         updateFeatureCheckpoint(checkpoint, result.featureId, {
           status:
@@ -1537,11 +1799,11 @@ const executePhases = async (
       checkpoint.currentState = 'merging';
 
       const successfulFeatureIds = settled
-        .filter(
-          (entry): entry is PromiseFulfilledResult<Awaited<ReturnType<typeof runFeatureExecutionAttempt>>> =>
-            entry.status === 'fulfilled' && entry.value.status === 'completed'
+        .flatMap((entry) =>
+          entry.status === 'fulfilled' && entry.value.status === 'completed'
+            ? [entry.value.featureId]
+            : []
         )
-        .map((entry) => entry.value.featureId)
         .sort((left, right) => {
           const leftScore = scoreById.get(left)?.smoothedPriority ?? 0;
           const rightScore = scoreById.get(right)?.smoothedPriority ?? 0;
@@ -1577,6 +1839,11 @@ const executePhases = async (
 
             let conflictResolution: AdapterTurnResult;
             try {
+              const conflictResolutionPrompt = buildConflictResolutionPrompt({
+                instruction: 'The latest changes from main have been merged into your branch. Resolve all conflict markers, preserve both sides, then commit.',
+                planFilePath: feature.planFile,
+                planContent: feature.planFile ? await readTextFileWithRetry(feature.planFile) : null
+              });
               conflictResolution = await runTurnAndRecord(
                 context,
                 checkpoint,
@@ -1584,7 +1851,7 @@ const executePhases = async (
                   context,
                   featureId,
                   feature.worktreePath,
-                  'The latest changes from main have been merged into your branch. Resolve all conflict markers, preserve both sides, then commit.',
+                  conflictResolutionPrompt,
                   resolveReusableSessionId(feature, 'worktree')
                 )
               );
@@ -1710,18 +1977,23 @@ const executePhases = async (
       }
 
       checkpoint.currentState = 're-analysis';
+      emitOrchestratorEvent(context, {
+        type: 'phase:re-analyzing',
+        phase: phase.index,
+        total: phases.length
+      });
       await announceProgress(context, `Phase ${phase.index} complete. Re-planning remaining work.`);
 
-      for (const mergedSummary of mergeSummaries) {
-        const remaining = Object.values(checkpoint.features).filter((feature) =>
-          feature.status === 'planned' || feature.status === 'failed'
-        );
-
-        if (remaining.length === 0) {
-          break;
-        }
-
+      const remaining = Object.values(checkpoint.features).filter((feature) =>
+        feature.status === 'planned' || feature.status === 'failed'
+      );
+      if (remaining.length > 0 && mergeSummaries.length > 0) {
         const template = await readTextFileWithRetry(context.config.paths.planAdjustment);
+        const aggregatedMergeSummaryJson = JSON.stringify(
+          mergeSummaries.map((mergedSummary) => mergedSummary.summary),
+          null,
+          2
+        );
         for (const feature of remaining) {
           if (!feature.planFile) {
             continue;
@@ -1735,7 +2007,7 @@ const executePhases = async (
             template,
             planFilePath: planFile,
             planContent: currentPlan,
-            codeEditSummaryJson: JSON.stringify(mergedSummary.summary, null, 2)
+            codeEditSummaryJson: aggregatedMergeSummaryJson
           });
           let adjustment: AdapterTurnResult;
           try {
@@ -1792,7 +2064,7 @@ const executePhases = async (
             continue;
           }
 
-          const adjustedPlan = await readTextFileWithRetry(planFile);
+          const adjustedPlan = adjustment.finalMessage;
           const shadowPlan = await maybeReadShadowPlan(context.config, feature.id);
           const parsed = parseManifestDocument(adjustedPlan, {
             ...(shadowPlan
@@ -1801,7 +2073,9 @@ const executePhases = async (
                 }
               : {})
           });
-          await writeTextFileAtomic(planFile, updateManifestInMarkdown(adjustedPlan, parsed.manifest));
+          const normalizedPlan = updateManifestInMarkdown(adjustedPlan, parsed.manifest);
+          await writeTextFileAtomic(planFile, normalizedPlan);
+          await writeShadowPlan(context.config, feature.id, normalizedPlan);
           updateFeatureCheckpoint(checkpoint, feature.id, {
             manifest: parsed.manifest,
             sessionId: adjustment.sessionId,
@@ -1852,7 +2126,10 @@ const executePhases = async (
       mergedCount
     };
   } finally {
-    await restoreAutoGc(context.config.repoRoot, previousGc);
+    if (gcDisabled) {
+      await restoreAutoGc(context.config.repoRoot, previousGc);
+    }
+    await rm(gcBreadcrumbFile, { force: true });
   }
 };
 
@@ -1875,6 +2152,19 @@ const runRealWorkflow = async (
       checkpoint: planning.checkpoint,
       plannedCount: context.plannedCount + planning.plannedCount
     };
+
+    if (context.checkpoint.status === 'stopped') {
+      await saveCheckpointSnapshot(context.config, context.checkpoint);
+      return {
+        checkpoint: context.checkpoint,
+        mergedCount: context.mergedCount,
+        plannedCount: context.plannedCount
+      };
+    }
+
+    if (planning.plannedCount > 0) {
+      await saveCheckpointSnapshot(context.config, context.checkpoint);
+    }
 
     const { checkpoint: scoredCheckpoint, scores, phases } = await scoreAndPhaseCheckpoint(context);
     context = {
@@ -1919,67 +2209,31 @@ const runRealWorkflow = async (
   }
 };
 
-const machine = setup({
-  types: {
-    input: {} as RealRunInput,
-    context: {} as RealRunContext
-  },
-  actors: {
-    runWorkflow: fromPromise<OrchestratorOutput, RealRunContext>(async ({ input }) => runRealWorkflow(input))
-  }
-}).createMachine({
-  id: 'openweftRealRun',
-  initial: 'running',
-  context: ({ input }) => ({
-    ...input,
-    checkpoint: createFreshCheckpoint(input.configHash),
-    mergedCount: 0,
-    plannedCount: 0,
-    error: null
-  }),
-  states: {
-    running: {
-      invoke: {
-        src: 'runWorkflow',
-        input: ({ context }) => context,
-        onDone: {
-          target: 'completed',
-          actions: assign(({ context, event }) => ({
-            ...context,
-            checkpoint: event.output.checkpoint,
-            mergedCount: event.output.mergedCount,
-            plannedCount: event.output.plannedCount,
-            error: null
-          }))
-        },
-        onError: {
-          target: 'failed',
-          actions: assign(({ context, event }) => ({
-            ...context,
-            error: event.error instanceof Error ? event.error.message : String(event.error)
-          }))
-        }
-      }
-    },
-    completed: {
-      type: 'final'
-    },
-    failed: {
-      type: 'final'
-    }
-  },
-  output: ({ context }) => ({
-    checkpoint: context.checkpoint,
-    mergedCount: context.mergedCount,
-    plannedCount: context.plannedCount
-  })
-});
-
 export const runRealOrchestration = async (
   input: RealRunInput
 ): Promise<OrchestratorOutput> => {
   await ensureRuntimeDirectories(input.config.paths);
+  const restoredAutoGc = await restoreAutoGcFromBreadcrumb(input.config);
+  const prunedOrphans = await pruneOrphanedOpenWeftArtifactsAtStartup(input.config);
   await mkdir(path.dirname(input.config.paths.queueFile), { recursive: true });
+  if (restoredAutoGc) {
+    await appendAudit(input.config, {
+      level: 'info',
+      event: 'repo.gc.restored',
+      message: 'Restored git gc.auto from a previous interrupted OpenWeft run.'
+    });
+  }
+  if (prunedOrphans.removedWorktreePaths.length > 0 || prunedOrphans.removedBranchNames.length > 0) {
+    await appendAudit(input.config, {
+      level: 'info',
+      event: 'repo.orphans.pruned',
+      message: 'Pruned orphaned OpenWeft worktrees and branches before starting the run.',
+      data: {
+        removedWorktreePaths: prunedOrphans.removedWorktreePaths,
+        removedBranchNames: prunedOrphans.removedBranchNames
+      }
+    });
+  }
   await appendAudit(input.config, {
     level: 'info',
     event: 'run.start',

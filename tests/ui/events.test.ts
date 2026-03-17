@@ -8,6 +8,7 @@ describe('OrchestratorEvent', () => {
       agentId: 'alpha',
       name: 'Alpha',
       feature: 'auth-system',
+      stage: 'execution',
     };
     if (event.type === 'agent:started') {
       expect(event.agentId).toBe('alpha');
@@ -21,6 +22,7 @@ describe('OrchestratorEvent', () => {
       type: 'agent:text',
       agentId: 'alpha',
       text: 'Thinking about auth...',
+      stage: 'execution',
     };
     if (event.type === 'agent:text') {
       expect(event.text).toBe('Thinking about auth...');
@@ -48,6 +50,17 @@ describe('OrchestratorEvent', () => {
     };
     if (event.type === 'phase:started') {
       expect(event.featureIds).toHaveLength(2);
+    }
+  });
+
+  it('narrows phase:re-analyzing events', () => {
+    const event: OrchestratorEvent = {
+      type: 'phase:re-analyzing',
+      phase: 2,
+      total: 4,
+    };
+    if (event.type === 'phase:re-analyzing') {
+      expect(event.total).toBe(4);
     }
   });
 });

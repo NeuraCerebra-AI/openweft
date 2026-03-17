@@ -15,3 +15,13 @@ prompts/
 # Internal build/research artifacts that should not ship with the public repo
 Research_Data/
 project_ledgers/
+PUT_MD_FILES_HERE/
+docs/superpowers/
+.superpowers/
+.playwright-mcp/
+.claude/
+AGENTS.md
+
+# Prototype screenshots and design artifacts
+prototype-*.png
+winner-*.png

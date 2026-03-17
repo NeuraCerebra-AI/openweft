@@ -3,9 +3,11 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
+import { simpleGit } from 'simple-git';
 
 import { buildProgram } from '../../src/cli/buildProgram.js';
 import { createCommandHandlers } from '../../src/cli/handlers.js';
+import { parseQueueFile } from '../../src/domain/queue.js';
 
 const runCli = async (cwd: string, args: string[]): Promise<string[]> => {
   const output: string[] = [];
@@ -31,9 +33,20 @@ const runCli = async (cwd: string, args: string[]): Promise<string[]> => {
   return output;
 };
 
+const createTempRepo = async (): Promise<string> => {
+  const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-e2e-'));
+  const git = simpleGit(repoRoot);
+
+  await git.init(['-b', 'main']);
+  await git.addConfig('user.name', 'OpenWeft Test');
+  await git.addConfig('user.email', 'openweft@example.com');
+
+  return repoRoot;
+};
+
 describe('openweft CLI dry-run flow', () => {
   it('initializes the repo scaffold and runs a dry-run batch end to end', async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-e2e-'));
+    const repoRoot = await createTempRepo();
 
     const initOutput = await runCli(repoRoot, ['init']);
     expect(initOutput[0]).toContain('Initialized OpenWeft');
@@ -47,8 +60,9 @@ describe('openweft CLI dry-run flow', () => {
     expect(startOutput).toContain('Dry run complete: planned 2, completed 2.');
 
     const queueContent = await readFile(path.join(repoRoot, 'feature_requests', 'queue.txt'), 'utf8');
-    expect(queueContent).toContain('# ✓ [001] add dark mode toggle');
-    expect(queueContent).toContain('# ✓ [002] refactor auth middleware');
+    expect(queueContent).toContain('# openweft queue format: v1');
+    expect(parseQueueFile(queueContent).processed).toHaveLength(2);
+    expect(parseQueueFile(queueContent).processed.map((entry) => entry.featureId)).toEqual(['001', '002']);
 
     const checkpoint = JSON.parse(
       await readFile(path.join(repoRoot, '.openweft', 'checkpoint.json'), 'utf8')

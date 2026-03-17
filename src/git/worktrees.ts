@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { realpath, rm } from 'node:fs/promises';
+import { readdir, realpath, rm } from 'node:fs/promises';
 
 import { simpleGit, type GitResponseError, type MergeSummary, type SimpleGit } from 'simple-git';
 
@@ -51,11 +51,6 @@ export interface MergeConflict {
 export type MergeBranchResult = MergeSuccess | MergeConflict;
 export type MergeBranchIntoWorktreeResult = StagedMergeSuccess | MergeConflict;
 
-export interface OrderedMergeResults {
-  successful: MergeSuccess[];
-  failed: MergeConflict[];
-}
-
 export interface WorktreeStatusSummary {
   ahead: number;
   behind: number;
@@ -70,6 +65,18 @@ export interface RemoveWorktreeInput {
   force?: boolean;
 }
 
+export interface PruneOrphanedOpenWeftArtifactsInput {
+  repoRoot: string;
+  worktreesDir: string;
+  retainedWorktreePaths?: readonly (string | null | undefined)[];
+  retainedBranchNames?: readonly (string | null | undefined)[];
+}
+
+export interface PruneOrphanedOpenWeftArtifactsResult {
+  removedWorktreePaths: string[];
+  removedBranchNames: string[];
+}
+
 const createGit = (baseDir: string): SimpleGit => simpleGit(baseDir);
 
 const normalizeExistingPath = async (value: string): Promise<string> => {
@@ -78,6 +85,10 @@ const normalizeExistingPath = async (value: string): Promise<string> => {
   } catch {
     return path.resolve(value);
   }
+};
+
+const isWithinDirectory = (candidatePath: string, directoryPath: string): boolean => {
+  return candidatePath === directoryPath || candidatePath.startsWith(`${directoryPath}${path.sep}`);
 };
 
 const parsePorcelainWorktrees = (output: string): WorktreeRecord[] => {
@@ -228,6 +239,107 @@ export const removeWorktree = async (
   }
 };
 
+export const pruneOrphanedOpenWeftArtifacts = async (
+  input: PruneOrphanedOpenWeftArtifactsInput
+): Promise<PruneOrphanedOpenWeftArtifactsResult> => {
+  const removedWorktreePaths = new Set<string>();
+  const removedBranchNames = new Set<string>();
+  const normalizedWorktreesDir = await normalizeExistingPath(input.worktreesDir);
+  const retainedWorktreePaths = new Set(
+    await Promise.all(
+      (input.retainedWorktreePaths ?? [])
+        .filter((worktreePath): worktreePath is string => typeof worktreePath === 'string' && worktreePath.length > 0)
+        .map((worktreePath) => normalizeExistingPath(worktreePath))
+    )
+  );
+  const retainedBranchNames = new Set(
+    (input.retainedBranchNames ?? []).filter(
+      (branchName): branchName is string => typeof branchName === 'string' && branchName.length > 0
+    )
+  );
+
+  const listedWorktrees = await listWorktrees(input.repoRoot);
+  for (const worktree of listedWorktrees) {
+    const normalizedWorktreePath = await normalizeExistingPath(worktree.path);
+    if (!isWithinDirectory(normalizedWorktreePath, normalizedWorktreesDir)) {
+      continue;
+    }
+    if (retainedWorktreePaths.has(normalizedWorktreePath)) {
+      continue;
+    }
+
+    await removeWorktree({
+      repoRoot: input.repoRoot,
+      worktreePath: worktree.path,
+      branchName: worktree.branch,
+      force: true
+    });
+    removedWorktreePaths.add(worktree.path);
+    if (worktree.branch) {
+      removedBranchNames.add(worktree.branch);
+    }
+  }
+
+  const remainingManagedWorktrees = new Set(
+    await Promise.all(
+      (await listWorktrees(input.repoRoot))
+        .filter(async () => true)
+        .map(async (worktree) => {
+          const normalizedWorktreePath = await normalizeExistingPath(worktree.path);
+          return isWithinDirectory(normalizedWorktreePath, normalizedWorktreesDir)
+            ? normalizedWorktreePath
+            : null;
+        })
+    ).then((paths) => paths.filter((worktreePath): worktreePath is string => worktreePath !== null))
+  );
+
+  const managedDirectoryEntries = await readdir(input.worktreesDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of managedDirectoryEntries) {
+    const entryPath = path.join(input.worktreesDir, entry.name);
+    const normalizedEntryPath = await normalizeExistingPath(entryPath);
+    if (retainedWorktreePaths.has(normalizedEntryPath) || remainingManagedWorktrees.has(normalizedEntryPath)) {
+      continue;
+    }
+
+    await rm(entryPath, { recursive: true, force: true });
+    removedWorktreePaths.add(entryPath);
+  }
+
+  const activeManagedBranches = new Set(
+    (await listWorktrees(input.repoRoot))
+      .flatMap((worktree) => {
+        const normalizedWorktreePath = path.resolve(worktree.path);
+        if (!isWithinDirectory(normalizedWorktreePath, normalizedWorktreesDir) || !worktree.branch) {
+          return [];
+        }
+        return [worktree.branch];
+      })
+  );
+  const localBranches = await createGit(input.repoRoot).branchLocal();
+  for (const branchName of localBranches.all) {
+    if (!branchName.startsWith('openweft-')) {
+      continue;
+    }
+    if (retainedBranchNames.has(branchName) || activeManagedBranches.has(branchName)) {
+      continue;
+    }
+
+    try {
+      await createGit(input.repoRoot).deleteLocalBranch(branchName, true);
+      removedBranchNames.add(branchName);
+    } catch (error) {
+      if (!isMissingBranchError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  return {
+    removedWorktreePaths: [...removedWorktreePaths].sort(),
+    removedBranchNames: [...removedBranchNames].sort()
+  };
+};
+
 export const setAutoGc = async (repoRoot: string, value: string): Promise<void> => {
   await createGit(repoRoot).raw(['config', '--local', 'gc.auto', value]);
 };
@@ -305,13 +417,23 @@ export const hasChangesSince = async (repoRoot: string, baseRef: string): Promis
 
 export const commitAllChanges = async (
   repoRoot: string,
-  message: string
+  message: string,
+  pathsToStage?: readonly string[]
 ): Promise<string | null> => {
   const git = createGit(repoRoot);
-  await git.add(['--all']);
+  const normalizedPaths = [...new Set((pathsToStage ?? []).filter((path) => path.length > 0))];
 
-  const status = await git.status();
-  if (status.files.length === 0) {
+  if (normalizedPaths.length > 0) {
+    await git.add(normalizedPaths);
+  } else {
+    await git.add(['-u']);
+  }
+
+  const stagedPaths = (await git.diff(['--cached', '--name-only']))
+    .split('\n')
+    .map((path) => path.trim())
+    .filter(Boolean);
+  if (stagedPaths.length === 0) {
     return null;
   }
 
@@ -419,29 +541,6 @@ export const mergeBranchIntoCurrent = async (
       conflicts
     };
   }
-};
-
-export const mergeBranchesInOrder = async (
-  repoRoot: string,
-  branches: string[]
-): Promise<OrderedMergeResults> => {
-  const successful: MergeSuccess[] = [];
-  const failed: MergeConflict[] = [];
-
-  for (const branch of branches) {
-    const result = await mergeBranchIntoCurrent(repoRoot, branch);
-    if (result.status === 'merged') {
-      successful.push(result);
-      continue;
-    }
-
-    failed.push(result);
-  }
-
-  return {
-    successful,
-    failed
-  };
 };
 
 export const mergeBranchIntoWorktree = async (

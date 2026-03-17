@@ -32,5 +32,5 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Pack dry run
-        run: npm pack --dry-run
+      - name: Release check
+        run: npm run release:check

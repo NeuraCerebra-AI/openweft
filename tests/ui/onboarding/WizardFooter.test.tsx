@@ -56,11 +56,11 @@ describe('WizardFooter', () => {
 
   it('renders submit and quit for Step 5 input mode', () => {
     const { lastFrame } = renderWithTheme(
-      <WizardFooter keys={['submit', 'quit']} />
+      <WizardFooter keys={['submit', 'cancel']} />
     );
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Enter submit');
-    expect(frame).toContain('Esc quit');
+    expect(frame).toContain('Esc cancel');
     expect(frame).not.toContain('← back');
     expect(frame).not.toContain('↑↓ select');
   });
@@ -89,6 +89,15 @@ describe('WizardFooter', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('Enter continue');
     expect(frame).toContain('← back');
+    expect(frame).toContain('Esc quit');
+  });
+
+  it('renders retry when requested', () => {
+    const { lastFrame } = renderWithTheme(
+      <WizardFooter keys={['retry', 'quit']} />
+    );
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('R retry');
     expect(frame).toContain('Esc quit');
   });
 });

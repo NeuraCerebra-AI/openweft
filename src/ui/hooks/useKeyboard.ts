@@ -12,6 +12,7 @@ import {
 export type KeypressResult = 'handled' | 'quit' | 'unhandled';
 export interface KeypressContext {
   readonly meta?: boolean;
+  readonly ctrl?: boolean;
 }
 
 export interface KeypressHandlers {
@@ -204,7 +205,7 @@ export const handleKeypress = (
         case 'backspace':
         case 'delete':
           {
-            const nextState = context.meta
+            const nextState = (context.meta || context.ctrl)
               ? deleteBackwardWord({ value: state.filterText, cursorOffset: state.filterCursorOffset })
               : deleteBackward({ value: state.filterText, cursorOffset: state.filterCursorOffset });
             const nextFilterText = nextState.value;
@@ -214,6 +215,14 @@ export const handleKeypress = (
           }
           return 'handled';
         default:
+          // Ctrl+W — word delete (Unix standard)
+          if (key === 'w' && context.ctrl) {
+            const nextState = deleteBackwardWord({ value: state.filterText, cursorOffset: state.filterCursorOffset });
+            state.setFilterText(nextState.value);
+            state.setFilterCursorOffset(nextState.cursorOffset);
+            syncFocusToVisible(nextState.value);
+            return 'handled';
+          }
           if (key.length === 1) {
             const nextState = insertAtCursor(
               { value: state.filterText, cursorOffset: state.filterCursorOffset },

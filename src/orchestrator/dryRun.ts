@@ -12,7 +12,8 @@ import type { Manifest } from '../domain/primitives.js';
 import {
   getNextFeatureIdFromQueue,
   markQueueLineProcessed,
-  parseQueueFile
+  parseQueueFile,
+  summarizeQueueRequest
 } from '../domain/queue.js';
 import { buildExecutionPhases } from '../domain/phases.js';
 import {
@@ -28,8 +29,8 @@ import {
   type FeatureCheckpoint,
   type OrchestratorCheckpoint
 } from '../state/checkpoint.js';
+import { OPENWEFT_VERSION } from '../version.js';
 
-const ORCHESTRATOR_VERSION = '0.1.0';
 const DRY_RUN_MODEL = 'mock-model';
 const EMPTY_MANIFEST: Manifest = {
   create: [],
@@ -81,7 +82,7 @@ const createDryRunCheckpoint = (configHash: string): OrchestratorCheckpoint => {
   const createdAt = timestamp();
 
   return createEmptyCheckpoint({
-    orchestratorVersion: ORCHESTRATOR_VERSION,
+    orchestratorVersion: OPENWEFT_VERSION,
     configHash,
     runId: randomUUID(),
     checkpointId: randomUUID(),
@@ -184,8 +185,14 @@ const planPendingRequests = async (
   let updatedQueueContent = queueContent;
   const plannedFeatures: PlannedFeature[] = [];
   const usedPlanFiles = new Set(existingPlanFiles);
+  let workingQueue = parsedQueue;
 
-  for (const pending of parsedQueue.pending) {
+  while (workingQueue.pending.length > 0) {
+    const pending = workingQueue.pending[0];
+    if (!pending) {
+      break;
+    }
+
     const featureId = formatFeatureId(nextId);
     nextId += 1;
 
@@ -230,7 +237,13 @@ const planPendingRequests = async (
     });
 
     await writeTextFileAtomic(planFilePath, planContent);
-    updatedQueueContent = markQueueLineProcessed(updatedQueueContent, pending.lineIndex, featureId, pending.request);
+    updatedQueueContent = markQueueLineProcessed(
+      updatedQueueContent,
+      pending.lineIndex,
+      featureId,
+      pending.request,
+      pending.request
+    );
 
     const plannedFeature: PlannedFeature = {
       id: featureId,
@@ -243,7 +256,7 @@ const planPendingRequests = async (
     plannedFeatures.push(plannedFeature);
     checkpoint.features[featureId] = {
       id: featureId,
-      title: pending.request,
+      title: summarizeQueueRequest(pending.request),
       request: pending.request,
       status: 'planned',
       attempts: 0,
@@ -258,6 +271,11 @@ const planPendingRequests = async (
       priorityTier: 'medium',
       updatedAt: timestamp()
     };
+    workingQueue = parseQueueFile(updatedQueueContent);
+    checkpoint.pendingRequests = workingQueue.pending.map((line) => ({
+      request: line.request,
+      queuedAt: checkpoint.createdAt
+    }));
   }
 
   await writeTextFileAtomic(input.config.paths.queueFile, updatedQueueContent || '# OpenWeft feature queue\n');
@@ -266,7 +284,13 @@ const planPendingRequests = async (
     orderedFeatureIds: plannedFeatures.map((feature) => feature.id),
     totalCount: plannedFeatures.length
   };
-  checkpoint.pendingRequests = [];
+  checkpoint.pendingRequests = workingQueue.pending.map((line) => ({
+    request: line.request,
+    queuedAt: checkpoint.createdAt
+  }));
+  if (workingQueue.pending.length === 0) {
+    checkpoint.pendingRequests = [];
+  }
 
   await saveCheckpointSnapshot(input.config, checkpoint);
 

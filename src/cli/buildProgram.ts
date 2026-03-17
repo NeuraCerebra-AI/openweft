@@ -1,5 +1,7 @@
 import { Command } from 'commander';
 
+import { OPENWEFT_VERSION } from '../version.js';
+
 export type CommandHandler = (...args: unknown[]) => Promise<void> | void;
 
 export interface CommandHandlers {
@@ -37,7 +39,7 @@ export const buildProgram = (handlers: Partial<CommandHandlers> = {}): Command =
   program
     .name('openweft')
     .description('Orchestrate phased AI coding work across Codex CLI and Claude Code.')
-    .version('0.1.0');
+    .version(OPENWEFT_VERSION);
 
   // Default action: runs when no subcommand is given.
   program.action(async (...args) => {

@@ -1,0 +1,1022 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenWeft — Single-Column Redesign — 5 Variants</title>
+<style>
+  :root {
+    --base: #1e1e2e;
+    --mantle: #181825;
+    --crust: #11111b;
+    --surface0: #313244;
+    --surface1: #45475a;
+    --surface2: #585b70;
+    --overlay0: #6c7086;
+    --overlay1: #7f849c;
+    --text: #cdd6f4;
+    --subtext0: #a6adc8;
+    --subtext1: #bac2de;
+    --blue: #89b4fa;
+    --green: #a6e3a1;
+    --mauve: #cba6f7;
+    --red: #f38ba8;
+    --yellow: #f9e2af;
+    --peach: #fab387;
+    --teal: #94e2d5;
+    --lavender: #b4befe;
+    --rosewater: #f5e0dc;
+    --flamingo: #f2cdcd;
+    --pink: #f5c2e7;
+    --sky: #89dceb;
+    --sapphire: #74c7ec;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--crust);
+    color: var(--text);
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', 'Menlo', monospace;
+    font-size: 16px;
+    line-height: 1.5;
+    padding: 32px 24px 80px;
+  }
+
+  .page-header {
+    text-align: center;
+    margin-bottom: 48px;
+  }
+  .page-header h1 {
+    color: var(--mauve);
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .page-header p {
+    color: var(--subtext0);
+    font-size: 15px;
+    max-width: 700px;
+    margin: 0 auto;
+  }
+
+  /* ─── Terminal frame ─── */
+  .variant-section {
+    max-width: 1200px;
+    margin: 0 auto 64px;
+  }
+  .variant-label {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .variant-number {
+    color: var(--mauve);
+    font-size: 14px;
+    font-weight: 700;
+    background: rgba(203,166,247,0.12);
+    padding: 2px 10px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+  }
+  .variant-title {
+    color: var(--text);
+    font-size: 20px;
+    font-weight: 700;
+  }
+  .variant-subtitle {
+    color: var(--subtext0);
+    font-size: 14px;
+    margin-bottom: 16px;
+    padding-left: 2px;
+  }
+
+  .terminal {
+    background: var(--base);
+    border: 1px solid var(--surface1);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .terminal-bar {
+    background: var(--mantle);
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--surface0);
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot.r { background: var(--red); }
+  .dot.y { background: var(--yellow); }
+  .dot.g { background: var(--green); }
+  .terminal-bar .title {
+    flex: 1;
+    text-align: center;
+    color: var(--overlay0);
+    font-size: 12px;
+  }
+  .terminal-body {
+    padding: 0;
+    min-height: 520px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ─── Shared primitives ─── */
+  .sep { color: var(--surface2); }
+  .muted { color: var(--overlay0); }
+  .brand { color: var(--mauve); font-weight: 700; }
+
+  .status-bar {
+    display: flex;
+    gap: 10px;
+    padding: 6px 12px;
+    align-items: center;
+    font-size: 15px;
+  }
+
+  /* ─── State tabs ─── */
+  .state-tabs {
+    display: flex;
+    gap: 3px;
+    justify-content: center;
+    margin-top: 12px;
+  }
+  .state-tab {
+    background: var(--surface0);
+    color: var(--subtext0);
+    border: 1px solid var(--surface1);
+    padding: 6px 18px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.15s;
+  }
+  .state-tab:hover { background: var(--surface1); color: var(--text); }
+  .state-tab.active { background: var(--surface1); color: var(--green); border-color: var(--green); font-weight: 700; }
+
+  /* ─── Comparison note ─── */
+  .compare-note {
+    text-align: center;
+    color: var(--overlay0);
+    font-size: 13px;
+    margin-top: 8px;
+    font-style: italic;
+  }
+
+  /* ══════════════════════════════════════════
+     VARIANT 1: lazygit style
+     ══════════════════════════════════════════ */
+  .v1-content { flex: 1; display: flex; flex-direction: column; padding: 4px 0; }
+
+  .v1-agent {
+    padding: 6px 14px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 10px;
+  }
+  .v1-agent.focused { background: rgba(137,180,250,0.06); }
+  .v1-focus { color: var(--blue); width: 16px; flex-shrink: 0; font-weight: 700; }
+  .v1-icon { width: 18px; flex-shrink: 0; text-align: center; }
+  .v1-name { font-weight: 700; font-size: 16px; }
+  .v1-name.dim { font-weight: 400; color: var(--subtext0); }
+  .v1-feature { color: var(--subtext0); font-size: 14px; }
+  .v1-right { margin-left: auto; display: flex; gap: 10px; align-items: baseline; }
+  .v1-cost { color: var(--peach); font-size: 14px; }
+  .v1-time { color: var(--overlay0); font-size: 14px; }
+  .v1-tool { color: var(--mauve); font-size: 14px; }
+  .v1-status-label { font-size: 13px; padding: 1px 6px; border-radius: 3px; }
+
+  .v1-expand {
+    margin: 2px 14px 8px 44px;
+    padding: 8px 12px;
+    border-left: 3px solid var(--blue);
+    background: var(--mantle);
+    border-radius: 0 6px 6px 0;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .v1-expand .feat { color: var(--subtext1); }
+  .v1-expand .files { color: var(--overlay1); }
+  .v1-expand .files b { color: var(--green); font-weight: 600; }
+  .v1-expand .tool { color: var(--mauve); }
+  .v1-expand .events { border-top: 1px solid var(--surface0); margin-top: 6px; padding-top: 4px; }
+  .v1-expand .ev { font-size: 13px; }
+  .v1-expand .ev-t { color: var(--overlay0); }
+  .v1-expand .ev-m { color: var(--subtext0); }
+
+  .v1-approval-box {
+    margin: 4px 0 4px;
+    padding: 6px 10px;
+    background: rgba(249,226,175,0.07);
+    border: 1px solid var(--yellow);
+    border-radius: 4px;
+  }
+  .v1-approval-box .label { color: var(--yellow); font-weight: 700; }
+  .v1-approval-box .cmd { color: var(--text); }
+
+  .v1-phase-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 14px 4px;
+    font-size: 13px;
+  }
+  .v1-phase-label { color: var(--blue); font-weight: 700; }
+  .v1-bar-track { flex: 1; height: 5px; background: var(--surface0); border-radius: 3px; overflow: hidden; }
+  .v1-bar-fill { height: 100%; background: var(--blue); border-radius: 3px; }
+  .v1-bar-count { color: var(--overlay0); }
+
+  .v1-divider { border: none; border-top: 1px solid var(--surface0); margin: 2px 14px; }
+
+  /* V1 Footer: minimal vim-style */
+  .v1-footer {
+    padding: 4px 14px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 15px;
+    border-top: 1px solid var(--surface0);
+    margin-top: auto;
+  }
+  .v1-mode { font-weight: 700; }
+  .v1-footer .hint { color: var(--overlay0); font-size: 13px; }
+  .v1-footer .hint b { color: var(--subtext1); font-weight: 600; }
+
+  /* ══════════════════════════════════════════
+     VARIANT 2: htop process table
+     ══════════════════════════════════════════ */
+  .v2-content { flex: 1; display: flex; flex-direction: column; }
+
+  .v2-meters {
+    padding: 8px 14px;
+    display: flex;
+    gap: 20px;
+    border-bottom: 1px solid var(--surface0);
+  }
+  .v2-meter { flex: 1; }
+  .v2-meter-label { font-size: 12px; color: var(--overlay0); margin-bottom: 2px; display: flex; justify-content: space-between; }
+  .v2-meter-bar { height: 8px; background: var(--surface0); border-radius: 4px; overflow: hidden; }
+  .v2-meter-fill { height: 100%; border-radius: 4px; }
+  .v2-meter-fill.phase { background: var(--blue); }
+  .v2-meter-fill.cost { background: var(--peach); }
+  .v2-meter-fill.time { background: var(--green); }
+
+  .v2-table-header {
+    display: grid;
+    grid-template-columns: 28px 200px 1fr 200px 80px 60px;
+    padding: 6px 14px;
+    font-size: 13px;
+    color: var(--overlay0);
+    border-bottom: 1px solid var(--surface0);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .v2-row {
+    display: grid;
+    grid-template-columns: 28px 200px 1fr 200px 80px 60px;
+    padding: 5px 14px;
+    font-size: 15px;
+    align-items: center;
+    border-bottom: 1px solid rgba(49,50,68,0.5);
+  }
+  .v2-row.focused { background: rgba(137,180,250,0.08); }
+  .v2-row .icon { text-align: center; }
+  .v2-row .name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v2-row .name.dim { font-weight: 400; color: var(--subtext0); }
+  .v2-row .files { color: var(--overlay1); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v2-row .tool { color: var(--mauve); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v2-row .cost { color: var(--peach); font-size: 14px; text-align: right; }
+  .v2-row .time { color: var(--overlay0); font-size: 14px; text-align: right; }
+
+  .v2-detail {
+    padding: 8px 14px 8px 42px;
+    background: var(--mantle);
+    border-bottom: 1px solid var(--surface0);
+    font-size: 14px;
+  }
+  .v2-detail .feat { color: var(--subtext1); }
+  .v2-detail .file-list { color: var(--green); margin-top: 2px; }
+  .v2-detail .events { color: var(--overlay0); margin-top: 4px; font-size: 13px; }
+
+  .v2-footer {
+    padding: 4px 14px;
+    font-size: 13px;
+    color: var(--overlay0);
+    border-top: 1px solid var(--surface0);
+    margin-top: auto;
+    display: flex;
+    justify-content: space-between;
+  }
+  .v2-footer .keys span { margin-right: 12px; }
+  .v2-footer .keys b { color: var(--subtext1); }
+
+  /* ══════════════════════════════════════════
+     VARIANT 3: card tiles
+     ══════════════════════════════════════════ */
+  .v3-content { flex: 1; display: flex; flex-direction: column; padding: 8px 10px; gap: 6px; }
+
+  .v3-card {
+    border: 1px solid var(--surface1);
+    border-radius: 6px;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    transition: border-color 0.15s;
+  }
+  .v3-card.focused { border-color: var(--blue); background: rgba(137,180,250,0.05); }
+  .v3-card.running { border-left: 3px solid var(--green); }
+  .v3-card.queued { border-left: 3px solid var(--surface2); }
+  .v3-card.completed { border-left: 3px solid var(--green); opacity: 0.7; }
+  .v3-card.failed { border-left: 3px solid var(--red); }
+  .v3-card.approval { border-left: 3px solid var(--yellow); }
+
+  .v3-card-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .v3-card-top .icon { font-size: 16px; }
+  .v3-card-top .name { font-weight: 700; font-size: 16px; flex: 1; }
+  .v3-card-top .badges { display: flex; gap: 6px; align-items: center; }
+  .v3-badge {
+    font-size: 11px;
+    padding: 1px 7px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .v3-badge.files { background: rgba(166,227,161,0.12); color: var(--green); }
+  .v3-badge.cost { background: rgba(250,179,135,0.12); color: var(--peach); }
+  .v3-card-top .time { color: var(--overlay0); font-size: 14px; }
+
+  .v3-card-detail {
+    font-size: 14px;
+    line-height: 1.5;
+    padding-left: 28px;
+  }
+  .v3-card-detail .feat { color: var(--subtext0); }
+  .v3-card-detail .tool { color: var(--mauve); }
+  .v3-card-detail .file-list { color: var(--overlay1); font-size: 13px; }
+  .v3-card-detail .file-list b { color: var(--green); font-weight: 600; }
+
+  .v3-footer {
+    padding: 6px 14px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 14px;
+    border-top: 1px solid var(--surface0);
+    margin-top: auto;
+  }
+  .v3-mode {
+    font-weight: 700;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 3px;
+  }
+  .v3-footer .hint { color: var(--subtext0); font-size: 13px; }
+
+  /* ══════════════════════════════════════════
+     VARIANT 4: git-log timeline
+     ══════════════════════════════════════════ */
+  .v4-content { flex: 1; display: flex; flex-direction: column; padding: 8px 0; }
+
+  .v4-entry {
+    display: flex;
+    padding: 4px 14px;
+    gap: 0;
+    min-height: 28px;
+    align-items: flex-start;
+  }
+
+  .v4-graph {
+    width: 36px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+  }
+  .v4-node {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid;
+    margin-top: 4px;
+    z-index: 1;
+  }
+  .v4-node.running { border-color: var(--green); background: var(--green); }
+  .v4-node.queued { border-color: var(--surface2); background: transparent; }
+  .v4-node.completed { border-color: var(--green); background: var(--green); }
+  .v4-node.failed { border-color: var(--red); background: var(--red); }
+  .v4-node.approval { border-color: var(--yellow); background: var(--yellow); }
+  .v4-line {
+    width: 2px;
+    flex: 1;
+    background: var(--surface1);
+    min-height: 12px;
+  }
+
+  .v4-info { flex: 1; padding: 2px 0; }
+  .v4-info-top {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .v4-info-top .name { font-weight: 700; font-size: 16px; }
+  .v4-info-top .name.dim { font-weight: 400; color: var(--subtext0); font-size: 15px; }
+  .v4-info-top .feat { color: var(--subtext0); font-size: 14px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v4-info-top .meta { color: var(--overlay0); font-size: 14px; display: flex; gap: 8px; flex-shrink: 0; }
+  .v4-info-top .meta .cost { color: var(--peach); }
+
+  .v4-detail {
+    padding: 6px 0 6px 0;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+  .v4-detail .tool { color: var(--mauve); }
+  .v4-detail .file-tree { padding-left: 4px; }
+  .v4-detail .file-tree .f { color: var(--green); font-size: 13px; }
+  .v4-detail .file-tree .f::before { content: '  '; color: var(--surface2); }
+  .v4-detail .events { margin-top: 4px; font-size: 13px; }
+  .v4-detail .ev-t { color: var(--overlay0); }
+  .v4-detail .ev-m { color: var(--subtext0); }
+
+  .v4-footer {
+    padding: 6px 14px;
+    font-size: 14px;
+    border-top: 1px solid var(--surface0);
+    margin-top: auto;
+    color: var(--overlay0);
+  }
+  .v4-footer b { color: var(--text); font-weight: 600; }
+
+  /* ══════════════════════════════════════════
+     VARIANT 5: grouped by status
+     ══════════════════════════════════════════ */
+  .v5-content { flex: 1; display: flex; flex-direction: column; padding: 4px 0; }
+
+  .v5-group {
+    margin-bottom: 4px;
+  }
+  .v5-group-header {
+    padding: 4px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .v5-group-header .line { flex: 1; height: 1px; background: var(--surface0); }
+  .v5-group-header.running-hdr { color: var(--green); }
+  .v5-group-header.queued-hdr { color: var(--overlay0); }
+  .v5-group-header.done-hdr { color: var(--blue); }
+  .v5-group-header.failed-hdr { color: var(--red); }
+
+  .v5-agent {
+    padding: 5px 14px 5px 28px;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .v5-agent.focused { background: rgba(137,180,250,0.06); }
+  .v5-agent .icon { width: 18px; flex-shrink: 0; text-align: center; }
+  .v5-agent .name { font-weight: 700; font-size: 16px; }
+  .v5-agent .name.dim { font-weight: 400; color: var(--subtext0); }
+  .v5-agent .feat { color: var(--subtext0); font-size: 14px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .v5-agent .meta { display: flex; gap: 8px; flex-shrink: 0; }
+  .v5-agent .cost { color: var(--peach); font-size: 14px; }
+  .v5-agent .time { color: var(--overlay0); font-size: 14px; }
+  .v5-agent .tool { color: var(--mauve); font-size: 13px; }
+
+  .v5-expand {
+    margin: 2px 14px 6px 46px;
+    padding: 8px 12px;
+    border-left: 3px solid var(--blue);
+    background: var(--mantle);
+    border-radius: 0 6px 6px 0;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .v5-footer {
+    padding: 6px 14px;
+    border-top: 1px solid var(--surface0);
+    margin-top: auto;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+  }
+  .v5-action-btn {
+    padding: 2px 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>OpenWeft — Single-Column Redesign</h1>
+  <p>5 concrete implementations. All kill the right panel. All show the "executing" state with 2 running agents, 3 queued. Toggle states below each variant.</p>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     VARIANT 1: lazygit — dense rows, blue-border expansion
+     ═══════════════════════════════════════════════════ -->
+<div class="variant-section" id="v1-section">
+  <div class="variant-label">
+    <span class="variant-number">1</span>
+    <span class="variant-title">lazygit style</span>
+  </div>
+  <div class="variant-subtitle">Dense rows, focused agent expands inline with left-border accent. Minimal vim-style footer — just the mode, one contextual hint.</div>
+
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="dot r"></div><div class="dot y"></div><div class="dot g"></div>
+      <span class="title">openweft</span>
+    </div>
+    <div class="terminal-body" id="v1-body"></div>
+  </div>
+  <div class="state-tabs">
+    <button class="state-tab active" onclick="setV('v1','idle')">Idle</button>
+    <button class="state-tab" onclick="setV('v1','exec')">Executing</button>
+    <button class="state-tab" onclick="setV('v1','approval')">Approval</button>
+    <button class="state-tab" onclick="setV('v1','mixed')">Mixed</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     VARIANT 2: htop — process table with meters
+     ═══════════════════════════════════════════════════ -->
+<div class="variant-section" id="v2-section">
+  <div class="variant-label">
+    <span class="variant-number">2</span>
+    <span class="variant-title">htop process table</span>
+  </div>
+  <div class="variant-subtitle">Top meters for progress/cost/time. Tabular agent list with columns. Footer shows keybinds as right-aligned ghost text.</div>
+
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="dot r"></div><div class="dot y"></div><div class="dot g"></div>
+      <span class="title">openweft</span>
+    </div>
+    <div class="terminal-body" id="v2-body"></div>
+  </div>
+  <div class="state-tabs">
+    <button class="state-tab active" onclick="setV('v2','idle')">Idle</button>
+    <button class="state-tab" onclick="setV('v2','exec')">Executing</button>
+    <button class="state-tab" onclick="setV('v2','approval')">Approval</button>
+    <button class="state-tab" onclick="setV('v2','mixed')">Mixed</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     VARIANT 3: card tiles
+     ═══════════════════════════════════════════════════ -->
+<div class="variant-section" id="v3-section">
+  <div class="variant-label">
+    <span class="variant-number">3</span>
+    <span class="variant-title">card tiles</span>
+  </div>
+  <div class="variant-subtitle">Each agent is a self-contained card with border-left status color. Badges for file count and cost. Footer: contextual action prompt, not a key dump.</div>
+
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="dot r"></div><div class="dot y"></div><div class="dot g"></div>
+      <span class="title">openweft</span>
+    </div>
+    <div class="terminal-body" id="v3-body"></div>
+  </div>
+  <div class="state-tabs">
+    <button class="state-tab active" onclick="setV('v3','idle')">Idle</button>
+    <button class="state-tab" onclick="setV('v3','exec')">Executing</button>
+    <button class="state-tab" onclick="setV('v3','approval')">Approval</button>
+    <button class="state-tab" onclick="setV('v3','mixed')">Mixed</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     VARIANT 4: git-log timeline
+     ═══════════════════════════════════════════════════ -->
+<div class="variant-section" id="v4-section">
+  <div class="variant-label">
+    <span class="variant-number">4</span>
+    <span class="variant-title">git log timeline</span>
+  </div>
+  <div class="variant-subtitle">Vertical graph with colored nodes. Focused agent shows file tree + event log. Footer: single-line contextual message.</div>
+
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="dot r"></div><div class="dot y"></div><div class="dot g"></div>
+      <span class="title">openweft</span>
+    </div>
+    <div class="terminal-body" id="v4-body"></div>
+  </div>
+  <div class="state-tabs">
+    <button class="state-tab active" onclick="setV('v4','idle')">Idle</button>
+    <button class="state-tab" onclick="setV('v4','exec')">Executing</button>
+    <button class="state-tab" onclick="setV('v4','approval')">Approval</button>
+    <button class="state-tab" onclick="setV('v4','mixed')">Mixed</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════
+     VARIANT 5: grouped by status (kanban-ish)
+     ═══════════════════════════════════════════════════ -->
+<div class="variant-section" id="v5-section">
+  <div class="variant-label">
+    <span class="variant-number">5</span>
+    <span class="variant-title">status-grouped sections</span>
+  </div>
+  <div class="variant-subtitle">Agents grouped under RUNNING / QUEUED / DONE headers. Clear visual separation by lifecycle stage. Footer: button-style action hints.</div>
+
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="dot r"></div><div class="dot y"></div><div class="dot g"></div>
+      <span class="title">openweft</span>
+    </div>
+    <div class="terminal-body" id="v5-body"></div>
+  </div>
+  <div class="state-tabs">
+    <button class="state-tab active" onclick="setV('v5','idle')">Idle</button>
+    <button class="state-tab" onclick="setV('v5','exec')">Executing</button>
+    <button class="state-tab" onclick="setV('v5','approval')">Approval</button>
+    <button class="state-tab" onclick="setV('v5','mixed')">Mixed</button>
+  </div>
+</div>
+
+<script>
+// ── Data ──
+const D = {
+  idle: {
+    phase: null, cost: 0, elapsed: 0, active: 0, pending: 5,
+    agents: [
+      { name: 'auth-middleware', feat: 'Add JWT refresh token rotation', st: 'queued', tool: null, cost: 0, time: 0, files: ['src/auth/refresh.ts','src/auth/middleware.ts','src/auth/types.ts'], events: [], focused: true, removable: true },
+      { name: 'rate-limiter', feat: 'Sliding window rate limiting', st: 'queued', tool: null, cost: 0, time: 0, files: ['src/middleware/rateLimit.ts','src/config/limits.ts'], events: [], focused: false, removable: true },
+      { name: 'db-migrations', feat: 'User preferences table migration', st: 'queued', tool: null, cost: 0, time: 0, files: ['migrations/003_prefs.sql','src/db/schema.ts'], events: [], focused: false, removable: true },
+      { name: 'api-docs', feat: 'Generate OpenAPI spec from routes', st: 'queued', tool: null, cost: 0, time: 0, files: ['src/docs/openapi.ts','src/routes/index.ts'], events: [], focused: false, removable: true },
+      { name: 'error-handling', feat: 'Structured error codes for endpoints', st: 'queued', tool: null, cost: 0, time: 0, files: ['src/errors/codes.ts','src/middleware/errorHandler.ts','src/errors/types.ts'], events: [], focused: false, removable: false },
+    ]
+  },
+  exec: {
+    phase: { c: 1, t: 3 }, cost: 0.20, elapsed: 47, active: 2, pending: 3,
+    agents: [
+      { name: 'auth-middleware', feat: 'Add JWT refresh token rotation', st: 'running', tool: 'Edit src/auth/refresh.ts', cost: 0.12, time: 47, files: ['src/auth/refresh.ts','src/auth/middleware.ts','src/auth/types.ts'], events: [{ t: '0:32', m: 'Created src/auth/refresh.ts' }, { t: '0:41', m: 'Modified src/auth/middleware.ts' }], focused: true },
+      { name: 'rate-limiter', feat: 'Sliding window rate limiting', st: 'running', tool: 'Read src/middleware/index.ts', cost: 0.08, time: 42, files: ['src/middleware/rateLimit.ts','src/config/limits.ts'], events: [{ t: '0:18', m: 'Read src/middleware/index.ts' }], focused: false },
+      { name: 'db-migrations', feat: 'User preferences table migration', st: 'queued', tool: null, cost: 0, time: 0, files: ['migrations/003_prefs.sql','src/db/schema.ts'], events: [], focused: false },
+      { name: 'api-docs', feat: 'Generate OpenAPI spec from routes', st: 'queued', tool: null, cost: 0, time: 0, files: ['src/docs/openapi.ts','src/routes/index.ts'], events: [], focused: false },
+      { name: 'error-handling', feat: 'Structured error codes for endpoints', st: 'queued', tool: null, cost: 0, time: 0, files: ['src/errors/codes.ts','src/middleware/errorHandler.ts','src/errors/types.ts'], events: [], focused: false },
+    ]
+  },
+  approval: {
+    phase: { c: 1, t: 3 }, cost: 0.60, elapsed: 112, active: 3, pending: 2,
+    agents: [
+      { name: 'auth-middleware', feat: 'Add JWT refresh token rotation', st: 'approval', tool: null, cost: 0.34, time: 112, files: ['src/auth/refresh.ts','src/auth/middleware.ts','src/auth/types.ts','package.json'], events: [{ t: '1:22', m: 'Created src/auth/refresh.ts' },{ t: '1:38', m: 'Modified src/auth/middleware.ts' },{ t: '1:47', m: 'Requesting: npm install jsonwebtoken' }], focused: true, approval: 'Bash: npm install jsonwebtoken @types/jsonwebtoken' },
+      { name: 'rate-limiter', feat: 'Sliding window rate limiting', st: 'running', tool: 'Write tests/rate-limiter.test.ts', cost: 0.21, time: 108, files: ['src/middleware/rateLimit.ts','src/config/limits.ts','tests/rate-limiter.test.ts'], events: [], focused: false },
+      { name: 'db-migrations', feat: 'User preferences table migration', st: 'running', tool: 'Edit migrations/003_prefs.sql', cost: 0.05, time: 23, files: ['migrations/003_prefs.sql','src/db/schema.ts'], events: [], focused: false },
+      { name: 'api-docs', feat: 'Generate OpenAPI spec from routes', st: 'queued', tool: null, cost: 0, time: 0, files: ['src/docs/openapi.ts','src/routes/index.ts'], events: [], focused: false },
+      { name: 'error-handling', feat: 'Structured error codes for endpoints', st: 'queued', tool: null, cost: 0, time: 0, files: ['src/errors/codes.ts','src/middleware/errorHandler.ts','src/errors/types.ts'], events: [], focused: false },
+    ]
+  },
+  mixed: {
+    phase: { c: 2, t: 3 }, cost: 1.13, elapsed: 245, active: 1, pending: 1,
+    agents: [
+      { name: 'auth-middleware', feat: 'Add JWT refresh token rotation', st: 'completed', tool: null, cost: 0.52, time: 187, files: ['src/auth/refresh.ts','src/auth/middleware.ts','src/auth/types.ts'], events: [], focused: false },
+      { name: 'rate-limiter', feat: 'Sliding window rate limiting', st: 'completed', tool: null, cost: 0.38, time: 164, files: ['src/middleware/rateLimit.ts','src/config/limits.ts','tests/rate-limiter.test.ts'], events: [], focused: false },
+      { name: 'db-migrations', feat: 'User preferences table migration', st: 'failed', tool: null, cost: 0.14, time: 89, files: ['migrations/003_prefs.sql'], events: [{ t: '1:12', m: 'Migration syntax error at line 34' },{ t: '1:29', m: 'Agent exited with error' }], focused: true },
+      { name: 'api-docs', feat: 'Generate OpenAPI spec from routes', st: 'running', tool: 'Read src/routes/users.ts', cost: 0.09, time: 31, files: ['src/docs/openapi.ts','src/routes/index.ts'], events: [], focused: false },
+      { name: 'error-handling', feat: 'Structured error codes for endpoints', st: 'queued', tool: null, cost: 0, time: 0, files: ['src/errors/codes.ts','src/middleware/errorHandler.ts','src/errors/types.ts'], events: [], focused: false },
+    ]
+  }
+};
+
+const IC = { queued: ['○','overlay0'], running: ['◐','green'], completed: ['✓','green'], failed: ['✗','red'], approval: ['?','yellow'] };
+const fmt = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+
+// ── State management ──
+const vStates = { v1:'idle', v2:'idle', v3:'idle', v4:'idle', v5:'idle' };
+
+function setV(v, state) {
+  vStates[v] = state;
+  const section = document.getElementById(v+'-section');
+  section.querySelectorAll('.state-tab').forEach(b => b.classList.remove('active'));
+  [...section.querySelectorAll('.state-tab')].find(b => b.textContent.toLowerCase().startsWith(state.slice(0,3)))?.classList.add('active');
+  renders[v](state);
+}
+
+// ── Status bar builder ──
+function statusBar(d) {
+  let h = `<div class="status-bar"><span class="brand">◆ openweft</span>`;
+  if (d.phase) h += `<span class="sep">│</span> <span style="color:var(--blue)">Phase ${d.phase.c}/${d.phase.t}</span>`;
+  if (d.active > 0 || d.pending > 0) h += `<span class="sep">│</span> <span style="color:var(--green)">${d.active} active</span> <span class="muted">·</span> <span style="color:var(--teal)">${d.pending} queued</span>`;
+  if (d.cost > 0) h += `<span class="sep">│</span> <span style="color:var(--peach)">$${d.cost.toFixed(2)}</span>`;
+  h += `<span class="sep">│</span> <span>${fmt(d.elapsed)}</span></div>`;
+  return h;
+}
+
+// ═══════════════════ V1: lazygit ═══════════════════
+function renderV1(state) {
+  const d = D[state]; const isRun = state !== 'idle'; let h = statusBar(d);
+  h += `<div class="v1-content">`;
+  if (d.phase) {
+    const done = d.agents.filter(a=>a.st==='completed').length;
+    const pct = Math.round(((done + d.agents.filter(a=>a.st==='running'||a.st==='approval').length*0.5)/d.agents.length)*100);
+    h += `<div class="v1-phase-bar"><span class="v1-phase-label">PHASE ${d.phase.c}/${d.phase.t}</span><div class="v1-bar-track"><div class="v1-bar-fill" style="width:${pct}%"></div></div><span class="v1-bar-count">${done}/${d.agents.length}</span></div><hr class="v1-divider">`;
+  }
+  d.agents.forEach(a => {
+    const [ic,cc] = IC[a.st];
+    h += `<div class="v1-agent${a.focused?' focused':''}">`;
+    h += `<span class="v1-focus">${a.focused?'>':' '}</span>`;
+    h += `<span class="v1-icon" style="color:var(--${cc})">${ic}</span>`;
+    h += `<span class="v1-name${!a.focused&&a.st==='queued'?' dim':''}">${a.name}</span>`;
+    if (!a.focused) {
+      if (a.tool) h += `<span class="v1-tool">${a.tool}</span>`;
+      else if (a.st !== 'running' && a.st !== 'approval') h += `<span class="v1-feature">${a.feat}</span>`;
+    }
+    h += `<span class="v1-right">`;
+    if (a.cost>0) h += `<span class="v1-cost">$${a.cost.toFixed(2)}</span>`;
+    h += `<span class="v1-time">${fmt(a.time)}</span></span></div>`;
+
+    if (a.focused) {
+      h += `<div class="v1-expand">`;
+      h += `<div class="feat">${a.feat}</div>`;
+      if (a.files?.length) h += `<div class="files"><b>files:</b> ${a.files.join(', ')}</div>`;
+      if (!isRun && a.st==='queued') h += `<div style="color:var(--teal)">${a.removable?'Queued request — press d to remove':'Resumable checkpoint'}</div>`;
+      if (a.approval) h += `<div class="v1-approval-box"><span class="label">APPROVAL NEEDED</span><br><span class="cmd">${a.approval}</span></div>`;
+      if (a.tool) h += `<div class="tool">▸ ${a.tool}</div>`;
+      if (a.events?.length) {
+        h += `<div class="events">`;
+        a.events.forEach(e => h += `<div class="ev"><span class="ev-t">${e.t}</span> <span class="ev-m">${e.m}</span></div>`);
+        h += `</div>`;
+      }
+      h += `</div>`;
+    }
+  });
+  h += `</div>`;
+
+  // Footer: minimal
+  const focused = d.agents.find(a=>a.focused);
+  let hint = '';
+  if (focused?.st === 'approval') hint = `<b>y</b> approve · <b>n</b> deny · <b>a</b> always`;
+  else if (!isRun) hint = `<b>s</b> start · <b>a</b> add · <b>d</b> remove`;
+  else hint = `<b>a</b> add to queue · <b>q</b> stop`;
+  const modeColor = focused?.st==='approval' ? 'var(--yellow)' : 'var(--blue)';
+  const modeLabel = focused?.st==='approval' ? 'APPROVAL' : 'NORMAL';
+  h += `<div class="v1-footer"><span class="v1-mode" style="color:${modeColor}">${modeLabel}</span><span class="hint">${hint}</span></div>`;
+
+  document.getElementById('v1-body').innerHTML = h;
+}
+
+// ═══════════════════ V2: htop ═══════════════════
+function renderV2(state) {
+  const d = D[state]; const isRun = state !== 'idle'; let h = statusBar(d);
+  h += `<div class="v2-content">`;
+
+  // Meters
+  if (d.phase) {
+    const done = d.agents.filter(a=>a.st==='completed').length;
+    const pct = Math.round((done/d.agents.length)*100);
+    h += `<div class="v2-meters">`;
+    h += `<div class="v2-meter"><div class="v2-meter-label"><span>Phase ${d.phase.c}/${d.phase.t}</span><span>${done}/${d.agents.length} done</span></div><div class="v2-meter-bar"><div class="v2-meter-fill phase" style="width:${pct}%"></div></div></div>`;
+    h += `<div class="v2-meter"><div class="v2-meter-label"><span>Cost</span><span>$${d.cost.toFixed(2)}</span></div><div class="v2-meter-bar"><div class="v2-meter-fill cost" style="width:${Math.min(100,d.cost*50)}%"></div></div></div>`;
+    h += `<div class="v2-meter"><div class="v2-meter-label"><span>Time</span><span>${fmt(d.elapsed)}</span></div><div class="v2-meter-bar"><div class="v2-meter-fill time" style="width:${Math.min(100,d.elapsed/6)}%"></div></div></div>`;
+    h += `</div>`;
+  }
+
+  // Table header
+  h += `<div class="v2-table-header"><span></span><span>Agent</span><span>Status / Tool</span><span>Files</span><span>Cost</span><span>Time</span></div>`;
+
+  d.agents.forEach(a => {
+    const [ic,cc] = IC[a.st];
+    const toolOrStatus = a.tool || (a.st==='approval' ? '⚠ Needs approval' : a.st==='completed' ? 'Merged' : a.st==='failed' ? 'Failed' : a.feat);
+    h += `<div class="v2-row${a.focused?' focused':''}">`;
+    h += `<span class="icon" style="color:var(--${cc})">${ic}</span>`;
+    h += `<span class="name${a.st==='queued'&&!a.focused?' dim':''}">${a.name}</span>`;
+    h += `<span class="${a.tool?'tool':'files'}" style="${a.st==='approval'?'color:var(--yellow)':a.st==='failed'?'color:var(--red)':''}">${toolOrStatus}</span>`;
+    h += `<span class="files">${a.files?.slice(0,2).map(f=>f.split('/').pop()).join(', ')||'—'}${a.files?.length>2?' +'+( a.files.length-2):''}</span>`;
+    h += `<span class="cost">${a.cost>0?'$'+a.cost.toFixed(2):'—'}</span>`;
+    h += `<span class="time">${fmt(a.time)}</span>`;
+    h += `</div>`;
+
+    if (a.focused) {
+      h += `<div class="v2-detail">`;
+      h += `<div class="feat">${a.feat}</div>`;
+      if (a.files?.length) h += `<div class="file-list">${a.files.join(' · ')}</div>`;
+      if (a.approval) h += `<div style="color:var(--yellow);margin-top:4px;font-weight:700">⚠ ${a.approval}</div>`;
+      if (a.events?.length) { h += `<div class="events">`; a.events.forEach(e => h += `<div>${e.t} ${e.m}</div>`); h += `</div>`; }
+      h += `</div>`;
+    }
+  });
+
+  h += `</div>`;
+
+  // Footer
+  const focused = d.agents.find(a=>a.focused);
+  let keys = '';
+  if (focused?.st === 'approval') keys = `<b>y</b> approve  <b>n</b> deny  <b>a</b> always  <b>s</b> skip`;
+  else if (!isRun) keys = `<b>s</b> start  <b>a</b> add  <b>d</b> remove  <b>?</b> help`;
+  else keys = `<b>a</b> add  <b>q</b> stop  <b>↑↓</b> navigate  <b>?</b> help`;
+  h += `<div class="v2-footer"><span>${d.agents.length} agents</span><span class="keys">${keys}</span></div>`;
+
+  document.getElementById('v2-body').innerHTML = h;
+}
+
+// ═══════════════════ V3: cards ═══════════════════
+function renderV3(state) {
+  const d = D[state]; const isRun = state !== 'idle'; let h = statusBar(d);
+  h += `<div class="v3-content">`;
+
+  d.agents.forEach(a => {
+    const [ic,cc] = IC[a.st];
+    h += `<div class="v3-card ${a.st}${a.focused?' focused':''}">`;
+    h += `<div class="v3-card-top">`;
+    h += `<span class="icon" style="color:var(--${cc});font-size:18px">${ic}</span>`;
+    h += `<span class="name">${a.name}</span>`;
+    h += `<span class="badges">`;
+    if (a.files?.length) h += `<span class="v3-badge files">${a.files.length} files</span>`;
+    if (a.cost>0) h += `<span class="v3-badge cost">$${a.cost.toFixed(2)}</span>`;
+    h += `</span>`;
+    h += `<span class="time">${fmt(a.time)}</span>`;
+    h += `</div>`;
+
+    // Always show one line of detail
+    h += `<div class="v3-card-detail">`;
+    h += `<div class="feat">${a.feat}</div>`;
+    if (a.focused) {
+      if (a.files?.length) h += `<div class="file-list"><b>files:</b> ${a.files.join(', ')}</div>`;
+      if (a.tool) h += `<div class="tool">▸ ${a.tool}</div>`;
+      if (a.approval) h += `<div style="margin-top:4px;padding:6px 10px;background:rgba(249,226,175,0.07);border:1px solid var(--yellow);border-radius:4px"><span style="color:var(--yellow);font-weight:700">⚠ APPROVAL</span> <span style="color:var(--text)">${a.approval}</span></div>`;
+      if (!isRun && a.st==='queued') h += `<div style="color:var(--teal)">${a.removable?'Press d to remove':'Checkpoint — will resume'}</div>`;
+      if (a.events?.length) {
+        h += `<div style="margin-top:4px;font-size:13px;color:var(--overlay0)">`;
+        a.events.forEach(e => h += `<div>${e.t} ${e.m}</div>`);
+        h += `</div>`;
+      }
+    } else if (a.tool) {
+      h += `<div class="tool">▸ ${a.tool}</div>`;
+    }
+    h += `</div>`;
+    h += `</div>`;
+  });
+
+  h += `</div>`;
+
+  // Footer: contextual prompt
+  const focused = d.agents.find(a=>a.focused);
+  let prompt = '';
+  const modeColor = focused?.st==='approval' ? 'var(--yellow)' : 'var(--blue)';
+  if (focused?.st === 'approval') prompt = `Approve <b>y</b> · Deny <b>n</b> · Always <b>a</b>`;
+  else if (!isRun) prompt = `Press <b>s</b> to start · <b>a</b> add · <b>d</b> remove · <b>?</b> help`;
+  else prompt = `<b>a</b> add to queue · <b>q</b> stop run · <b>?</b> help`;
+  h += `<div class="v3-footer"><span class="v3-mode" style="background:${modeColor};color:var(--crust)">${focused?.st==='approval'?'APPROVAL':'NORMAL'}</span><span class="hint">${prompt}</span></div>`;
+
+  document.getElementById('v3-body').innerHTML = h;
+}
+
+// ═══════════════════ V4: git-log ═══════════════════
+function renderV4(state) {
+  const d = D[state]; const isRun = state !== 'idle'; let h = statusBar(d);
+  h += `<div class="v4-content">`;
+
+  d.agents.forEach((a, i) => {
+    const [ic,cc] = IC[a.st];
+    const isLast = i === d.agents.length - 1;
+
+    h += `<div class="v4-entry">`;
+    h += `<div class="v4-graph"><div class="v4-node ${a.st}"></div>${!isLast?'<div class="v4-line"></div>':''}</div>`;
+    h += `<div class="v4-info">`;
+    h += `<div class="v4-info-top">`;
+    h += `<span class="name${a.st==='queued'&&!a.focused?' dim':''}">${a.name}</span>`;
+    if (!a.focused) h += `<span class="feat">${a.tool || a.feat}</span>`;
+    h += `<span class="meta">${a.cost>0?`<span class="cost">$${a.cost.toFixed(2)}</span>`:''}<span>${fmt(a.time)}</span></span>`;
+    h += `</div>`;
+
+    if (a.focused) {
+      h += `<div class="v4-detail">`;
+      h += `<div style="color:var(--subtext1)">${a.feat}</div>`;
+      if (a.files?.length) {
+        h += `<div class="file-tree">`;
+        a.files.forEach(f => h += `<div class="f">${f}</div>`);
+        h += `</div>`;
+      }
+      if (a.tool) h += `<div class="tool">▸ ${a.tool}</div>`;
+      if (a.approval) h += `<div style="margin-top:6px;padding:6px 10px;background:rgba(249,226,175,0.07);border:1px solid var(--yellow);border-radius:4px"><span style="color:var(--yellow);font-weight:700">⚠ APPROVAL</span> <span style="color:var(--text)">${a.approval}</span></div>`;
+      if (!isRun && a.st==='queued') h += `<div style="color:var(--teal);margin-top:2px">${a.removable?'Queued — d to remove':'Checkpoint — will resume'}</div>`;
+      if (a.events?.length) {
+        h += `<div class="events">`;
+        a.events.forEach(e => h += `<div><span class="ev-t">${e.t}</span> <span class="ev-m">${e.m}</span></div>`);
+        h += `</div>`;
+      }
+      h += `</div>`;
+    }
+
+    h += `</div></div>`;
+  });
+
+  h += `</div>`;
+
+  // Footer
+  const focused = d.agents.find(a=>a.focused);
+  let msg = '';
+  if (focused?.st === 'approval') msg = `<b>${focused.name}</b> needs approval — <b>y</b> approve · <b>n</b> deny · <b>a</b> always`;
+  else if (!isRun) msg = `${d.agents.length} items queued — <b>s</b> start · <b>a</b> add · <b>d</b> remove`;
+  else if (focused?.st === 'failed') msg = `<b>${focused.name}</b> failed — <b>r</b> retry · <b>↑↓</b> navigate`;
+  else msg = `Phase ${d.phase?.c}/${d.phase?.t} — ${d.active} running · <b>a</b> add · <b>q</b> stop`;
+  h += `<div class="v4-footer">${msg}</div>`;
+
+  document.getElementById('v4-body').innerHTML = h;
+}
+
+// ═══════════════════ V5: status-grouped ═══════════════════
+function renderV5(state) {
+  const d = D[state]; const isRun = state !== 'idle'; let h = statusBar(d);
+  h += `<div class="v5-content">`;
+
+  const groups = [
+    { key: 'approval', label: 'NEEDS APPROVAL', cls: 'running-hdr', color: 'yellow', sts: ['approval'] },
+    { key: 'running', label: 'RUNNING', cls: 'running-hdr', color: 'green', sts: ['running'] },
+    { key: 'queued', label: 'QUEUED', cls: 'queued-hdr', color: 'overlay0', sts: ['queued'] },
+    { key: 'done', label: 'COMPLETED', cls: 'done-hdr', color: 'green', sts: ['completed'] },
+    { key: 'failed', label: 'FAILED', cls: 'failed-hdr', color: 'red', sts: ['failed'] },
+  ];
+
+  groups.forEach(g => {
+    const members = d.agents.filter(a => g.sts.includes(a.st));
+    if (!members.length) return;
+    h += `<div class="v5-group">`;
+    h += `<div class="v5-group-header ${g.cls}" style="color:var(--${g.color})"><span>${g.label}</span> <span style="font-weight:400;font-size:11px">(${members.length})</span><span class="line"></span></div>`;
+
+    members.forEach(a => {
+      const [ic,cc] = IC[a.st];
+      h += `<div class="v5-agent${a.focused?' focused':''}">`;
+      h += `<span class="icon" style="color:var(--${cc})">${ic}</span>`;
+      h += `<span class="name">${a.name}</span>`;
+      if (!a.focused) {
+        if (a.tool) h += `<span class="tool">${a.tool}</span>`;
+        else h += `<span class="feat">${a.feat}</span>`;
+      }
+      h += `<span class="meta">${a.cost>0?`<span class="cost">$${a.cost.toFixed(2)}</span>`:''}<span class="time">${fmt(a.time)}</span></span>`;
+      h += `</div>`;
+
+      if (a.focused) {
+        h += `<div class="v5-expand">`;
+        h += `<div style="color:var(--subtext1)">${a.feat}</div>`;
+        if (a.files?.length) h += `<div style="color:var(--overlay1);font-size:13px"><span style="color:var(--green)">files:</span> ${a.files.join(', ')}</div>`;
+        if (a.tool) h += `<div style="color:var(--mauve)">▸ ${a.tool}</div>`;
+        if (a.approval) h += `<div style="margin-top:4px;padding:6px 10px;background:rgba(249,226,175,0.07);border:1px solid var(--yellow);border-radius:4px"><span style="color:var(--yellow);font-weight:700">⚠ APPROVAL</span> <span>${a.approval}</span></div>`;
+        if (!isRun && a.st==='queued') h += `<div style="color:var(--teal)">${a.removable?'Press d to remove from queue':'Checkpoint — will resume on start'}</div>`;
+        if (a.events?.length) {
+          h += `<div style="border-top:1px solid var(--surface0);margin-top:4px;padding-top:4px;font-size:13px">`;
+          a.events.forEach(e => h += `<div><span style="color:var(--overlay0)">${e.t}</span> <span style="color:var(--subtext0)">${e.m}</span></div>`);
+          h += `</div>`;
+        }
+        h += `</div>`;
+      }
+    });
+    h += `</div>`;
+  });
+
+  h += `</div>`;
+
+  // Footer: button-style
+  const focused = d.agents.find(a=>a.focused);
+  let btns = '';
+  if (focused?.st === 'approval') {
+    btns = `<span class="v5-action-btn" style="background:var(--green);color:var(--crust)">y approve</span>`;
+    btns += `<span class="v5-action-btn" style="background:var(--red);color:var(--crust)">n deny</span>`;
+    btns += `<span class="v5-action-btn" style="background:var(--surface1);color:var(--text)">a always</span>`;
+    btns += `<span class="v5-action-btn" style="background:var(--surface1);color:var(--text)">s skip</span>`;
+  } else if (!isRun) {
+    btns = `<span class="v5-action-btn" style="background:var(--green);color:var(--crust)">s start</span>`;
+    btns += `<span class="v5-action-btn" style="background:var(--surface1);color:var(--text)">a add</span>`;
+    btns += `<span class="v5-action-btn" style="background:var(--surface1);color:var(--text)">d remove</span>`;
+    btns += `<span class="v5-action-btn" style="background:var(--surface0);color:var(--subtext0)">? help</span>`;
+  } else {
+    btns = `<span class="v5-action-btn" style="background:var(--surface1);color:var(--text)">a add</span>`;
+    btns += `<span class="v5-action-btn" style="background:var(--red);color:var(--crust)">q stop</span>`;
+    btns += `<span class="v5-action-btn" style="background:var(--surface0);color:var(--subtext0)">? help</span>`;
+  }
+  h += `<div class="v5-footer">${btns}</div>`;
+
+  document.getElementById('v5-body').innerHTML = h;
+}
+
+// ── Render map ──
+const renders = { v1: renderV1, v2: renderV2, v3: renderV3, v4: renderV4, v5: renderV5 };
+
+// ── Initial render ──
+Object.keys(renders).forEach(v => renders[v]('idle'));
+</script>
+
+</body>
+</html>

@@ -5,7 +5,7 @@ describe('theme', () => {
   it('exports catppuccinMocha with all required color keys', () => {
     const requiredKeys = [
       'bg', 'bgDeep', 'bgMid', 'surface0', 'surface1', 'surface2',
-      'text', 'subtext', 'blue', 'mauve', 'pink', 'peach', 'sky',
+      'text', 'subtext', 'blue', 'mauve', 'peach', 'sky',
       'teal', 'lavender', 'green', 'red', 'yellow', 'muted',
     ];
     for (const key of requiredKeys) {

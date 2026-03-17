@@ -1,8 +1,8 @@
 import { z } from 'zod';
 
-import { AuthMethodSchema, BackendSchema, type Backend } from '../domain/primitives.js';
+import { AuthMethodSchema, UserBackendSchema } from '../domain/primitives.js';
 import type { RuntimePaths } from '../fs/paths.js';
-export { AuthMethodSchema, BackendSchema };
+export { AuthMethodSchema, UserBackendSchema };
 
 export const BackendAuthConfigSchema = z
   .object({
@@ -32,7 +32,7 @@ export const BudgetConfigSchema = z
 
 export const OpenWeftConfigSchema = z
   .object({
-    backend: BackendSchema,
+    backend: UserBackendSchema,
     auth: z
       .object({
         codex: BackendAuthConfigSchema,

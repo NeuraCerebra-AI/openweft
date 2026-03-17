@@ -236,7 +236,49 @@ const StatefulWrapper: React.FC<{
   );
 };
 
+const InteractiveWrapper: React.FC<{
+  initialValue?: string;
+  onSubmit?: (text: string) => void;
+  onExit?: () => void;
+}> = ({ initialValue = '', onSubmit = vi.fn(), onExit = vi.fn() }) => {
+  const [value, setValue] = React.useState(initialValue);
+
+  return (
+    <ThemeContext.Provider value={catppuccinMocha}>
+      <TextInputField value={value} onChange={setValue} onSubmit={onSubmit} onExit={onExit} />
+    </ThemeContext.Provider>
+  );
+};
+
 describe('paste handling', () => {
+  describe('(0) cursor-aware editing', () => {
+    it('inserts typed text at the cursor after moving left', async () => {
+      const { stdin, lastFrame } = render(<InteractiveWrapper initialValue="helo" />);
+      await waitForMount();
+
+      stdin.write('\u001B[D');
+      await waitForUpdate();
+      stdin.write('l');
+      await waitForUpdate();
+
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('hell');
+      expect(frame).toContain('█o');
+    });
+
+    it('deletes the previous word on meta-delete sequences Ink surfaces', async () => {
+      const { stdin, lastFrame } = render(<InteractiveWrapper initialValue="hello world" />);
+      await waitForMount();
+
+      stdin.write('\u001B\u007F');
+      await waitForUpdate();
+
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('hello ');
+      expect(frame).not.toContain('world');
+    });
+  });
+
   describe('(a) inline paste (below threshold)', () => {
     it('inlines short multi-char paste via onChange', async () => {
       const handleChange = vi.fn();
@@ -476,6 +518,24 @@ describe('paste handling', () => {
       expect(handleSubmit).toHaveBeenCalledOnce();
       const submitted = handleSubmit.mock.calls[0]?.[0] as string;
       expect(submitted.length).toBe(MAX_PASTE_CHARS);
+    });
+
+    it('keeps collapsed paste tokens atomic when moving left and typing', async () => {
+      const { stdin, lastFrame } = render(<StatefulWrapper />);
+      await waitForMount();
+
+      stdin.write('prefix ');
+      await waitForUpdate();
+      stdin.write('x'.repeat(801));
+      await waitForUpdate();
+      stdin.write('\u001B[D');
+      await waitForUpdate();
+      stdin.write('A');
+      await waitForUpdate();
+
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('prefix A');
+      expect(frame).toContain('█[Pasted text #1]');
     });
   });
 });

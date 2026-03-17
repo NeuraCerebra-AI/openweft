@@ -16,6 +16,7 @@ export interface AdapterCommandSpec {
   cwd: string;
   input?: string;
   env?: Record<string, string>;
+  idleTimeoutMs?: number;
 }
 
 export interface CommandExecutionResult {

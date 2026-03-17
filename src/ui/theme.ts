@@ -11,7 +11,6 @@ export interface ThemeColors {
   readonly subtext: string;
   readonly blue: string;
   readonly mauve: string;
-  readonly pink: string;
   readonly peach: string;
   readonly sky: string;
   readonly teal: string;
@@ -45,7 +44,6 @@ export const catppuccinMocha: Theme = {
     subtext: '#a6adc8',
     blue: '#89b4fa',
     mauve: '#cba6f7',
-    pink: '#f5c2e7',
     peach: '#fab387',
     sky: '#89dceb',
     teal: '#94e2d5',

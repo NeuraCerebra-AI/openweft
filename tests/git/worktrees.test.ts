@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -15,8 +15,8 @@ import {
   hasChangesSince,
   listWorktrees,
   mergeBranchIntoCurrent,
-  mergeBranchesInOrder,
   mergeBranchIntoWorktree,
+  pruneOrphanedOpenWeftArtifacts,
   removeWorktree,
   resetWorktreeToHead,
   restoreAutoGc,
@@ -158,12 +158,18 @@ describe('git worktree infrastructure', () => {
     await commitChange(branchBPath, 'value = 3\n', 'agent b change');
     await commitChange(branchCPath, 'secondary = 2\n', 'agent c change', 'secondary.txt');
 
-    const ordered = await mergeBranchesInOrder(repoRoot, ['agent-a', 'agent-b', 'agent-c']);
+    const mergeResults = [
+      await mergeBranchIntoCurrent(repoRoot, 'agent-a'),
+      await mergeBranchIntoCurrent(repoRoot, 'agent-b'),
+      await mergeBranchIntoCurrent(repoRoot, 'agent-c')
+    ];
+    const successful = mergeResults.filter((result) => result.status === 'merged');
+    const failed = mergeResults.filter((result) => result.status === 'conflict');
 
-    expect(ordered.successful).toHaveLength(2);
-    expect(ordered.failed).toHaveLength(1);
-    expect(ordered.failed[0]?.conflicts[0]?.file).toBe('src.txt');
-    expect(ordered.successful.map((entry) => entry.branch)).toEqual(['agent-a', 'agent-c']);
+    expect(successful).toHaveLength(2);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.conflicts[0]?.file).toBe('src.txt');
+    expect(successful.map((entry) => entry.branch)).toEqual(['agent-a', 'agent-c']);
     expect(await readFile(path.join(repoRoot, 'secondary.txt'), 'utf8')).toBe('secondary = 2\n');
   });
 
@@ -292,6 +298,56 @@ describe('git worktree infrastructure', () => {
     expect(recreated.branch).toBe('agent-reuse');
   });
 
+  it('prunes orphaned OpenWeft worktrees, branches, and stray directories while preserving retained artifacts', async () => {
+    const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
+    const retainedPath = path.join(worktreesDir, '001');
+    const orphanPath = path.join(worktreesDir, '999');
+    const strayPath = path.join(worktreesDir, 'stray');
+
+    await createWorktree({
+      repoRoot,
+      worktreePath: retainedPath,
+      branchName: 'openweft-001-retained'
+    });
+    await createWorktree({
+      repoRoot,
+      worktreePath: orphanPath,
+      branchName: 'openweft-999-orphan'
+    });
+    await mkdir(strayPath, { recursive: true });
+    await writeFile(path.join(strayPath, 'note.txt'), 'orphan\n', 'utf8');
+
+    const result = await pruneOrphanedOpenWeftArtifacts({
+      repoRoot,
+      worktreesDir,
+      retainedWorktreePaths: [retainedPath],
+      retainedBranchNames: ['openweft-001-retained']
+    });
+
+    expect(result.removedWorktreePaths.some((removedPath) => removedPath.endsWith(`${path.sep}999`))).toBe(true);
+    expect(result.removedWorktreePaths.some((removedPath) => removedPath.endsWith(`${path.sep}stray`))).toBe(true);
+    expect(result.removedWorktreePaths.some((removedPath) => removedPath.endsWith(`${path.sep}001`))).toBe(false);
+    expect(result.removedBranchNames).toContain('openweft-999-orphan');
+    expect(result.removedBranchNames).not.toContain('openweft-001-retained');
+
+    const listed = await listWorktrees(repoRoot);
+    expect(
+      await Promise.all(listed.map(async (entry) => samePath(entry.path, retainedPath).catch(() => false))).then(
+        (matches) => matches.some(Boolean)
+      )
+    ).toBe(true);
+    expect(
+      await Promise.all(listed.map(async (entry) => samePath(entry.path, orphanPath).catch(() => false))).then(
+        (matches) => matches.some(Boolean)
+      )
+    ).toBe(false);
+
+    const branches = await simpleGit(repoRoot).branchLocal();
+    expect(branches.all).toContain('openweft-001-retained');
+    expect(branches.all).not.toContain('openweft-999-orphan');
+    await expect(readFile(path.join(strayPath, 'note.txt'), 'utf8')).rejects.toThrow();
+  });
+
   it('reports worktree status relative to the base ref', async () => {
     const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-status');
     await createWorktree({
@@ -339,6 +395,45 @@ describe('git worktree infrastructure', () => {
 
     expect(commit).not.toBeNull();
     expect(await hasChangesSince(worktreePath, created.head)).toBe(true);
+  });
+
+  it('does not commit unrelated untracked files by default', async () => {
+    const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-untracked');
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName: 'agent-untracked'
+    });
+
+    await writeFile(path.join(worktreePath, 'scratch.txt'), 'temp\n', 'utf8');
+    const commit = await commitAllChanges(worktreePath, 'ignore scratch artifact');
+
+    expect(commit).toBeNull();
+    const status = await simpleGit(worktreePath).status();
+    expect(status.not_added).toContain('scratch.txt');
+  });
+
+  it('can stage manifest-listed new files without picking up other untracked files', async () => {
+    const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-manifest-stage');
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName: 'agent-manifest-stage'
+    });
+
+    await mkdir(path.join(worktreePath, 'src'), { recursive: true });
+    await writeFile(path.join(worktreePath, 'src', 'created.ts'), 'export const value = 1;\n', 'utf8');
+    await writeFile(path.join(worktreePath, 'scratch.txt'), 'temp\n', 'utf8');
+    const commit = await commitAllChanges(
+      worktreePath,
+      'stage only manifest files',
+      ['src/created.ts']
+    );
+
+    expect(commit).not.toBeNull();
+    const status = await simpleGit(worktreePath).status();
+    expect(status.not_added).toContain('scratch.txt');
+    expect(status.not_added).not.toContain('src/created.ts');
   });
 
   it('resets dirty worktrees back to HEAD for retries', async () => {

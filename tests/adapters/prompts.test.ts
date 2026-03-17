@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildConflictResolutionPrompt,
   CODE_EDIT_SUMMARY_MARKER,
   USER_REQUEST_MARKER,
   buildExecutionPrompt,
@@ -17,10 +18,10 @@ describe('adapter prompt helpers', () => {
     ).toBe('Adjust: {"files":[]}');
   });
 
-  it('replaces only the first occurrence when the marker appears multiple times', () => {
+  it('replaces every occurrence when the marker appears multiple times', () => {
     const template = `${USER_REQUEST_MARKER} and also ${USER_REQUEST_MARKER}`;
     const result = injectPromptTemplate(template, USER_REQUEST_MARKER, 'x');
-    expect(result).toBe(`x and also ${USER_REQUEST_MARKER}`);
+    expect(result).toBe('x and also x');
   });
 
   it('fails when the requested marker is missing', () => {
@@ -39,5 +40,28 @@ describe('adapter prompt helpers', () => {
     expect(prompt).toContain('=== PLAN START ===');
     expect(prompt).toContain('# Plan\nDo it');
     expect(prompt).toContain('Do not modify the plan file');
+  });
+
+  it('builds a conflict-resolution prompt with plan context when available', () => {
+    const prompt = buildConflictResolutionPrompt({
+      instruction: 'Resolve all conflict markers, preserve both sides, then commit.',
+      planFilePath: '/repo/feature_requests/001_plan.md',
+      planContent: '# Plan\nKeep both changes where compatible'
+    });
+
+    expect(prompt).toContain('/repo/feature_requests/001_plan.md');
+    expect(prompt).toContain('=== PLAN START ===');
+    expect(prompt).toContain('Keep both changes where compatible');
+    expect(prompt).toContain('Resolve all conflict markers');
+  });
+
+  it('falls back to the bare conflict-resolution instruction when plan context is unavailable', () => {
+    expect(
+      buildConflictResolutionPrompt({
+        instruction: 'Resolve the conflicts.',
+        planFilePath: null,
+        planContent: null
+      })
+    ).toBe('Resolve the conflicts.');
   });
 });

@@ -10,7 +10,7 @@ export const injectPromptTemplate = (
     throw new Error(`Prompt template is missing marker ${marker}.`);
   }
 
-  return template.replace(marker, replacement);
+  return template.replaceAll(marker, replacement);
 };
 
 export const buildExecutionPrompt = (input: {
@@ -27,4 +27,24 @@ listed in the plan's manifest.
 === PLAN START ===
 ${input.planContent}
 === PLAN END ===`;
+};
+
+export const buildConflictResolutionPrompt = (input: {
+  instruction: string;
+  planFilePath?: string | null;
+  planContent?: string | null;
+}): string => {
+  if (!input.planFilePath || !input.planContent) {
+    return input.instruction;
+  }
+
+  return `You are resolving a merge conflict for an OpenWeft feature.
+The original implementation plan is available at ${input.planFilePath} and is included below for context.
+Use it to preserve the intended feature behavior while reconciling both sides of the merge.
+
+=== PLAN START ===
+${input.planContent}
+=== PLAN END ===
+
+${input.instruction}`;
 };

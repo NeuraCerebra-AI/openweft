@@ -44,6 +44,23 @@ export function resolveTokens(
   });
 }
 
+export function getPasteTokenRanges(
+  value: string,
+): Array<{ start: number; end: number; id: number }> {
+  const ranges: Array<{ start: number; end: number; id: number }> = [];
+
+  for (const match of value.matchAll(PASTE_TOKEN_RE)) {
+    if (match.index === undefined) continue;
+    ranges.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      id: parseInt(match[1]!, 10),
+    });
+  }
+
+  return ranges;
+}
+
 /**
  * If the value ends with a paste token, return the value with the token
  * removed and the paste ID that was deleted. Returns null if no token at end.

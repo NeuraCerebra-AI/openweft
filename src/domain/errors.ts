@@ -5,15 +5,27 @@ export interface ClassifiedError {
   reason: string;
 }
 
-const TRANSIENT_PATTERNS = [/429/, /rate limit/i, /retry-after/i, /etimedout/i, /econnreset/i, /eai_again/i];
+const TRANSIENT_PATTERNS = [
+  /429/,
+  /rate limit/i,
+  /retry-after/i,
+  /etimedout/i,
+  /econnreset/i,
+  /eai_again/i,
+  /getaddrinfo enotfound/i,
+  /\b503\b.*\bservice unavailable\b/i
+];
 const FATAL_PATTERNS = [
   /not logged in/i,
   /authentication/i,
   /auth failed/i,
+  /\b401\b.*\bunauthorized\b/i,
+  /incorrect api key/i,
   /command not found/i,
   /enoent/i,
   /enospc/i,
   /disk full/i,
+  /missing required api key environment variable/i,
   /invalid config/i,
   /template empty/i
 ];

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { access } from 'node:fs/promises';
 
 import { cosmiconfig } from 'cosmiconfig';
+import { z } from 'zod';
 
 import { buildRuntimePaths } from '../fs/paths.js';
 import {
@@ -139,8 +140,24 @@ export const loadOpenWeftConfig = async (
   });
   const searchDirectory = await findExistingSearchDirectory(cwd);
   const result = await explorer.search(searchDirectory);
+  let parsedConfig: OpenWeftConfig;
+  try {
+    parsedConfig = mergeConfigWithDefaults(result?.config);
+  } catch (error) {
+    if (!(error instanceof z.ZodError)) {
+      throw error;
+    }
 
-  const parsedConfig = mergeConfigWithDefaults(result?.config);
+    const configLocation = result?.filepath ?? 'OpenWeft config';
+    const details = error.issues
+      .map((issue) => {
+        const field = issue.path.length > 0 ? issue.path.join('.') : '(root)';
+        return `  • ${field}: ${issue.message}`;
+      })
+      .join('\n');
+
+    throw new Error(`Error in ${configLocation}:\n${details}`, { cause: error });
+  }
   const repoRoot = result?.filepath ? path.dirname(result.filepath) : path.resolve(cwd);
   const resolvedConfig = resolveConfig(parsedConfig, repoRoot, result?.filepath ?? null);
 

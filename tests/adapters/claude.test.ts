@@ -42,6 +42,7 @@ describe('claude adapter', () => {
       '/tmp/extra'
     ]);
     expect(command.input).toBe('Reply with OK.');
+    expect(command.idleTimeoutMs).toBe(90 * 60 * 1000);
   });
 
   it('builds a resume command that preserves the session id', () => {
@@ -68,6 +69,27 @@ describe('claude adapter', () => {
       '/tmp/shared',
       '/tmp/extra'
     ]);
+    expect(command.idleTimeoutMs).toBe(90 * 60 * 1000);
+  });
+
+  it('uses a shorter idle timeout for planning stages', () => {
+    const command = buildClaudeCommand({
+      ...baseRequest(),
+      stage: 'planning-s2'
+    });
+
+    expect(command.idleTimeoutMs).toBe(30 * 60 * 1000);
+  });
+
+  it('does not skip permissions for plan-mode turns', () => {
+    const command = buildClaudeCommand({
+      ...baseRequest(),
+      claudePermissionMode: 'plan'
+    });
+
+    expect(command.args).toContain('--permission-mode');
+    expect(command.args).toContain('plan');
+    expect(command.args).not.toContain('--dangerously-skip-permissions');
   });
 
   it('always includes dangerously-skip-permissions when permission mode is omitted', () => {

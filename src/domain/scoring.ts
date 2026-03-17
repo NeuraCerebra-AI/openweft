@@ -61,7 +61,7 @@ const clamp = (value: number, min: number, max: number): number => Math.min(max,
 
 const normalizeValue = (value: number, min: number, max: number): number => {
   if (max === min) {
-    return 0;
+    return value === 0 ? 0 : 1;
   }
 
   return (value - min) / (max - min);
@@ -201,6 +201,7 @@ export const smoothPriority = (
     return rawPriority;
   }
 
+  // Favor responsiveness for the first two revisits, then settle into a conservative EWMA.
   const lambda = cyclesSeen < 2 ? 1.0 : 0.25;
   return lambda * rawPriority + (1 - lambda) * previousSmoothedPriority;
 };

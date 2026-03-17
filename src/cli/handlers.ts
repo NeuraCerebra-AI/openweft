@@ -9,9 +9,11 @@ import type { BackendDetection } from '../ui/onboarding/types.js';
 import { getDefaultConfig, loadOpenWeftConfig } from '../config/index.js';
 import {
   appendRequestsToQueueContent,
-  collectRequestsFromInput,
   getNextFeatureIdFromQueue,
-  parseQueueFile
+  normalizeQueuedRequest,
+  parseQueueFile,
+  removePendingQueueLine,
+  summarizeQueueRequest
 } from '../domain/queue.js';
 import {
   buildDefaultRuntimePaths,
@@ -66,6 +68,12 @@ interface CliDependencies {
   spawnTmuxSession: (input: TmuxSpawnInput) => Promise<TmuxSpawnResult>;
   sleep: (ms: number) => Promise<void>;
 }
+
+const ACTIONABLE_CHECKPOINT_STATUSES = new Set(['pending', 'planned', 'executing', 'failed']);
+
+const isActionableCheckpointFeature = (feature: { status: string }): boolean => {
+  return ACTIONABLE_CHECKPOINT_STATUSES.has(feature.status);
+};
 
 export const DEFAULT_PROMPT_A_TEMPLATE = `You are preparing a planning prompt for a coding agent.
 
@@ -331,6 +339,7 @@ export const createCommandHandlers = (
     configHash: string;
     gated?: boolean;
     prePopulate?: (store: StoreApi<UIStore>) => void;
+    onStartRequest?: (store: StoreApi<UIStore>) => Promise<void> | void;
     onRemoveAgent?: (agentId: string, store: StoreApi<UIStore>) => Promise<void>;
     onAddRequest?: (request: string, store: StoreApi<UIStore>) => Promise<void>;
   }): Promise<void> => {
@@ -373,7 +382,17 @@ export const createCommandHandlers = (
           gateResolve?.('quit');
         },
         onApprovalDecision: (decision) => { approvalController.resolveCurrent(decision); },
-        ...(input.gated ? { onStartRequest: () => { uiStore.getState().requestExecution(); } } : {}),
+        ...(input.gated
+          ? {
+              onStartRequest: () => {
+                if (input.onStartRequest) {
+                  void input.onStartRequest(uiStore);
+                  return;
+                }
+                uiStore.getState().requestExecution();
+              }
+            }
+          : {}),
         ...(input.onRemoveAgent ? { onRemoveAgent: (agentId: string) => { void input.onRemoveAgent!(agentId, uiStore); } } : {}),
         ...(input.onAddRequest ? { onAddRequest: (request: string) => { void input.onAddRequest!(request, uiStore); } } : {}),
       }),
@@ -394,11 +413,9 @@ export const createCommandHandlers = (
       if (gatePromise) {
         const action = await gatePromise;
         if (action === 'quit') return;
-        // Clear placeholder queued agents — orchestrator will emit real ones
-        uiStore.getState().clearQueuedAgents();
       }
 
-      await runRealOrchestration({
+      const result = await runRealOrchestration({
         config: input.config,
         configHash: input.configHash,
         adapter: selectAdapter({ backend: input.config.backend, streamOutput: false }),
@@ -410,6 +427,13 @@ export const createCommandHandlers = (
         sleep: resolvedDependencies.sleep,
         onEvent,
       });
+
+      uiStore.getState().setCompletion({
+        status: result.checkpoint.status,
+        plannedCount: result.plannedCount,
+        mergedCount: result.mergedCount,
+      });
+      await resolvedDependencies.sleep(1500);
     } finally {
       process.off('SIGINT', signalHandler);
       process.off('SIGTERM', signalHandler);
@@ -456,18 +480,49 @@ export const createCommandHandlers = (
       });
 
       const hasWork = pending.length > 0 || (checkpointResult.checkpoint !== null &&
-        Object.values(checkpointResult.checkpoint.features).some((f) =>
-          f.status === 'planned' || f.status === 'executing' || f.status === 'pending'
+        Object.values(checkpointResult.checkpoint.features).some((feature) =>
+          isActionableCheckpointFeature(feature)
         ));
 
-      if (hasWork) {
+      if (hasWork || process.stdout.isTTY) {
         if (!process.stdout.isTTY) {
           await handlers.start({});
           return;
         }
 
+        type QueuedReadyStateRow = {
+          request: string;
+          lineIndex: number;
+        };
+
         let nextQueuedRowId = 1;
-        const queuedRequestMap = new Map<string, string>();
+        const queuedRequestMap = new Map<string, QueuedReadyStateRow>();
+        let readyStateMutationQueue: Promise<void> = Promise.resolve();
+
+        const enqueueReadyStateMutation = (mutation: () => Promise<void>): Promise<void> => {
+          const pendingMutation = readyStateMutationQueue.then(mutation);
+          readyStateMutationQueue = pendingMutation.catch(() => {});
+          return pendingMutation;
+        };
+
+        const drainReadyStateMutations = async (): Promise<void> => {
+          await readyStateMutationQueue;
+        };
+
+        const hasActionableReadyStateRows = (store: StoreApi<UIStore>): boolean => {
+          return store.getState().agents.some((agent) => agent.status === 'queued');
+        };
+
+        const shiftQueuedRowsAfterRemoval = (removedLineIndex: number): void => {
+          for (const [id, row] of queuedRequestMap.entries()) {
+            if (row.lineIndex > removedLineIndex) {
+              queuedRequestMap.set(id, {
+                ...row,
+                lineIndex: row.lineIndex - 1
+              });
+            }
+          }
+        };
 
         await startTuiSession({
           config,
@@ -477,10 +532,13 @@ export const createCommandHandlers = (
             // Checkpoint features (not removable)
             if (checkpointResult.checkpoint) {
               for (const feature of Object.values(checkpointResult.checkpoint.features)) {
+                if (!isActionableCheckpointFeature(feature)) {
+                  continue;
+                }
                 store.getState().addAgent({
                   id: feature.id,
-                  name: feature.title ?? feature.request,
-                  feature: feature.request,
+                  name: feature.title ?? summarizeQueueRequest(feature.request),
+                  feature: feature.title ?? summarizeQueueRequest(feature.request),
                   status: 'queued',
                   removable: false,
                 });
@@ -489,45 +547,90 @@ export const createCommandHandlers = (
             // Queue pending items (removable)
             for (const line of pending) {
               const id = `queued-${nextQueuedRowId++}`;
+              const requestLabel = summarizeQueueRequest(line.request);
               store.getState().addAgent({
                 id,
-                name: line.request,
-                feature: line.request,
+                name: requestLabel,
+                feature: requestLabel,
                 status: 'queued',
                 removable: true,
               });
-              queuedRequestMap.set(id, line.request);
+              queuedRequestMap.set(id, {
+                request: line.request,
+                lineIndex: line.lineIndex
+              });
             }
             const first = store.getState().agents[0];
             if (first) store.getState().setFocusedAgent(first.id);
           },
-          onRemoveAgent: async (agentId, store) => {
-            const request = queuedRequestMap.get(agentId);
-            if (!request) return;
-            store.getState().removeAgent(agentId);
-            queuedRequestMap.delete(agentId);
-            const currentQueue = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
-            const parsed = parseQueueFile(currentQueue);
-            const match = parsed.pending.find((l) => l.request === request);
-            if (match) {
-              const lines = currentQueue.split('\n');
-              lines.splice(match.lineIndex, 1);
-              await writeTextFileAtomic(config.paths.queueFile, lines.join('\n'));
+          onStartRequest: async (store) => {
+            await drainReadyStateMutations();
+
+            if (!hasActionableReadyStateRows(store)) {
+              store.getState().setNotice({
+                level: 'info',
+                message: 'No queued or resumable work to start.'
+              });
+              return;
             }
+
+            store.getState().requestExecution();
+          },
+          onRemoveAgent: async (agentId, store) => {
+            await enqueueReadyStateMutation(async () => {
+              const queuedRow = queuedRequestMap.get(agentId);
+              if (!queuedRow) {
+                return;
+              }
+
+              try {
+                const currentQueue = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
+                const updatedQueue = removePendingQueueLine(
+                  currentQueue,
+                  queuedRow.lineIndex,
+                  queuedRow.request
+                );
+                await writeTextFileAtomic(config.paths.queueFile, updatedQueue);
+                store.getState().removeAgent(agentId);
+                queuedRequestMap.delete(agentId);
+                shiftQueuedRowsAfterRemoval(queuedRow.lineIndex);
+              } catch {
+                store.getState().setNotice({ level: 'error', message: 'Failed to write to queue file' });
+              }
+            });
           },
           onAddRequest: async (request, store) => {
-            try {
-              const currentQueue = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
-              const updated = appendRequestsToQueueContent(currentQueue, [request]);
-              await writeTextFileAtomic(config.paths.queueFile, updated);
-              const id = `queued-${nextQueuedRowId++}`;
-              store.getState().addAgent({ id, name: request, feature: request, status: 'queued', removable: true });
-              queuedRequestMap.set(id, request);
-              store.getState().setFocusedAgent(id);
-              store.getState().setAddInputText(null);
-            } catch {
-              store.getState().setNotice({ level: 'error', message: 'Failed to write to queue file' });
-            }
+            await enqueueReadyStateMutation(async () => {
+              const trimmed = request.trim();
+              const normalizedRequest = normalizeQueuedRequest(request);
+              if (normalizedRequest === null) return;
+              try {
+                const currentQueue = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
+                const updated = appendRequestsToQueueContent(currentQueue, [normalizedRequest]);
+                await writeTextFileAtomic(config.paths.queueFile, updated);
+                const appendedLine = parseQueueFile(updated).pending.at(-1);
+                if (!appendedLine || appendedLine.request !== normalizedRequest) {
+                  throw new Error('Failed to locate appended queue request.');
+                }
+                const id = `queued-${nextQueuedRowId++}`;
+                const requestLabel = summarizeQueueRequest(normalizedRequest);
+                store.getState().addAgent({
+                  id,
+                  name: requestLabel,
+                  feature: requestLabel,
+                  status: 'queued',
+                  removable: true
+                });
+                queuedRequestMap.set(id, {
+                  request: normalizedRequest,
+                  lineIndex: appendedLine.lineIndex
+                });
+                store.getState().setFocusedAgent(id);
+                store.getState().setAddInputText(null);
+              } catch {
+                store.getState().setNotice({ level: 'error', message: 'Failed to write to queue file' });
+              }
+            });
           },
         });
         return;
@@ -537,6 +640,11 @@ export const createCommandHandlers = (
     },
     init: async () => {
       const cwd = resolvedDependencies.getCwd();
+      const gitRepoDetected = await resolvedDependencies.detectGitRepo();
+      if (!gitRepoDetected) {
+        throw new Error('OpenWeft init must be run inside a git repository. Run "git init" first.');
+      }
+
       const configPath = path.join(cwd, '.openweftrc.json');
       const { config } = await loadOpenWeftConfig(cwd);
       const configExists = config.configFilePath !== null;
@@ -597,18 +705,22 @@ export const createCommandHandlers = (
     add: async (...args: unknown[]) => {
       const requestArgument = typeof args[0] === 'string' ? args[0] : undefined;
       const rawInput = await readCommandInput(requestArgument);
-      const requests = collectRequestsFromInput(rawInput);
+      const request = normalizeQueuedRequest(rawInput);
 
-      if (requests.length === 0) {
+      if (request === null) {
         throw new Error('No queueable feature requests were found.');
       }
 
       const { config } = await loadOpenWeftConfig(resolvedDependencies.getCwd());
+      if (config.configFilePath === null) {
+        throw new Error('OpenWeft is not initialized here. Run "openweft init" first.');
+      }
+
       await ensureRuntimeDirectories(config.paths);
       await ensureQueueFile(config.paths.queueFile);
 
       const existingQueueContent = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
-      const updatedQueueContent = appendRequestsToQueueContent(existingQueueContent, requests);
+      const updatedQueueContent = appendRequestsToQueueContent(existingQueueContent, [request]);
       await writeTextFileAtomic(config.paths.queueFile, updatedQueueContent);
 
       const existingPlanFiles = await pathExists(config.paths.featureRequestsDir)
@@ -616,25 +728,22 @@ export const createCommandHandlers = (
         : [];
       const existingPendingCount = parseQueueFile(existingQueueContent).pending.length;
       const firstId = getNextFeatureIdFromQueue(existingPlanFiles, existingQueueContent) + existingPendingCount;
-      let nextId = firstId;
 
       if (process.stdout.isTTY) {
         const React = await import('react');
         const { renderStyledOutput, InfoCard } = await import('../ui/styledOutput.js');
-        const queuedItems = requests.map((req, index) => `#${(firstId + index).toString().padStart(3, '0')} "${req}"`).join(', ');
         await renderStyledOutput(
           React.createElement(InfoCard, {
-            message: `Queued ${requests.length} request${requests.length === 1 ? '' : 's'}`,
-            detail: queuedItems,
+            message: 'Queued 1 request',
+            detail: `#${firstId.toString().padStart(3, '0')} "${summarizeQueueRequest(request)}"`,
           })
         );
         return;
       }
 
-      for (const request of requests) {
-        resolvedDependencies.writeLine(`Queued #${nextId.toString().padStart(3, '0')} "${request}"`);
-        nextId += 1;
-      }
+      resolvedDependencies.writeLine(
+        `Queued #${firstId.toString().padStart(3, '0')} "${summarizeQueueRequest(request)}"`
+      );
     },
     start: async (...args: unknown[]) => {
       const options = (args[0] ?? {}) as {
@@ -645,6 +754,10 @@ export const createCommandHandlers = (
       };
 
       const { config, configHash } = await loadOpenWeftConfig(resolvedDependencies.getCwd());
+      if (config.configFilePath === null) {
+        throw new Error('OpenWeft is not initialized here. Run "openweft init" first.');
+      }
+
       await ensureRuntimeDirectories(config.paths);
       await ensureQueueFile(config.paths.queueFile);
 
@@ -716,7 +829,38 @@ export const createCommandHandlers = (
       }
 
       if (process.stdout.isTTY && !options.bg && !options.tmux && !tmuxMonitor && !options.dryRun) {
-        await startTuiSession({ config, configHash });
+        let nextInlineQueuedAgentId = 1;
+
+        await startTuiSession({
+          config,
+          configHash,
+          onAddRequest: async (request, store) => {
+            const normalizedRequest = normalizeQueuedRequest(request);
+            if (normalizedRequest === null) {
+              return;
+            }
+
+            try {
+              const currentQueue = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
+              const updated = appendRequestsToQueueContent(currentQueue, [normalizedRequest]);
+              await writeTextFileAtomic(config.paths.queueFile, updated);
+
+              const agentId = `queued-live-${nextInlineQueuedAgentId++}`;
+              const requestLabel = summarizeQueueRequest(normalizedRequest);
+              store.getState().addAgent({
+                id: agentId,
+                name: requestLabel,
+                feature: requestLabel,
+                status: 'queued',
+                removable: false,
+              });
+              store.getState().setFocusedAgent(agentId);
+              store.getState().setAddInputText(null);
+            } catch {
+              store.getState().setNotice({ level: 'error', message: 'Failed to write to queue file' });
+            }
+          },
+        });
         return;
       }
 
@@ -780,6 +924,10 @@ export const createCommandHandlers = (
     },
     status: async () => {
       const { config } = await loadOpenWeftConfig(resolvedDependencies.getCwd());
+      if (config.configFilePath === null) {
+        throw new Error('OpenWeft is not initialized here. Run "openweft init" first.');
+      }
+
       await ensureRuntimeDirectories(config.paths);
       await ensureQueueFile(config.paths.queueFile);
 
@@ -797,13 +945,14 @@ export const createCommandHandlers = (
         const React = await import('react');
         const { renderStyledOutput, StatusCard } = await import('../ui/styledOutput.js');
         const cp = checkpointResult.checkpoint;
+        const pendingQueue = parseQueueFile(queueContent).pending.map((line) => summarizeQueueRequest(line.request));
         const phase = cp?.currentPhase
           ? `${cp.currentPhase.name} (${cp.currentPhase.featureIds.length} feature${cp.currentPhase.featureIds.length === 1 ? '' : 's'})`
           : cp?.status ?? 'idle';
         const cost = cp ? `$${cp.cost.totalEstimatedUsd.toFixed(4)}` : '$0.0000';
         const agents = cp
           ? Object.values(cp.features).map((f) => ({
-              name: `${f.id} ${f.title ?? f.request}`,
+              name: `${f.id} ${f.title ?? summarizeQueueRequest(f.request)}`,
               status: f.status === 'executing' ? 'running' : f.status,
             }))
           : [];
@@ -813,6 +962,7 @@ export const createCommandHandlers = (
             phase,
             cost,
             agents,
+            pendingRequests: pendingQueue,
           })
         );
         return;
@@ -828,6 +978,10 @@ export const createCommandHandlers = (
     },
     stop: async () => {
       const { config } = await loadOpenWeftConfig(resolvedDependencies.getCwd());
+      if (config.configFilePath === null) {
+        throw new Error('OpenWeft is not initialized here. Run "openweft init" first.');
+      }
+
       const background = await readBackgroundPid(
         config.paths.pidFile,
         resolvedDependencies.isPidAlive

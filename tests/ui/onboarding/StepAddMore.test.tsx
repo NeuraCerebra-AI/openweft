@@ -143,7 +143,7 @@ describe('StepAddMore', () => {
 
       const frame = lastFrame() ?? '';
       expect(frame).toContain('Enter submit');
-      expect(frame).toContain('Esc quit');
+      expect(frame).toContain('Esc cancel');
       // select and back keys should NOT be shown in input mode
       expect(frame).not.toContain('↑↓ select');
       expect(frame).not.toContain('← back');
@@ -338,9 +338,9 @@ describe('StepAddMore', () => {
       expect(onExit).toHaveBeenCalledOnce();
     });
 
-    it('calls onExit when Esc is pressed in input mode with empty input', async () => {
+    it('returns to select mode when Esc is pressed in input mode with empty input', async () => {
       const onExit = vi.fn();
-      const { stdin } = renderWithTheme(
+      const { stdin, lastFrame } = renderWithTheme(
         <StepAddMore {...defaultProps} onExit={onExit} />,
       );
 
@@ -354,7 +354,35 @@ describe('StepAddMore', () => {
       stdin.write('\u001B');
       await waitForUpdate();
 
-      expect(onExit).toHaveBeenCalledOnce();
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('Continue to launch');
+      expect(onExit).not.toHaveBeenCalled();
+    });
+
+    it('returns to select mode when Esc is pressed in input mode with typed text', async () => {
+      const onExit = vi.fn();
+      const { stdin, lastFrame } = renderWithTheme(
+        <StepAddMore {...defaultProps} onExit={onExit} />,
+      );
+
+      await waitForMount();
+      stdin.write('\u001B[B');
+      await waitForUpdate();
+      stdin.write('\r'); // enter input mode
+      await waitForUpdate();
+      stdin.write('n');
+      await waitForUpdate();
+      stdin.write('e');
+      await waitForUpdate();
+      stdin.write('w');
+      await waitForUpdate();
+
+      stdin.write('\u001B');
+      await waitForUpdate();
+
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('Continue to launch');
+      expect(onExit).not.toHaveBeenCalled();
     });
   });
 

@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { simpleGit } from 'simple-git';
 
 import { MockAgentAdapter } from '../../src/adapters/mock.js';
@@ -13,17 +13,21 @@ import type {
   AdapterTurnResult
 } from '../../src/adapters/types.js';
 import { loadOpenWeftConfig } from '../../src/config/index.js';
+import { createWorktree, getAutoGcSetting, listWorktrees, setAutoGc } from '../../src/git/index.js';
 import type { NotificationDependencies } from '../../src/notifications/index.js';
 import { ApprovalController } from '../../src/orchestrator/approval.js';
 import { StopController } from '../../src/orchestrator/stop.js';
 import { runRealOrchestration } from '../../src/orchestrator/realRun.js';
+import { loadCheckpoint } from '../../src/state/checkpoint.js';
 
 class RecordingAdapter implements AgentAdapter {
-  readonly backend = 'mock' as const;
+  readonly backend: AgentAdapter['backend'];
 
   readonly requests: AdapterTurnRequest[] = [];
 
-  constructor(private readonly inner: AgentAdapter) {}
+  constructor(private readonly inner: AgentAdapter) {
+    this.backend = inner.backend;
+  }
 
   buildCommand(request: AdapterTurnRequest): AdapterCommandSpec {
     return this.inner.buildCommand(request);
@@ -70,6 +74,415 @@ class RecordingClaudeFailureAdapter implements AgentAdapter {
   }
 }
 
+class DeterministicScoringAdapter implements AgentAdapter {
+  readonly backend = 'codex' as const;
+
+  buildCommand(request: AdapterTurnRequest): AdapterCommandSpec {
+    return {
+      command: 'codex',
+      args: [request.stage],
+      cwd: request.cwd
+    };
+  }
+
+  async runTurn(request: AdapterTurnRequest): Promise<AdapterTurnResult> {
+    if (request.stage === 'execution') {
+      await mkdir(path.join(request.cwd, 'src'), { recursive: true });
+      await writeFile(path.join(request.cwd, 'src', 'target.ts'), 'export const target = 1;\n', 'utf8');
+    }
+
+    const finalMessage =
+      request.stage === 'planning-s1'
+        ? 'Use src/target.ts for the implementation plan.'
+        : request.stage === 'planning-s2'
+          ? `# Feature Plan: ${request.featureId}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/target.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`
+          : 'Execution complete.';
+    const sessionId = request.stage === 'planning-s1' ? 'deterministic-plan' : `deterministic-${request.stage}`;
+
+    return {
+      ok: true,
+      backend: 'codex',
+      sessionId,
+      finalMessage,
+      model: request.model,
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        cachedInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        totalCostUsd: 0,
+        raw: null
+      },
+      costRecord: {
+        featureId: request.featureId,
+        stage: request.stage,
+        model: request.model,
+        inputTokens: 10,
+        outputTokens: 5,
+        estimatedCostUsd: 0,
+        timestamp: new Date().toISOString()
+      },
+      artifacts: {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        command: this.buildCommand(request)
+      }
+    };
+  }
+}
+
+class DeterministicManifestAdapter implements AgentAdapter {
+  readonly backend = 'codex' as const;
+
+  readonly requests: AdapterTurnRequest[] = [];
+
+  constructor(private readonly manifestsByFeatureId: Record<string, string[]>) {}
+
+  buildCommand(request: AdapterTurnRequest): AdapterCommandSpec {
+    return {
+      command: 'codex',
+      args: [request.stage],
+      cwd: request.cwd
+    };
+  }
+
+  async runTurn(request: AdapterTurnRequest): Promise<AdapterTurnResult> {
+    this.requests.push(request);
+    const manifestPaths = this.manifestsByFeatureId[request.featureId] ?? ['src/target.ts'];
+    const currentPlanMatch =
+      request.stage === 'adjustment'
+        ? request.prompt.match(/=== CURRENT PLAN START ===\n([\s\S]*?)\n=== CURRENT PLAN END ===/)
+        : null;
+
+    if (request.stage === 'execution') {
+      for (const relativePath of manifestPaths) {
+        const absolutePath = path.join(request.cwd, relativePath);
+        await mkdir(path.dirname(absolutePath), { recursive: true });
+        await writeFile(
+          absolutePath,
+          `export const ${path.basename(relativePath, '.ts').replace(/[^a-zA-Z0-9_]/g, '_')} = '${request.featureId}';\n`,
+          'utf8'
+        );
+      }
+    }
+
+    const finalMessage =
+      request.stage === 'planning-s1'
+        ? `Use ${manifestPaths.join(', ')} for the implementation plan.`
+        : request.stage === 'planning-s2'
+          ? `# Feature Plan: ${request.featureId}
+
+## Manifest
+
+\`\`\`json manifest
+${JSON.stringify(
+  {
+    create: manifestPaths,
+    modify: [],
+    delete: []
+  },
+  null,
+  2
+)}
+\`\`\`
+`
+          : request.stage === 'adjustment'
+            ? currentPlanMatch?.[1]?.trim() ?? '# Feature Plan\n\n## Manifest\n\n```json manifest\n{"create":[],"modify":[],"delete":[]}\n```'
+          : 'Execution complete.';
+    const sessionId = `deterministic-${request.featureId}-${request.stage}`;
+
+    return {
+      ok: true,
+      backend: 'codex',
+      sessionId,
+      finalMessage,
+      model: request.model,
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        cachedInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        totalCostUsd: 0,
+        raw: null
+      },
+      costRecord: {
+        featureId: request.featureId,
+        stage: request.stage,
+        model: request.model,
+        inputTokens: 10,
+        outputTokens: 5,
+        estimatedCostUsd: 0,
+        timestamp: new Date().toISOString()
+      },
+      artifacts: {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        command: this.buildCommand(request)
+      }
+    };
+  }
+}
+
+class PartialPlanningFailureAdapter implements AgentAdapter {
+  readonly backend = 'codex' as const;
+
+  readonly requests: AdapterTurnRequest[] = [];
+
+  buildCommand(request: AdapterTurnRequest): AdapterCommandSpec {
+    return {
+      command: 'codex',
+      args: [request.stage],
+      cwd: request.cwd
+    };
+  }
+
+  async runTurn(request: AdapterTurnRequest): Promise<AdapterTurnResult> {
+    this.requests.push(request);
+
+    if (request.featureId === '002' && request.stage === 'planning-s1') {
+      return {
+        ok: false,
+        backend: 'codex',
+        sessionId: null,
+        model: request.model,
+        error: 'simulated second planning failure',
+        classified: {
+          tier: 'fatal',
+          reason: 'simulated second planning failure'
+        },
+        artifacts: {
+          stdout: '',
+          stderr: 'simulated second planning failure',
+          exitCode: 1,
+          command: this.buildCommand(request)
+        }
+      };
+    }
+
+    const finalMessage =
+      request.stage === 'planning-s1'
+        ? 'Use src/target.ts for the implementation plan.'
+        : request.stage === 'planning-s2'
+          ? `# Feature Plan: ${request.featureId}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/target.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`
+          : 'Execution complete.';
+
+    return {
+      ok: true,
+      backend: 'codex',
+      sessionId: `partial-${request.featureId}-${request.stage}`,
+      finalMessage,
+      model: request.model,
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        cachedInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        totalCostUsd: 0,
+        raw: null
+      },
+      costRecord: {
+        featureId: request.featureId,
+        stage: request.stage,
+        model: request.model,
+        inputTokens: 10,
+        outputTokens: 5,
+        estimatedCostUsd: 0,
+        timestamp: new Date().toISOString()
+      },
+      artifacts: {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        command: this.buildCommand(request)
+      }
+    };
+  }
+}
+
+class StopDuringExecutionFailureAdapter implements AgentAdapter {
+  readonly backend = 'codex' as const;
+
+  executionAttempts = 0;
+
+  constructor(private readonly stopController: StopController) {}
+
+  buildCommand(request: AdapterTurnRequest): AdapterCommandSpec {
+    return {
+      command: 'codex',
+      args: [request.stage],
+      cwd: request.cwd
+    };
+  }
+
+  async runTurn(request: AdapterTurnRequest): Promise<AdapterTurnResult> {
+    if (request.stage === 'planning-s1') {
+      return {
+        ok: true,
+        backend: 'codex',
+        sessionId: `stop-test-${request.stage}`,
+        finalMessage: 'Use src/target.ts for the implementation plan.',
+        model: request.model,
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          cachedInputTokens: 0,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+          totalCostUsd: 0,
+          raw: null
+        },
+        costRecord: {
+          featureId: request.featureId,
+          stage: request.stage,
+          model: request.model,
+          inputTokens: 10,
+          outputTokens: 5,
+          estimatedCostUsd: 0,
+          timestamp: new Date().toISOString()
+        },
+        artifacts: {
+          stdout: '',
+          stderr: '',
+          exitCode: 0,
+          command: this.buildCommand(request)
+        }
+      };
+    }
+
+    if (request.stage === 'planning-s2') {
+      return {
+        ok: true,
+        backend: 'codex',
+        sessionId: `stop-test-${request.stage}`,
+        finalMessage: `# Feature Plan: ${request.featureId}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/target.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`,
+        model: request.model,
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          cachedInputTokens: 0,
+          cacheCreationInputTokens: 0,
+          cacheReadInputTokens: 0,
+          totalCostUsd: 0,
+          raw: null
+        },
+        costRecord: {
+          featureId: request.featureId,
+          stage: request.stage,
+          model: request.model,
+          inputTokens: 10,
+          outputTokens: 5,
+          estimatedCostUsd: 0,
+          timestamp: new Date().toISOString()
+        },
+        artifacts: {
+          stdout: '',
+          stderr: '',
+          exitCode: 0,
+          command: this.buildCommand(request)
+        }
+      };
+    }
+
+    if (request.stage === 'execution') {
+      this.executionAttempts += 1;
+      await new Promise<void>((resolve) => {
+        setTimeout(() => {
+          this.stopController.request('keyboard');
+          resolve();
+        }, 10);
+      });
+
+      return {
+        ok: false,
+        backend: 'codex',
+        sessionId: `stop-test-${request.stage}-${this.executionAttempts}`,
+        model: request.model,
+        error: 'provider returned malformed patch output',
+        classified: {
+          tier: 'agent',
+          reason: 'provider returned malformed patch output'
+        },
+        artifacts: {
+          stdout: '',
+          stderr: 'provider returned malformed patch output',
+          exitCode: 1,
+          command: this.buildCommand(request)
+        }
+      };
+    }
+
+    return {
+      ok: true,
+      backend: 'codex',
+      sessionId: `stop-test-${request.stage}`,
+      finalMessage: 'Adjustment complete.',
+      model: request.model,
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        cachedInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        totalCostUsd: 0,
+        raw: null
+      },
+      costRecord: {
+        featureId: request.featureId,
+        stage: request.stage,
+        model: request.model,
+        inputTokens: 10,
+        outputTokens: 5,
+        estimatedCostUsd: 0,
+        timestamp: new Date().toISOString()
+      },
+      artifacts: {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        command: this.buildCommand(request)
+      }
+    };
+  }
+}
+
 const createTempRepo = async (): Promise<string> => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-realrun-'));
   const git = simpleGit(repoRoot);
@@ -98,7 +511,7 @@ const writeProjectFiles = async (
     path.join(repoRoot, '.openweftrc.json'),
     `${JSON.stringify(
       {
-        backend: 'mock',
+        backend: 'codex',
         concurrency: {
           maxParallelAgents: options.maxParallelAgents ?? 1,
           staggerDelayMs: 0
@@ -245,7 +658,7 @@ describe('runRealOrchestration', () => {
     expect(events).toContain('session:cost-update');
   });
 
-  it('uses Claude default permission mode for planning stage 1 requests', async () => {
+  it('uses Claude plan permission mode for repo-scoped planning requests', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -273,7 +686,248 @@ describe('runRealOrchestration', () => {
     ).rejects.toThrow('planning stage probe');
 
     expect(adapter.requests[0]?.stage).toBe('planning-s1');
-    expect(adapter.requests[0]?.claudePermissionMode).toBe('default');
+    expect(adapter.requests[0]?.claudePermissionMode).toBe('plan');
+  });
+
+  it('uses read-only repo-scoped turns for Codex planning and adjustment stages', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 2,
+      queueRequests: ['add feature alpha', 'add feature beta', 'add feature gamma']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(
+      new DeterministicManifestAdapter({
+        '001': ['src/a.ts'],
+        '002': ['src/b.ts'],
+        '003': ['src/a.ts', 'src/b.ts']
+      })
+    );
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+
+    const repoScopedTurns = adapter.requests.filter(
+      (request) =>
+        request.stage === 'planning-s1' ||
+        request.stage === 'planning-s2' ||
+        request.stage === 'adjustment'
+    );
+    expect(repoScopedTurns.length).toBeGreaterThan(0);
+    expect(repoScopedTurns.every((request) => request.cwd === repoRoot)).toBe(true);
+    expect(
+      repoScopedTurns.map((request) => ({
+        stage: request.stage,
+        sandboxMode: request.sandboxMode ?? null
+      }))
+    ).not.toContainEqual({
+      stage: 'planning-s1',
+      sandboxMode: 'danger-full-access'
+    });
+    expect(
+      repoScopedTurns.map((request) => ({
+        stage: request.stage,
+        sandboxMode: request.sandboxMode ?? null
+      }))
+    ).not.toContainEqual({
+      stage: 'planning-s2',
+      sandboxMode: 'danger-full-access'
+    });
+    expect(
+      repoScopedTurns.map((request) => ({
+        stage: request.stage,
+        sandboxMode: request.sandboxMode ?? null
+      }))
+    ).not.toContainEqual({
+      stage: 'adjustment',
+      sandboxMode: 'danger-full-access'
+    });
+    expect(repoScopedTurns.every((request) => request.sandboxMode === 'read-only')).toBe(true);
+  });
+
+  it('saves planned features to the checkpoint before scoring starts', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    vi.resetModules();
+    vi.doMock('../../src/domain/scoring.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/domain/scoring.js')>(
+        '../../src/domain/scoring.js'
+      );
+
+      return {
+        ...actual,
+        scoreQueue: vi.fn(() => {
+          throw new Error('scoring stage probe');
+        })
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runRealOrchestrationWithScoringProbe } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      await expect(
+        runRealOrchestrationWithScoringProbe({
+          config,
+          configHash,
+          adapter,
+          notificationDependencies: createNotificationRecorder().dependencies,
+          sleep: async () => {}
+        })
+      ).rejects.toThrow('scoring stage probe');
+    } finally {
+      vi.doUnmock('../../src/domain/scoring.js');
+      vi.resetModules();
+    }
+
+    expect(adapter.requests.map((request) => request.stage)).toEqual(['planning-s1', 'planning-s2']);
+
+    const saved = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+    const savedFeature = saved.checkpoint?.features['001'];
+
+    expect(saved.source).toBe('primary');
+    expect(saved.checkpoint?.status).toBe('in-progress');
+    expect(saved.checkpoint?.currentState).toBe('planning');
+    expect(savedFeature).toMatchObject({
+      id: '001',
+      request: 'add dashboard filters',
+      status: 'planned',
+      attempts: 0,
+      backend: 'mock'
+    });
+    expect(savedFeature?.planFile).toBeTruthy();
+    await expect(readFile(savedFeature?.planFile ?? '', 'utf8')).resolves.toContain('## Manifest');
+  });
+
+  it('persists planned features before the post-planning checkpoint save returns', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    vi.resetModules();
+    vi.doMock('../../src/domain/scoring.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/domain/scoring.js')>(
+        '../../src/domain/scoring.js'
+      );
+
+      return {
+        ...actual,
+        scoreQueue: vi.fn(() => {
+          throw new Error('scoring stage probe');
+        })
+      };
+    });
+    vi.doMock('../../src/state/checkpoint.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/state/checkpoint.js')>(
+        '../../src/state/checkpoint.js'
+      );
+
+      let saveCount = 0;
+
+      return {
+        ...actual,
+        saveCheckpoint: vi.fn(async (...args: Parameters<typeof actual.saveCheckpoint>) => {
+          saveCount += 1;
+          await actual.saveCheckpoint(...args);
+          if (saveCount === 2) {
+            throw new Error('post-planning save probe');
+          }
+        })
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runRealOrchestrationWithSaveProbe } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      await expect(
+        runRealOrchestrationWithSaveProbe({
+          config,
+          configHash,
+          adapter,
+          notificationDependencies: createNotificationRecorder().dependencies,
+          sleep: async () => {}
+        })
+      ).rejects.toThrow('post-planning save probe');
+    } finally {
+      vi.doUnmock('../../src/domain/scoring.js');
+      vi.doUnmock('../../src/state/checkpoint.js');
+      vi.resetModules();
+    }
+
+    const saved = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    expect(saved.checkpoint?.features['001']).toMatchObject({
+      id: '001',
+      request: 'add dashboard filters',
+      status: 'planned'
+    });
+  });
+
+  it('persists already-planned requests when a later planning turn fails', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters', 'add export controls']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+
+    await expect(
+      runRealOrchestration({
+        config,
+        configHash,
+        adapter: new PartialPlanningFailureAdapter(),
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      })
+    ).rejects.toThrow('simulated second planning failure');
+
+    const saved = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    expect(saved.checkpoint?.features['001']).toMatchObject({
+      id: '001',
+      request: 'add dashboard filters',
+      status: 'planned'
+    });
+    expect(saved.checkpoint?.features['002']).toBeUndefined();
+
+    const queueContent = await readFile(config.paths.queueFile, 'utf8');
+    expect(queueContent).toContain('# openweft queue format: v1');
+    expect(queueContent).toContain('"type":"processed"');
+    expect(queueContent).toContain('"featureId":"001"');
+    expect(queueContent).toContain('"request":"add export controls"');
   });
 
   it('resumes repo-scoped adjustment sessions across phases without reusing them for worktree execution', async () => {
@@ -361,6 +1015,380 @@ describe('runRealOrchestration', () => {
     expect(adapter.requests.filter((request) => request.stage === 'execution')).toHaveLength(2);
     expect(lines.some((line) => line.includes('Feature 001 add dashboard filters failed'))).toBe(true);
     expect(lines.some((line) => line.includes('Phase 1 halted by circuit breaker.'))).toBe(true);
+  });
+
+  it('marks a feature failed when execution setup throws before a typed result is returned', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    vi.resetModules();
+    vi.doMock('../../src/git/index.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
+        '../../src/git/index.js'
+      );
+
+      return {
+        ...actual,
+        createWorktree: vi.fn(async () => {
+          throw new Error('simulated worktree creation failure');
+        })
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runRealOrchestrationWithWorktreeProbe } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithWorktreeProbe({
+        config,
+        configHash,
+        adapter,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('failed');
+      expect(result.checkpoint.features['001']).toMatchObject({
+        status: 'failed',
+        attempts: 1,
+        lastError: 'simulated worktree creation failure'
+      });
+
+      const auditEntries = (await readFile(path.join(repoRoot, '.openweft', 'audit-trail.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) =>
+          JSON.parse(line) as {
+            event: string;
+            message: string;
+            data?: {
+              featureId?: string;
+              error?: string;
+            };
+          }
+        );
+      const executionFailureAudit = auditEntries.find(
+        (entry) =>
+          entry.event === 'feature.execution.failed' &&
+          entry.data?.featureId === '001'
+      );
+
+      expect(executionFailureAudit?.data?.error).toBe('simulated worktree creation failure');
+    } finally {
+      vi.doUnmock('../../src/git/index.js');
+      vi.resetModules();
+    }
+  });
+
+  it('preserves cost totals when concurrent executions interleave their cost-file appends', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 2,
+      queueRequests: ['add dashboard filters', 'add export controls']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    vi.resetModules();
+    vi.doMock('../../src/fs/index.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/fs/index.js')>(
+        '../../src/fs/index.js'
+      );
+
+      let releaseFirstAppend: (() => void) | null = null;
+      let delayedCostAppends = 0;
+
+      return {
+        ...actual,
+        appendJsonLine: vi.fn(async (filePath: string, payload: unknown) => {
+          const stage =
+            typeof payload === 'object' &&
+            payload !== null &&
+            'stage' in payload &&
+            typeof payload.stage === 'string'
+              ? payload.stage
+              : null;
+
+          if (filePath.endsWith('costs.jsonl') && stage === 'execution') {
+            delayedCostAppends += 1;
+            if (delayedCostAppends === 1) {
+              await new Promise<void>((resolve) => {
+                releaseFirstAppend = resolve;
+              });
+            } else if (delayedCostAppends === 2) {
+              releaseFirstAppend?.();
+            }
+          }
+
+          return actual.appendJsonLine(filePath, payload);
+        })
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runRealOrchestrationWithDelayedCosts } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithDelayedCosts({
+        config,
+        configHash,
+        adapter,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('completed');
+
+      const costRecords = (await readFile(path.join(repoRoot, '.openweft', 'costs.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) =>
+          JSON.parse(line) as {
+            featureId: string;
+            inputTokens: number;
+            outputTokens: number;
+            estimatedCostUsd: number;
+          }
+        );
+
+      const totalInputTokens = costRecords.reduce((sum, record) => sum + record.inputTokens, 0);
+      const totalOutputTokens = costRecords.reduce((sum, record) => sum + record.outputTokens, 0);
+      const totalEstimatedUsd = Number.parseFloat(
+        costRecords.reduce((sum, record) => sum + record.estimatedCostUsd, 0).toFixed(6)
+      );
+
+      expect(result.checkpoint.cost.totalInputTokens).toBe(totalInputTokens);
+      expect(result.checkpoint.cost.totalOutputTokens).toBe(totalOutputTokens);
+      expect(result.checkpoint.cost.totalEstimatedUsd).toBe(totalEstimatedUsd);
+      expect(Object.keys(result.checkpoint.cost.perFeature).sort()).toEqual(['001', '002']);
+    } finally {
+      vi.doUnmock('../../src/fs/index.js');
+      vi.resetModules();
+    }
+  });
+
+  it('restores git gc.auto from a stale breadcrumb before starting a new run', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const gcBreadcrumbFile = path.join(config.paths.openweftDir, 'gc-auto-previous.json');
+
+    await mkdir(config.paths.openweftDir, { recursive: true });
+    await setAutoGc(repoRoot, '17');
+    await writeFile(
+      gcBreadcrumbFile,
+      `${JSON.stringify({ previousValue: '17', savedAt: new Date().toISOString() })}\n`,
+      'utf8'
+    );
+    await setAutoGc(repoRoot, '0');
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(await getAutoGcSetting(repoRoot)).toBe('17');
+    await expect(readFile(gcBreadcrumbFile, 'utf8')).rejects.toThrow();
+  });
+
+  it('fails closed before pruning startup artifacts when the checkpoint is corrupted', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const orphanBranchName = 'openweft-999-orphan';
+    const orphanWorktreePath = path.join(config.paths.worktreesDir, '999');
+
+    await mkdir(config.paths.worktreesDir, { recursive: true });
+    await createWorktree({
+      repoRoot,
+      worktreePath: orphanWorktreePath,
+      branchName: orphanBranchName
+    });
+    await writeFile(config.paths.checkpointFile, '{not valid json', 'utf8');
+
+    await expect(
+      runRealOrchestration({
+        config,
+        configHash,
+        adapter: new RecordingAdapter(new MockAgentAdapter()),
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      })
+    ).rejects.toThrow(/checkpoint/i);
+
+    await expect(readFile(path.join(orphanWorktreePath, '.git'), 'utf8')).resolves.toContain(
+      '.git/worktrees'
+    );
+    const branches = await simpleGit(repoRoot).branchLocal();
+    expect(branches.all).toContain(orphanBranchName);
+  });
+
+  it('prunes orphaned OpenWeft worktrees and branches before starting a new run', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const orphanBranchName = 'openweft-999-orphan';
+    const orphanWorktreePath = path.join(config.paths.worktreesDir, '999');
+
+    await mkdir(config.paths.worktreesDir, { recursive: true });
+    await createWorktree({
+      repoRoot,
+      worktreePath: orphanWorktreePath,
+      branchName: orphanBranchName
+    });
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    const listed = await listWorktrees(repoRoot);
+    expect(listed.some((entry) => entry.path === orphanWorktreePath)).toBe(false);
+
+    const branches = await simpleGit(repoRoot).branchLocal();
+    expect(branches.all).not.toContain(orphanBranchName);
+
+    const auditEntries = (await readFile(path.join(repoRoot, '.openweft', 'audit-trail.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) =>
+        JSON.parse(line) as {
+          event: string;
+          data?: {
+            removedWorktreePaths?: string[];
+            removedBranchNames?: string[];
+          };
+        }
+      );
+    const pruneAudit = auditEntries.find((entry) => entry.event === 'repo.orphans.pruned');
+
+    expect(
+      pruneAudit?.data?.removedWorktreePaths?.some((removedPath) =>
+        removedPath.endsWith(`${path.sep}999`)
+      )
+    ).toBe(true);
+    expect(pruneAudit?.data?.removedBranchNames).toContain(orphanBranchName);
+  });
+
+  it('skips oversized and binary-like files during scoring scans', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const largeFile = path.join(repoRoot, 'docs', 'large-reference.ts');
+    const binaryFile = path.join(repoRoot, 'assets', 'diagram.png');
+    await mkdir(path.dirname(largeFile), { recursive: true });
+    await mkdir(path.dirname(binaryFile), { recursive: true });
+    await writeFile(largeFile, `src/target.ts\n${'x'.repeat(600_000)}`, 'utf8');
+    await writeFile(binaryFile, 'src/target.ts', 'utf8');
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    let largeFileReads = 0;
+    let binaryFileReads = 0;
+
+    vi.resetModules();
+    vi.doMock('node:fs/promises', async () => {
+      const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+
+      return {
+        ...actual,
+        readFile: vi.fn(async (filePath: string | URL | number, options?: BufferEncoding | { encoding?: BufferEncoding | null; flag?: string } | null) => {
+          const resolvedPath = typeof filePath === 'string' ? filePath : String(filePath);
+          if (resolvedPath === largeFile) {
+            largeFileReads += 1;
+          }
+          if (resolvedPath === binaryFile) {
+            binaryFileReads += 1;
+          }
+
+          return actual.readFile(filePath as never, options as never);
+        })
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runRealOrchestrationWithReadSpy } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithReadSpy({
+        config,
+        configHash,
+        adapter: new DeterministicScoringAdapter(),
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('completed');
+      expect(largeFileReads).toBe(0);
+      expect(binaryFileReads).toBe(0);
+    } finally {
+      vi.doUnmock('node:fs/promises');
+      vi.resetModules();
+    }
+  });
+
+  it('batches merged summaries into one adjustment per remaining feature', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 2,
+      queueRequests: ['add feature alpha', 'add feature beta', 'add feature gamma']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new DeterministicManifestAdapter({
+      '001': ['src/a.ts'],
+      '002': ['src/b.ts'],
+      '003': ['src/a.ts', 'src/b.ts']
+    });
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+
+    const featureThreeAdjustments = adapter.requests.filter(
+      (request) => request.stage === 'adjustment' && request.featureId === '003'
+    );
+    expect(featureThreeAdjustments).toHaveLength(1);
+    expect(featureThreeAdjustments[0]?.prompt).toContain('src/a.ts');
+    expect(featureThreeAdjustments[0]?.prompt).toContain('src/b.ts');
   });
 
   it('resolves execution approvals through the real control channel', async () => {
@@ -451,5 +1479,85 @@ describe('runRealOrchestration', () => {
     expect(events).toContain('agent:approval');
     expect(events).toContain('agent:approval-resolved');
     expect(events).not.toContain('agent:failed');
+  });
+
+  it('stops after the current planning item when a stop is requested during planning', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters', 'add export controls']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const stopController = new StopController();
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+
+    adapter.runTurn = async (request) => {
+      const result = await originalRunTurn(request);
+      if (request.stage === 'planning-s2' && request.featureId === '001') {
+        stopController.request('keyboard');
+      }
+      return result;
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      stopController,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('stopped');
+    expect(result.checkpoint.currentState).toBe('stopped');
+    expect(result.plannedCount).toBe(1);
+    expect(result.mergedCount).toBe(0);
+    expect(result.checkpoint.features['001']?.status).toBe('planned');
+    expect(result.checkpoint.features['002']).toBeUndefined();
+    expect(result.checkpoint.pendingRequests).toEqual([
+      {
+        request: 'add export controls',
+        queuedAt: result.checkpoint.createdAt
+      }
+    ]);
+
+    const queueContent = await readFile(path.join(repoRoot, 'feature_requests', 'queue.txt'), 'utf8');
+    expect(queueContent).toContain('# openweft queue format: v1');
+    expect(queueContent).toContain('"type":"processed"');
+    expect(queueContent).toContain('"featureId":"001"');
+    expect(queueContent).toContain('"request":"add export controls"');
+  });
+
+  it('does not start an execution retry after stop is requested during an active turn', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const stopController = new StopController();
+    const adapter = new StopDuringExecutionFailureAdapter(stopController);
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      stopController,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(adapter.executionAttempts).toBe(1);
+    expect(result.checkpoint.status).toBe('stopped');
+    expect(result.checkpoint.currentState).toBe('stopped');
+    expect(result.mergedCount).toBe(0);
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'planned',
+      attempts: 0,
+      lastError: null
+    });
   });
 });

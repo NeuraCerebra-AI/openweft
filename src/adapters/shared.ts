@@ -11,6 +11,9 @@ import type {
   CommandExecutionResult
 } from './types.js';
 
+const PLANNING_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const EXECUTION_IDLE_TIMEOUT_MS = 90 * 60 * 1000;
+
 const buildArtifacts = (
   command: AdapterCommandSpec,
   execution: CommandExecutionResult
@@ -127,4 +130,18 @@ export const createAdapterFailure = (input: {
       }
     )
   };
+};
+
+export const getCommandIdleTimeoutMs = (
+  stage: AdapterTurnRequest['stage']
+): number => {
+  switch (stage) {
+    case 'planning-s1':
+    case 'planning-s2':
+      return PLANNING_IDLE_TIMEOUT_MS;
+    case 'execution':
+    case 'adjustment':
+    case 'conflict-resolution':
+      return EXECUTION_IDLE_TIMEOUT_MS;
+  }
 };

@@ -1,6 +1,11 @@
 import type { AgentAdapter, AdapterCommandSpec, AdapterTurnRequest, AdapterUsage, CommandRunner } from './types.js';
 
-import { createAdapterFailure, createAdapterSuccess, resolveAuthEnvironment } from './shared.js';
+import {
+  createAdapterFailure,
+  createAdapterSuccess,
+  getCommandIdleTimeoutMs,
+  resolveAuthEnvironment
+} from './shared.js';
 import { execaCommandRunner } from './runner.js';
 
 interface ParsedClaudeJsonOutput {
@@ -65,13 +70,16 @@ export const parseClaudeJsonOutput = (
 };
 
 export const buildClaudeCommand = (request: AdapterTurnRequest): AdapterCommandSpec => {
+  const shouldSkipPermissions =
+    request.claudePermissionMode !== 'plan' &&
+    request.claudePermissionMode !== 'default';
   const args = [
     '-p',
     '--output-format',
     'json',
     '--model',
     request.model,
-    '--dangerously-skip-permissions',
+    ...(shouldSkipPermissions ? ['--dangerously-skip-permissions'] : []),
     '--permission-mode',
     request.claudePermissionMode ?? 'acceptEdits'
   ];
@@ -96,7 +104,8 @@ export const buildClaudeCommand = (request: AdapterTurnRequest): AdapterCommandS
     args,
     cwd: request.cwd,
     input: request.prompt,
-    env: resolveAuthEnvironment(request.auth, 'ANTHROPIC_API_KEY')
+    env: resolveAuthEnvironment(request.auth, 'ANTHROPIC_API_KEY'),
+    idleTimeoutMs: getCommandIdleTimeoutMs(request.stage)
   };
 };
 

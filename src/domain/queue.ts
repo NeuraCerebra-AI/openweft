@@ -1,15 +1,22 @@
+import { randomUUID } from 'node:crypto';
+
 import { extractNumericFeatureId } from './slug.js';
+
+const ENCODED_REQUEST_PREFIX = '@@openweft:request:v1:';
+const V1_QUEUE_HEADER = '# openweft queue format: v1';
 
 export interface QueueCommentLine {
   kind: 'comment';
   raw: string;
   lineIndex: number;
+  recordFormat: 'legacy' | 'v1';
 }
 
 export interface QueueBlankLine {
   kind: 'blank';
   raw: string;
   lineIndex: number;
+  recordFormat: 'legacy' | 'v1';
 }
 
 export interface QueuePendingLine {
@@ -17,6 +24,8 @@ export interface QueuePendingLine {
   raw: string;
   lineIndex: number;
   request: string;
+  queueId: string | null;
+  recordFormat: 'legacy' | 'v1';
 }
 
 export interface QueueProcessedLine {
@@ -25,6 +34,8 @@ export interface QueueProcessedLine {
   lineIndex: number;
   featureId: string;
   request: string;
+  queueId: string | null;
+  recordFormat: 'legacy' | 'v1';
 }
 
 export type QueueLine = QueueCommentLine | QueueBlankLine | QueuePendingLine | QueueProcessedLine;
@@ -37,14 +48,83 @@ export interface ParsedQueueFile {
 
 const PROCESSED_PATTERN = /^#\s*✓\s+\[(\d+)\]\s+(.+)$/;
 
-export const parseQueueLine = (raw: string, lineIndex: number): QueueLine => {
+const normalizeRequestNewlines = (request: string): string => request.replace(/\r\n?/g, '\n');
+const createQueueId = (): string => `q_${randomUUID()}`;
+
+const shouldEncodeQueueRequest = (request: string): boolean =>
+  request.includes('\n') || request.startsWith('#') || request.startsWith(ENCODED_REQUEST_PREFIX);
+
+export const normalizeQueuedRequest = (input: string): string | null => {
+  const normalized = normalizeRequestNewlines(input).trim();
+  return normalized === '' ? null : normalized;
+};
+
+export const summarizeQueueRequest = (request: string): string => {
+  const normalized = normalizeRequestNewlines(request).trim().replace(/\s+/g, ' ');
+  return normalized === '' ? '(empty request)' : normalized;
+};
+
+export const serializeQueueRequest = (request: string): string => {
+  const normalized = normalizeRequestNewlines(request);
+  if (!shouldEncodeQueueRequest(normalized)) {
+    return normalized;
+  }
+
+  return `${ENCODED_REQUEST_PREFIX}${Buffer.from(normalized, 'utf8').toString('base64url')}`;
+};
+
+const parseSerializedQueueRequest = (raw: string): string => {
+  if (!raw.startsWith(ENCODED_REQUEST_PREFIX)) {
+    return raw;
+  }
+
+  const encoded = raw.slice(ENCODED_REQUEST_PREFIX.length);
+  return Buffer.from(encoded, 'base64url').toString('utf8');
+};
+
+type QueueRecordV1 =
+  | {
+      version: 1;
+      type: 'pending';
+      id: string;
+      request: string;
+    }
+  | {
+      version: 1;
+      type: 'processed';
+      id: string;
+      featureId: string;
+      request: string;
+    };
+
+const isV1QueueHeader = (raw: string): boolean => raw.trim() === V1_QUEUE_HEADER;
+
+const isQueueRecordV1 = (value: unknown): value is QueueRecordV1 => {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  if (candidate.version !== 1 || typeof candidate.id !== 'string' || typeof candidate.request !== 'string') {
+    return false;
+  }
+
+  if (candidate.type === 'pending') {
+    return true;
+  }
+
+  return candidate.type === 'processed' && typeof candidate.featureId === 'string';
+};
+
+const parseLegacyQueueLine = (raw: string, lineIndex: number): QueueLine => {
   const trimmed = raw.trim();
 
   if (trimmed === '') {
     return {
       kind: 'blank',
       raw,
-      lineIndex
+      lineIndex,
+      recordFormat: 'legacy'
     };
   }
 
@@ -60,7 +140,9 @@ export const parseQueueLine = (raw: string, lineIndex: number): QueueLine => {
       raw,
       lineIndex,
       featureId,
-      request
+      request: parseSerializedQueueRequest(request),
+      queueId: null,
+      recordFormat: 'legacy'
     };
   }
 
@@ -68,7 +150,8 @@ export const parseQueueLine = (raw: string, lineIndex: number): QueueLine => {
     return {
       kind: 'comment',
       raw,
-      lineIndex
+      lineIndex,
+      recordFormat: 'legacy'
     };
   }
 
@@ -76,12 +159,76 @@ export const parseQueueLine = (raw: string, lineIndex: number): QueueLine => {
     kind: 'pending',
     raw,
     lineIndex,
-    request: trimmed
+    request: parseSerializedQueueRequest(trimmed),
+    queueId: null,
+    recordFormat: 'legacy'
   };
 };
 
+const parseV1QueueLine = (raw: string, lineIndex: number): QueueLine => {
+  const trimmed = raw.trim();
+
+  if (trimmed === '') {
+    return {
+      kind: 'blank',
+      raw,
+      lineIndex,
+      recordFormat: 'v1'
+    };
+  }
+
+  if (isV1QueueHeader(raw) || trimmed.startsWith('#')) {
+    return {
+      kind: 'comment',
+      raw,
+      lineIndex,
+      recordFormat: 'v1'
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    throw new Error(`Malformed v1 queue record at line ${lineIndex}.`);
+  }
+
+  if (!isQueueRecordV1(parsed)) {
+    throw new Error(`Malformed v1 queue record at line ${lineIndex}.`);
+  }
+
+  if (parsed.type === 'pending') {
+    return {
+      kind: 'pending',
+      raw,
+      lineIndex,
+      request: parsed.request,
+      queueId: parsed.id,
+      recordFormat: 'v1'
+    };
+  }
+
+  return {
+    kind: 'processed',
+    raw,
+    lineIndex,
+    featureId: parsed.featureId,
+    request: parsed.request,
+    queueId: parsed.id,
+    recordFormat: 'v1'
+  };
+};
+
+export const parseQueueLine = (raw: string, lineIndex: number): QueueLine => parseLegacyQueueLine(raw, lineIndex);
+
 export const parseQueueFile = (content: string): ParsedQueueFile => {
-  const lines = content.split(/\r?\n/).map((line, lineIndex) => parseQueueLine(line, lineIndex));
+  const rawLines = content.split(/\r?\n/);
+  const firstContentIndex = rawLines.findIndex((line) => line.trim() !== '');
+  const parseLine =
+    firstContentIndex >= 0 && isV1QueueHeader(rawLines[firstContentIndex] ?? '')
+      ? parseV1QueueLine
+      : parseLegacyQueueLine;
+  const lines = rawLines.map((line, lineIndex) => parseLine(line, lineIndex));
 
   return {
     lines,
@@ -91,24 +238,119 @@ export const parseQueueFile = (content: string): ParsedQueueFile => {
 };
 
 export const extractRequestsFromInput = (input: string): string[] => {
-  return input
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line !== '' && !line.startsWith('#'));
+  const normalized = normalizeQueuedRequest(input);
+  return normalized === null ? [] : [normalized];
 };
 
 export const collectRequestsFromInput = extractRequestsFromInput;
 
+const serializeQueueRecord = (line: QueuePendingLine | QueueProcessedLine): string => {
+  if (line.kind === 'pending') {
+    return JSON.stringify({
+      version: 1,
+      type: 'pending',
+      id: line.queueId ?? createQueueId(),
+      request: line.request
+    });
+  }
+
+  return JSON.stringify({
+    version: 1,
+    type: 'processed',
+    id: line.queueId ?? createQueueId(),
+    featureId: line.featureId,
+    request: line.request
+  });
+};
+
+const buildCanonicalQueueContent = (
+  parsed: ParsedQueueFile,
+  options?: {
+    processLineIndex?: number;
+    processFeatureId?: string;
+    processRequestOverride?: string | undefined;
+    removeLineIndex?: number;
+    appendRequests?: string[];
+  }
+): string => {
+  const lines: string[] = [V1_QUEUE_HEADER];
+
+  for (const line of parsed.lines) {
+    if (line.kind === 'blank' && line.raw === '' && line.lineIndex === parsed.lines.length - 1) {
+      continue;
+    }
+
+    if (line.kind === 'comment') {
+      if (isV1QueueHeader(line.raw)) {
+        continue;
+      }
+      lines.push(line.raw);
+      continue;
+    }
+
+    if (line.kind === 'blank') {
+      lines.push(line.raw);
+      continue;
+    }
+
+    if (options?.removeLineIndex === line.lineIndex) {
+      continue;
+    }
+
+    if (options?.processLineIndex === line.lineIndex && line.kind === 'pending') {
+      lines.push(
+        JSON.stringify({
+          version: 1,
+          type: 'processed',
+          id: line.queueId ?? createQueueId(),
+          featureId: options.processFeatureId,
+          request: options.processRequestOverride ?? line.request
+        })
+      );
+      continue;
+    }
+
+    lines.push(serializeQueueRecord(line));
+  }
+
+  for (const request of options?.appendRequests ?? []) {
+    lines.push(
+      JSON.stringify({
+        version: 1,
+        type: 'pending',
+        id: createQueueId(),
+        request
+      })
+    );
+  }
+
+  return `${lines.join('\n')}\n`;
+};
+
 export const appendRequestsToQueueContent = (existingContent: string, requests: string[]): string => {
-  const normalized = requests.map((request) => request.trim()).filter(Boolean);
+  const normalized = requests
+    .map((request) => normalizeQueuedRequest(request))
+    .filter((request): request is string => request !== null);
   if (normalized.length === 0) {
     return existingContent;
   }
 
-  const needsLeadingNewline = existingContent.length > 0 && !existingContent.endsWith('\n');
-  const prefix = needsLeadingNewline ? '\n' : '';
-  const suffix = normalized.join('\n');
-  return `${existingContent}${prefix}${suffix}\n`;
+  const existingPending = new Set(parseQueueFile(existingContent).pending.map((entry) => entry.request));
+  const accepted: string[] = [];
+  for (const request of normalized) {
+    if (existingPending.has(request) || accepted.includes(request)) {
+      continue;
+    }
+    accepted.push(request);
+  }
+
+  if (accepted.length === 0) {
+    return existingContent;
+  }
+
+  return buildCanonicalQueueContent(parseQueueFile(existingContent), {
+    appendRequests: accepted
+  });
 };
 
 export const appendRequestsToQueueFile = appendRequestsToQueueContent;
@@ -117,7 +359,8 @@ export const markQueueLineProcessed = (
   existingContent: string,
   lineIndex: number,
   featureId: string,
-  requestOverride?: string
+  requestOverride?: string,
+  expectedRequest?: string
 ): string => {
   const parsed = parseQueueFile(existingContent);
   const target = parsed.lines.find((line) => line.lineIndex === lineIndex);
@@ -130,13 +373,49 @@ export const markQueueLineProcessed = (
     throw new Error(`Queue line ${lineIndex} is not pending and cannot be marked processed.`);
   }
 
-  const rawLines = existingContent.split(/\r?\n/);
-  if (existingContent.endsWith('\n')) {
-    rawLines.pop();
+  if (expectedRequest !== undefined && target.request !== expectedRequest) {
+    throw new Error(
+      `Queue line ${lineIndex} no longer matches the expected request and cannot be marked processed safely.`
+    );
   }
 
-  rawLines[lineIndex] = `# ✓ [${featureId}] ${requestOverride ?? target.request}`;
-  return existingContent.endsWith('\n') ? `${rawLines.join('\n')}\n` : rawLines.join('\n');
+  return buildCanonicalQueueContent(parsed, {
+    processLineIndex: lineIndex,
+    processFeatureId: featureId,
+    processRequestOverride: requestOverride
+  });
+};
+
+export const removePendingQueueLine = (
+  existingContent: string,
+  lineIndex: number,
+  expectedRequest?: string
+): string => {
+  const parsed = parseQueueFile(existingContent);
+  const target = parsed.lines.find((line) => line.lineIndex === lineIndex);
+
+  if (!target) {
+    throw new Error(`Queue line ${lineIndex} does not exist.`);
+  }
+
+  if (target.kind !== 'pending') {
+    throw new Error(`Queue line ${lineIndex} is not pending and cannot be removed.`);
+  }
+
+  if (expectedRequest !== undefined && target.request !== expectedRequest) {
+    throw new Error(
+      `Queue line ${lineIndex} no longer matches the expected request and cannot be removed safely.`
+    );
+  }
+
+  const updated = buildCanonicalQueueContent(parsed, {
+    removeLineIndex: lineIndex
+  });
+
+  const reparsed = parseQueueFile(updated);
+  return reparsed.pending.length === 0 && reparsed.processed.length === 0 && reparsed.lines.every((line) => line.kind !== 'comment' || isV1QueueHeader(line.raw))
+    ? ''
+    : updated;
 };
 
 export const getNextFeatureIdFromQueue = (existingNames: Iterable<string>, queueContent = ''): number => {

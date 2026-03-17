@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenWeft — Hybrid Winner</title>
+<style>
+  :root {
+    --base: #1e1e2e;
+    --mantle: #181825;
+    --crust: #11111b;
+    --surface0: #313244;
+    --surface1: #45475a;
+    --surface2: #585b70;
+    --overlay0: #6c7086;
+    --overlay1: #7f849c;
+    --text: #cdd6f4;
+    --subtext0: #a6adc8;
+    --subtext1: #bac2de;
+    --blue: #89b4fa;
+    --green: #a6e3a1;
+    --mauve: #cba6f7;
+    --red: #f38ba8;
+    --yellow: #f9e2af;
+    --peach: #fab387;
+    --teal: #94e2d5;
+    --lavender: #b4befe;
+    --pink: #f5c2e7;
+    --sky: #89dceb;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--crust);
+    color: var(--text);
+    font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Cascadia Code', 'Menlo', monospace;
+    font-size: 16px;
+    line-height: 1.5;
+    padding: 32px 24px 80px;
+  }
+
+  .page-header {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .page-header h1 {
+    color: var(--mauve);
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+  .page-header p {
+    color: var(--subtext0);
+    font-size: 14px;
+    max-width: 700px;
+    margin: 0 auto;
+  }
+
+  .section {
+    max-width: 1200px;
+    margin: 0 auto 48px;
+  }
+  .section-label {
+    color: var(--green);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  /* Terminal */
+  .terminal {
+    background: var(--base);
+    border: 1px solid var(--surface1);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .terminal-bar {
+    background: var(--mantle);
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--surface0);
+  }
+  .dot { width: 12px; height: 12px; border-radius: 50%; }
+  .dot.r { background: var(--red); }
+  .dot.y { background: var(--yellow); }
+  .dot.g { background: var(--green); }
+  .terminal-bar .title {
+    flex: 1; text-align: center;
+    color: var(--overlay0); font-size: 12px;
+  }
+  .terminal-body {
+    min-height: 520px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* Status bar */
+  .status-bar {
+    display: flex;
+    gap: 10px;
+    padding: 6px 14px;
+    align-items: center;
+    font-size: 15px;
+  }
+  .brand { color: var(--mauve); font-weight: 700; }
+  .sep { color: var(--surface2); }
+
+  /* Meters */
+  .meters {
+    padding: 6px 14px 8px;
+    display: flex;
+    gap: 24px;
+    border-bottom: 1px solid var(--surface0);
+  }
+  .meter { flex: 1; }
+  .meter-label {
+    font-size: 12px;
+    color: var(--overlay0);
+    margin-bottom: 3px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .meter-label .val { color: var(--subtext1); font-weight: 600; }
+  .meter-bar {
+    height: 6px;
+    background: var(--surface0);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .meter-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+  .meter-fill.phase { background: var(--blue); }
+  .meter-fill.tokens { background: var(--peach); }
+  .meter-fill.time { background: var(--green); }
+
+  /* Cards area */
+  .cards {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 8px 10px;
+    gap: 6px;
+  }
+
+  /* Card */
+  .card {
+    border: 1px solid var(--surface1);
+    border-radius: 6px;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    transition: all 0.15s;
+  }
+  .card.focused { border-color: var(--blue); background: rgba(137,180,250,0.05); }
+  .card.running  { border-left: 3px solid var(--green); }
+  .card.queued   { border-left: 3px solid var(--surface2); }
+  .card.completed { border-left: 3px solid var(--green); opacity: 0.7; }
+  .card.failed   { border-left: 3px solid var(--red); }
+  .card.approval { border-left: 3px solid var(--yellow); }
+
+  .card-top {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .card-top .icon { font-size: 17px; width: 20px; text-align: center; flex-shrink: 0; }
+  .card-top .name { font-weight: 700; font-size: 16px; flex: 1; }
+  .card-top .badges { display: flex; gap: 6px; align-items: center; }
+  .badge {
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .badge.files { background: rgba(166,227,161,0.12); color: var(--green); }
+  .badge.tokens { background: rgba(250,179,135,0.12); color: var(--peach); }
+  .card-top .time { color: var(--overlay0); font-size: 14px; flex-shrink: 0; }
+
+  .card-detail {
+    font-size: 14px;
+    line-height: 1.6;
+    padding-left: 30px;
+  }
+  .card-detail .feat { color: var(--subtext0); }
+  .card-detail .file-list { color: var(--overlay1); font-size: 13px; }
+  .card-detail .file-list b { color: var(--green); font-weight: 600; }
+  .card-detail .tool { color: var(--mauve); }
+  .card-detail .events { margin-top: 4px; font-size: 13px; color: var(--overlay0); }
+
+  .approval-box {
+    margin-top: 6px;
+    padding: 8px 12px;
+    background: rgba(249,226,175,0.07);
+    border: 1px solid var(--yellow);
+    border-radius: 4px;
+    font-size: 14px;
+  }
+  .approval-box .label { color: var(--yellow); font-weight: 700; }
+  .approval-box .cmd { color: var(--text); }
+
+  /* Footer */
+  .footer {
+    padding: 6px 14px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    font-size: 14px;
+    border-top: 1px solid var(--surface0);
+    margin-top: auto;
+  }
+  .mode {
+    font-weight: 700;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 3px;
+  }
+  .footer .hint { color: var(--subtext0); font-size: 13px; }
+
+  /* State tabs */
+  .state-tabs {
+    display: flex;
+    gap: 3px;
+    justify-content: center;
+    margin-top: 12px;
+  }
+  .state-tab {
+    background: var(--surface0);
+    color: var(--subtext0);
+    border: 1px solid var(--surface1);
+    padding: 6px 18px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.15s;
+  }
+  .state-tab:hover { background: var(--surface1); color: var(--text); }
+  .state-tab.active { background: var(--surface1); color: var(--green); border-color: var(--green); font-weight: 700; }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <h1>OpenWeft — Hybrid Winner</h1>
+  <p>#3 card tiles + #2 meter bars. Tokens instead of cost. Phase left, Time right.</p>
+</div>
+
+<div class="section">
+  <div class="section-label">Final design</div>
+  <div class="terminal">
+    <div class="terminal-bar">
+      <div class="dot r"></div><div class="dot y"></div><div class="dot g"></div>
+      <span class="title">openweft</span>
+    </div>
+    <div class="terminal-body" id="body"></div>
+  </div>
+  <div class="state-tabs">
+    <button class="state-tab active" onclick="setState('idle')">Idle</button>
+    <button class="state-tab" onclick="setState('exec')">Executing</button>
+    <button class="state-tab" onclick="setState('approval')">Approval</button>
+    <button class="state-tab" onclick="setState('mixed')">Mixed</button>
+  </div>
+</div>
+
+<script>
+const D = {
+  idle: {
+    phase: null, tokens: 0, elapsed: 0, active: 0, pending: 5,
+    agents: [
+      { name: 'auth-middleware', feat: 'Add JWT refresh token rotation', st: 'queued', tool: null, tokens: 0, time: 0, files: ['src/auth/refresh.ts','src/auth/middleware.ts','src/auth/types.ts'], events: [], focused: true, removable: true },
+      { name: 'rate-limiter', feat: 'Sliding window rate limiting', st: 'queued', tool: null, tokens: 0, time: 0, files: ['src/middleware/rateLimit.ts','src/config/limits.ts'], events: [], focused: false, removable: true },
+      { name: 'db-migrations', feat: 'User preferences table migration', st: 'queued', tool: null, tokens: 0, time: 0, files: ['migrations/003_prefs.sql','src/db/schema.ts'], events: [], focused: false, removable: true },
+      { name: 'api-docs', feat: 'Generate OpenAPI spec from routes', st: 'queued', tool: null, tokens: 0, time: 0, files: ['src/docs/openapi.ts','src/routes/index.ts'], events: [], focused: false, removable: true },
+      { name: 'error-handling', feat: 'Structured error codes for endpoints', st: 'queued', tool: null, tokens: 0, time: 0, files: ['src/errors/codes.ts','src/middleware/errorHandler.ts','src/errors/types.ts'], events: [], focused: false, removable: false },
+    ]
+  },
+  exec: {
+    phase: { c: 1, t: 3 }, tokens: 14200, elapsed: 47, active: 2, pending: 3,
+    agents: [
+      { name: 'auth-middleware', feat: 'Add JWT refresh token rotation', st: 'running', tool: 'Edit src/auth/refresh.ts', tokens: 8400, time: 47, files: ['src/auth/refresh.ts','src/auth/middleware.ts','src/auth/types.ts'], events: [{ t: '0:32', m: 'Created src/auth/refresh.ts' },{ t: '0:41', m: 'Modified src/auth/middleware.ts' }], focused: true },
+      { name: 'rate-limiter', feat: 'Sliding window rate limiting', st: 'running', tool: 'Read src/middleware/index.ts', tokens: 5800, time: 42, files: ['src/middleware/rateLimit.ts','src/config/limits.ts'], events: [{ t: '0:18', m: 'Read src/middleware/index.ts' }], focused: false },
+      { name: 'db-migrations', feat: 'User preferences table migration', st: 'queued', tool: null, tokens: 0, time: 0, files: ['migrations/003_prefs.sql','src/db/schema.ts'], events: [], focused: false },
+      { name: 'api-docs', feat: 'Generate OpenAPI spec from routes', st: 'queued', tool: null, tokens: 0, time: 0, files: ['src/docs/openapi.ts','src/routes/index.ts'], events: [], focused: false },
+      { name: 'error-handling', feat: 'Structured error codes for endpoints', st: 'queued', tool: null, tokens: 0, time: 0, files: ['src/errors/codes.ts','src/middleware/errorHandler.ts','src/errors/types.ts'], events: [], focused: false },
+    ]
+  },
+  approval: {
+    phase: { c: 1, t: 3 }, tokens: 42800, elapsed: 112, active: 3, pending: 2,
+    agents: [
+      { name: 'auth-middleware', feat: 'Add JWT refresh token rotation', st: 'approval', tool: null, tokens: 23100, time: 112, files: ['src/auth/refresh.ts','src/auth/middleware.ts','src/auth/types.ts','package.json'], events: [{ t: '1:22', m: 'Created src/auth/refresh.ts' },{ t: '1:38', m: 'Modified src/auth/middleware.ts' },{ t: '1:47', m: 'Requesting: npm install jsonwebtoken' }], focused: true, approval: 'Bash: npm install jsonwebtoken @types/jsonwebtoken' },
+      { name: 'rate-limiter', feat: 'Sliding window rate limiting', st: 'running', tool: 'Write tests/rate-limiter.test.ts', tokens: 15200, time: 108, files: ['src/middleware/rateLimit.ts','src/config/limits.ts','tests/rate-limiter.test.ts'], events: [], focused: false },
+      { name: 'db-migrations', feat: 'User preferences table migration', st: 'running', tool: 'Edit migrations/003_prefs.sql', tokens: 4500, time: 23, files: ['migrations/003_prefs.sql','src/db/schema.ts'], events: [], focused: false },
+      { name: 'api-docs', feat: 'Generate OpenAPI spec from routes', st: 'queued', tool: null, tokens: 0, time: 0, files: ['src/docs/openapi.ts','src/routes/index.ts'], events: [], focused: false },
+      { name: 'error-handling', feat: 'Structured error codes for endpoints', st: 'queued', tool: null, tokens: 0, time: 0, files: ['src/errors/codes.ts','src/middleware/errorHandler.ts','src/errors/types.ts'], events: [], focused: false },
+    ]
+  },
+  mixed: {
+    phase: { c: 2, t: 3 }, tokens: 128400, elapsed: 245, active: 1, pending: 1,
+    agents: [
+      { name: 'auth-middleware', feat: 'Add JWT refresh token rotation', st: 'completed', tool: null, tokens: 52300, time: 187, files: ['src/auth/refresh.ts','src/auth/middleware.ts','src/auth/types.ts'], events: [], focused: false },
+      { name: 'rate-limiter', feat: 'Sliding window rate limiting', st: 'completed', tool: null, tokens: 41200, time: 164, files: ['src/middleware/rateLimit.ts','src/config/limits.ts','tests/rate-limiter.test.ts'], events: [], focused: false },
+      { name: 'db-migrations', feat: 'User preferences table migration', st: 'failed', tool: null, tokens: 18700, time: 89, files: ['migrations/003_prefs.sql'], events: [{ t: '1:12', m: 'Migration syntax error at line 34' },{ t: '1:29', m: 'Agent exited with error' }], focused: true },
+      { name: 'api-docs', feat: 'Generate OpenAPI spec from routes', st: 'running', tool: 'Read src/routes/users.ts', tokens: 9200, time: 31, files: ['src/docs/openapi.ts','src/routes/index.ts'], events: [], focused: false },
+      { name: 'error-handling', feat: 'Structured error codes for endpoints', st: 'queued', tool: null, tokens: 0, time: 0, files: ['src/errors/codes.ts','src/middleware/errorHandler.ts','src/errors/types.ts'], events: [], focused: false },
+    ]
+  }
+};
+
+const IC = { queued: ['○','overlay0'], running: ['◐','green'], completed: ['✓','green'], failed: ['✗','red'], approval: ['?','yellow'] };
+const fmt = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+const fmtTokens = t => t >= 1000 ? `${(t/1000).toFixed(1)}k` : String(t);
+
+function render(state) {
+  const d = D[state];
+  const isRun = state !== 'idle';
+  const focused = d.agents.find(a => a.focused);
+  let h = '';
+
+  // ── Status bar ──
+  h += `<div class="status-bar"><span class="brand">◆ openweft</span>`;
+  if (d.phase) h += `<span class="sep">│</span> <span style="color:var(--blue)">Phase ${d.phase.c}/${d.phase.t}</span>`;
+  if (d.active > 0 || d.pending > 0) h += `<span class="sep">│</span> <span style="color:var(--green)">${d.active} active</span> <span style="color:var(--overlay0)">·</span> <span style="color:var(--teal)">${d.pending} queued</span>`;
+  if (d.tokens > 0) h += `<span class="sep">│</span> <span style="color:var(--peach)">${fmtTokens(d.tokens)} tokens</span>`;
+  h += `<span class="sep">│</span> <span>${fmt(d.elapsed)}</span></div>`;
+
+  // ── Meters (only during execution) ──
+  if (d.phase) {
+    const done = d.agents.filter(a => a.st === 'completed').length;
+    const total = d.agents.length;
+    const phasePct = Math.round((done / total) * 100);
+    const tokenPct = Math.min(100, Math.round((d.tokens / 200000) * 100));
+    const timePct = Math.min(100, Math.round((d.elapsed / 600) * 100));
+
+    h += `<div class="meters">`;
+    // Phase — left
+    h += `<div class="meter">`;
+    h += `<div class="meter-label"><span>Phase ${d.phase.c}/${d.phase.t}</span><span class="val">${done}/${total} done</span></div>`;
+    h += `<div class="meter-bar"><div class="meter-fill phase" style="width:${phasePct}%"></div></div>`;
+    h += `</div>`;
+    // Tokens — center
+    h += `<div class="meter">`;
+    h += `<div class="meter-label"><span>Tokens</span><span class="val">${fmtTokens(d.tokens)}</span></div>`;
+    h += `<div class="meter-bar"><div class="meter-fill tokens" style="width:${tokenPct}%"></div></div>`;
+    h += `</div>`;
+    // Time — right
+    h += `<div class="meter">`;
+    h += `<div class="meter-label"><span>Time</span><span class="val">${fmt(d.elapsed)}</span></div>`;
+    h += `<div class="meter-bar"><div class="meter-fill time" style="width:${timePct}%"></div></div>`;
+    h += `</div>`;
+    h += `</div>`;
+  }
+
+  // ── Cards ──
+  h += `<div class="cards">`;
+  d.agents.forEach(a => {
+    const [ic, cc] = IC[a.st];
+
+    h += `<div class="card ${a.st}${a.focused ? ' focused' : ''}">`;
+    // Top row
+    h += `<div class="card-top">`;
+    h += `<span class="icon" style="color:var(--${cc})">${ic}</span>`;
+    h += `<span class="name">${a.name}</span>`;
+    h += `<span class="badges">`;
+    if (a.files?.length) h += `<span class="badge files">${a.files.length} files</span>`;
+    if (a.tokens > 0) h += `<span class="badge tokens">${fmtTokens(a.tokens)} tok</span>`;
+    h += `</span>`;
+    h += `<span class="time">${fmt(a.time)}</span>`;
+    h += `</div>`;
+
+    // Detail
+    h += `<div class="card-detail">`;
+    h += `<div class="feat">${a.feat}</div>`;
+
+    if (a.focused) {
+      if (a.files?.length) h += `<div class="file-list"><b>files:</b> ${a.files.join(', ')}</div>`;
+      if (a.tool) h += `<div class="tool">▸ ${a.tool}</div>`;
+      if (a.approval) {
+        h += `<div class="approval-box"><span class="label">APPROVAL NEEDED</span><br><span class="cmd">${a.approval}</span></div>`;
+      }
+      if (!isRun && a.st === 'queued') {
+        h += `<div style="color:var(--teal);margin-top:2px">${a.removable ? 'Press d to remove from queue' : 'Checkpoint — will resume on start'}</div>`;
+      }
+      if (a.events?.length) {
+        h += `<div class="events">`;
+        a.events.forEach(e => h += `<div><span>${e.t}</span> ${e.m}</div>`);
+        h += `</div>`;
+      }
+    } else if (a.tool) {
+      h += `<div class="tool">▸ ${a.tool}</div>`;
+    }
+    h += `</div>`;
+    h += `</div>`;
+  });
+  h += `</div>`;
+
+  // ── Footer ──
+  const modeColor = focused?.st === 'approval' ? 'var(--yellow)' : 'var(--blue)';
+  const modeLabel = focused?.st === 'approval' ? 'APPROVAL' : 'NORMAL';
+  let hint = '';
+  if (focused?.st === 'approval') hint = `Approve <b>y</b> · Deny <b>n</b> · Always <b>a</b> · Skip <b>s</b>`;
+  else if (!isRun) hint = `Press <b>s</b> to start · <b>a</b> add · <b>d</b> remove · <b>?</b> help`;
+  else hint = `<b>a</b> add · <b>d</b> remove · <b>q</b> stop run · <b>?</b> help`;
+  h += `<div class="footer"><span class="mode" style="background:${modeColor};color:var(--crust)">${modeLabel}</span><span class="hint">${hint}</span></div>`;
+
+  document.getElementById('body').innerHTML = h;
+}
+
+function setState(state) {
+  document.querySelectorAll('.state-tab').forEach(b => b.classList.remove('active'));
+  [...document.querySelectorAll('.state-tab')].find(b => b.textContent.toLowerCase().startsWith(state.slice(0, 3)))?.classList.add('active');
+  render(state);
+}
+
+render('idle');
+</script>
+
+</body>
+</html>
