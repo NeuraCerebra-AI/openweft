@@ -9,66 +9,35 @@ interface FooterProps {
   readonly composing: boolean;
 }
 
-type KeyBinding = readonly [key: string, description: string];
+type Hint = readonly [key: string, label: string];
 
-interface ModeConfig {
-  readonly label: string;
-  readonly colorKey: 'blue' | 'yellow' | 'green';
-  readonly keys: readonly KeyBinding[];
-}
+const getHints = (mode: FooterProps['mode'], executionStarted: boolean, composing: boolean): readonly Hint[] => {
+  if (composing) return [['Enter', 'submit'], ['Esc', 'cancel']];
+  if (mode === 'approval') return [['y', 'approve'], ['n', 'deny'], ['a', 'always'], ['s', 'skip']];
+  if (mode === 'input') return [['Enter', 'submit'], ['Esc', 'cancel']];
+  // normal
+  if (!executionStarted) return [['s', 'start'], ['a', 'add'], ['d', 'remove'], ['?', 'help']];
+  return [['a', 'add'], ['d', 'remove'], ['q', 'stop run'], ['?', 'help']];
+};
 
-const modeConfig: Record<FooterProps['mode'], ModeConfig> = {
-  normal: {
-    label: 'NORMAL',
-    colorKey: 'blue',
-    keys: [
-      ['Tab', 'switch panel'],
-      ['↑↓', 'navigate'],
-      ['Enter', 'focus'],
-      ['/', 'filter'],
-      ['q', 'quit'],
-      ['?', 'help'],
-    ],
-  },
-  approval: {
-    label: 'APPROVAL',
-    colorKey: 'yellow',
-    keys: [
-      ['y', 'approve'],
-      ['n', 'deny'],
-      ['a', 'always'],
-      ['s', 'skip'],
-      ['Esc', 'back'],
-    ],
-  },
-  input: {
-    label: 'INPUT',
-    colorKey: 'green',
-    keys: [
-      ['Enter', 'submit'],
-      ['Esc', 'cancel'],
-      ['↑↓', 'history'],
-    ],
-  },
+const getModeInfo = (mode: FooterProps['mode'], composing: boolean): { label: string; colorKey: 'blue' | 'yellow' | 'green' } => {
+  if (composing) return { label: 'INPUT', colorKey: 'green' };
+  if (mode === 'approval') return { label: 'APPROVAL', colorKey: 'yellow' };
+  return { label: 'NORMAL', colorKey: 'blue' };
 };
 
 export const Footer: React.FC<FooterProps> = React.memo(({ mode, executionStarted, composing }) => {
   const { colors } = useTheme();
-  const config = modeConfig[mode];
-  const modeColor = composing ? colors.green : colors[config.colorKey];
-  const keys = composing
-    ? [['Enter', 'submit'] as const, ['Esc', 'cancel'] as const]
-    : mode === 'normal' && !executionStarted
-      ? [['s', 'start'] as const, ['d', 'remove'] as const, ['a', 'add'] as const, ...config.keys]
-      : config.keys;
+  const { label, colorKey } = getModeInfo(mode, composing);
+  const hints = getHints(mode, executionStarted, composing);
 
   return (
-    <Box flexDirection="row" gap={1}>
-      <Text bold color={modeColor}>{` ${config.label} `}</Text>
-      {keys.map((binding) => (
-        <Text key={binding[0]}>
-          <Text bold>{binding[0]}</Text>
-          <Text color={colors.subtext}>{` ${binding[1]}`}</Text>
+    <Box flexDirection="row" gap={1} alignItems="center">
+      <Text bold color={colors[colorKey]}>{` ${label} `}</Text>
+      {hints.map(([key, desc]) => (
+        <Text key={key}>
+          <Text bold>{key}</Text>
+          <Text color={colors.subtext}>{` ${desc}`}</Text>
         </Text>
       ))}
     </Box>

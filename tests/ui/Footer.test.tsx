@@ -4,60 +4,61 @@ import { render } from 'ink-testing-library';
 import { Footer } from '../../src/ui/Footer.js';
 import { ThemeContext, catppuccinMocha } from '../../src/ui/theme.js';
 
+const renderFooter = (props: {
+  mode: 'normal' | 'approval' | 'input';
+  executionStarted: boolean;
+  composing: boolean;
+}) => {
+  const { lastFrame } = render(
+    <ThemeContext.Provider value={catppuccinMocha}>
+      <Footer {...props} />
+    </ThemeContext.Provider>
+  );
+  return lastFrame() ?? '';
+};
+
 describe('Footer', () => {
-  it('renders NORMAL mode keybindings', () => {
-    const { lastFrame } = render(
-      <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="normal" executionStarted={false} composing={false} />
-      </ThemeContext.Provider>
-    );
-    const frame = lastFrame() ?? '';
+  it('shows NORMAL mode and start/add/remove/help in idle', () => {
+    const frame = renderFooter({ mode: 'normal', executionStarted: false, composing: false });
     expect(frame).toContain('NORMAL');
-    expect(frame).toContain('Tab');
-    expect(frame).toContain('quit');
-  });
-
-  it('renders APPROVAL mode keybindings', () => {
-    const { lastFrame } = render(
-      <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="approval" executionStarted={false} composing={false} />
-      </ThemeContext.Provider>
-    );
-    const frame = lastFrame() ?? '';
-    expect(frame).toContain('APPROVAL');
-    expect(frame).toContain('approve');
-    expect(frame).toContain('deny');
-  });
-
-  it('shows s start hint in normal mode when execution not started', () => {
-    const { lastFrame } = render(
-      <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="normal" executionStarted={false} composing={false} />
-      </ThemeContext.Provider>
-    );
-    const frame = lastFrame() ?? '';
-    expect(frame).toContain('s');
     expect(frame).toContain('start');
+    expect(frame).toContain('add');
+    expect(frame).toContain('remove');
+    expect(frame).toContain('help');
   });
 
-  it('hides s start hint in normal mode when execution started', () => {
-    const { lastFrame } = render(
-      <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="normal" executionStarted={true} composing={false} />
-      </ThemeContext.Provider>
-    );
-    const frame = lastFrame() ?? '';
+  it('shows d remove during execution', () => {
+    const frame = renderFooter({ mode: 'normal', executionStarted: true, composing: false });
+    expect(frame).toContain('NORMAL');
+    expect(frame).toContain('remove');
+    expect(frame).toContain('add');
+    expect(frame).toContain('stop run');
     expect(frame).not.toContain('start');
   });
 
-  it('renders INPUT mode keybindings', () => {
-    const { lastFrame } = render(
-      <ThemeContext.Provider value={catppuccinMocha}>
-        <Footer mode="input" executionStarted={false} composing={false} />
-      </ThemeContext.Provider>
-    );
-    const frame = lastFrame() ?? '';
+  it('shows APPROVAL mode with y/n/a/s', () => {
+    const frame = renderFooter({ mode: 'approval', executionStarted: true, composing: false });
+    expect(frame).toContain('APPROVAL');
+    expect(frame).toContain('approve');
+    expect(frame).toContain('deny');
+    expect(frame).toContain('always');
+    expect(frame).toContain('skip');
+  });
+
+  it('shows INPUT mode when composing', () => {
+    const frame = renderFooter({ mode: 'normal', executionStarted: false, composing: true });
     expect(frame).toContain('INPUT');
     expect(frame).toContain('submit');
+    expect(frame).toContain('cancel');
+  });
+
+  it('shows compose hints (Enter/Esc) when composing overrides normal mode', () => {
+    const frame = renderFooter({ mode: 'normal', executionStarted: true, composing: true });
+    expect(frame).toContain('INPUT');
+    expect(frame).toContain('Enter');
+    expect(frame).toContain('Esc');
+    // Normal mode hints should not appear
+    expect(frame).not.toContain('stop run');
+    expect(frame).not.toContain('help');
   });
 });
