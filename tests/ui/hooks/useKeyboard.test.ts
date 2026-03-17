@@ -3,13 +3,6 @@ import { createUIStore } from '../../../src/ui/store.js';
 import { handleKeypress } from '../../../src/ui/hooks/useKeyboard.js';
 
 describe('handleKeypress', () => {
-  it('toggles panel on Tab in normal mode', () => {
-    const store = createUIStore();
-    expect(store.getState().sidebarFocused).toBe(true);
-    handleKeypress(store, 'tab');
-    expect(store.getState().sidebarFocused).toBe(false);
-  });
-
   it('toggles help on ?', () => {
     const store = createUIStore();
     handleKeypress(store, '?');
@@ -28,6 +21,7 @@ describe('handleKeypress', () => {
   it('requests graceful quit on q from approval mode when a quit callback is provided', () => {
     const store = createUIStore();
     const requests: string[] = [];
+    store.getState().requestExecution();
     store.getState().setMode('approval');
     const result = handleKeypress(store, 'q', {
       onQuit: (reason) => {
@@ -35,7 +29,32 @@ describe('handleKeypress', () => {
       }
     });
     expect(result).toBe('handled');
+    expect(requests).toEqual([]);
+    expect(store.getState().quitConfirmPending).toBe(true);
+    expect(store.getState().notice?.message).toContain('Press q again');
+  });
+
+  it('confirms graceful quit on second q from approval mode', () => {
+    const store = createUIStore();
+    const requests: string[] = [];
+    store.getState().requestExecution();
+    store.getState().setMode('approval');
+
+    handleKeypress(store, 'q', {
+      onQuit: (reason) => {
+        requests.push(reason);
+      }
+    });
+
+    const result = handleKeypress(store, 'q', {
+      onQuit: (reason) => {
+        requests.push(reason);
+      }
+    });
+
+    expect(result).toBe('handled');
     expect(requests).toEqual(['keyboard']);
+    expect(store.getState().quitConfirmPending).toBe(false);
   });
 
   it('returns to normal on Esc from help', () => {
@@ -63,7 +82,7 @@ describe('handleKeypress', () => {
     expect(requests).toEqual(['keyboard']);
   });
 
-  it('navigates down through agents with arrow keys when sidebar focused', () => {
+  it('navigates down through agents with arrow keys', () => {
     const store = createUIStore();
     store.getState().addAgent({ id: 'a1', name: 'Alpha', feature: 'auth' });
     store.getState().addAgent({ id: 'a2', name: 'Beta', feature: 'api' });
@@ -72,7 +91,7 @@ describe('handleKeypress', () => {
     expect(store.getState().focusedAgentId).toBe('a2');
   });
 
-  it('navigates up through agents with arrow keys when sidebar focused', () => {
+  it('navigates up through agents with arrow keys', () => {
     const store = createUIStore();
     store.getState().addAgent({ id: 'a1', name: 'Alpha', feature: 'auth' });
     store.getState().addAgent({ id: 'a2', name: 'Beta', feature: 'api' });
@@ -81,24 +100,15 @@ describe('handleKeypress', () => {
     expect(store.getState().focusedAgentId).toBe('a1');
   });
 
-  it('scrolls main panel with arrow keys when main panel focused', () => {
+  it('navigates agents with j and k', () => {
     const store = createUIStore();
     store.getState().addAgent({ id: 'a1', name: 'Alpha', feature: 'auth' });
+    store.getState().addAgent({ id: 'a2', name: 'Beta', feature: 'api' });
     store.getState().setFocusedAgent('a1');
-    store.getState().appendOutput('a1', { type: 'text', content: 'line1', timestamp: Date.now() });
-    store.getState().appendOutput('a1', { type: 'text', content: 'line2', timestamp: Date.now() });
-    store.getState().togglePanel(); // switch to main panel
-    handleKeypress(store, 'down');
-    expect(store.getState().scrollOffset).toBe(1);
-    handleKeypress(store, 'up');
-    expect(store.getState().scrollOffset).toBe(0);
-  });
-
-  it('does not scroll below zero', () => {
-    const store = createUIStore();
-    store.getState().togglePanel(); // main panel
-    handleKeypress(store, 'up');
-    expect(store.getState().scrollOffset).toBe(0);
+    handleKeypress(store, 'j');
+    expect(store.getState().focusedAgentId).toBe('a2');
+    handleKeypress(store, 'k');
+    expect(store.getState().focusedAgentId).toBe('a1');
   });
 
   it('resolves approval decisions through callbacks', () => {
@@ -181,17 +191,18 @@ describe('handleKeypress', () => {
     expect(removed).toEqual(['a1']);
   });
 
-  it('d does nothing during execution', () => {
+  it('d removes focused queued agent during execution', () => {
     const store = createUIStore();
-    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1', status: 'queued' });
-    store.getState().setFocusedAgent('a1');
+    store.getState().addAgent({ id: 'r1', name: 'Running', feature: 'f1', status: 'running', removable: false });
+    store.getState().addAgent({ id: 'q1', name: 'Queued', feature: 'f2', status: 'queued', removable: true });
+    store.getState().setFocusedAgent('q1');
     store.getState().requestExecution();
     const removed: string[] = [];
     const result = handleKeypress(store, 'd', {
       onRemoveAgent: (id) => { removed.push(id); }
     });
-    expect(result).toBe('unhandled');
-    expect(removed).toEqual([]);
+    expect(result).toBe('handled');
+    expect(removed).toEqual(['q1']);
   });
 
   it('d does nothing with no focused agent', () => {
@@ -247,12 +258,12 @@ describe('handleKeypress', () => {
     expect(store.getState().addInputText).toBe('');
   });
 
-  it('a does nothing during execution', () => {
+  it('a enters add mode during execution', () => {
     const store = createUIStore();
     store.getState().requestExecution();
     const result = handleKeypress(store, 'a');
-    expect(result).toBe('unhandled');
-    expect(store.getState().addInputText).toBeNull();
+    expect(result).toBe('handled');
+    expect(store.getState().addInputText).toBe('');
   });
 
   it('d blocked on non-removable agent', () => {
@@ -293,6 +304,26 @@ describe('handleKeypress', () => {
     store.getState().setFilterText('abc');
     handleKeypress(store, 'backspace');
     expect(store.getState().filterText).toBe('ab');
+  });
+
+  it('moves the filter cursor left and inserts at the cursor in INPUT mode', () => {
+    const store = createUIStore();
+    store.getState().setMode('input');
+    store.getState().setFilterText('helo');
+    handleKeypress(store, 'left');
+    handleKeypress(store, 'l');
+    expect(store.getState().filterText).toBe('hello');
+    expect(store.getState().filterCursorOffset).toBe(4);
+  });
+
+  it('deletes the previous word in INPUT mode for meta-modified delete/backspace', () => {
+    const store = createUIStore();
+    store.getState().setMode('input');
+    store.getState().setFilterText('hello world');
+    const result = handleKeypress(store, 'delete', {}, { meta: true });
+    expect(result).toBe('handled');
+    expect(store.getState().filterText).toBe('hello ');
+    expect(store.getState().filterCursorOffset).toBe(6);
   });
 
   it('backspace in INPUT mode on empty filter stays handled and empty', () => {
