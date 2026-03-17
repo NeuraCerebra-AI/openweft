@@ -10,7 +10,7 @@ import { MainPanel } from './MainPanel.js';
 import { HelpOverlay } from './HelpOverlay.js';
 import { Footer } from './Footer.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
-import { handleKeypress } from './hooks/useKeyboard.js';
+import { filterAgents, handleKeypress } from './hooks/useKeyboard.js';
 import type { UIStore } from './store.js';
 
 interface AppProps {
@@ -30,7 +30,8 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
   const { exit } = useApp();
   const { rows } = useTerminalSize();
 
-  const focusedAgent = state.agents.find((a) => a.id === state.focusedAgentId) ?? null;
+  const filteredAgents = filterAgents(state.agents, state.filterText);
+  const focusedAgent = filteredAgents.find((a) => a.id === state.focusedAgentId) ?? null;
   const activeCount = state.agents.filter((a) => a.status === 'running' || a.status === 'approval').length;
   const chromeLines = BASE_CHROME_LINES + (state.notice ? 1 : 0);
   const viewportHeight = Math.max(5, rows - chromeLines);
@@ -48,6 +49,16 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
     }, 1000);
     return () => clearInterval(timer);
   }, [store, state.executionRequested]);
+
+  useEffect(() => {
+    const focusVisible = filteredAgents.some((agent) => agent.id === state.focusedAgentId);
+    if (!focusVisible) {
+      const nextFocusedId = filteredAgents[0]?.id ?? null;
+      if (nextFocusedId !== state.focusedAgentId) {
+        store.getState().setFocusedAgent(nextFocusedId);
+      }
+    }
+  }, [filteredAgents, state.focusedAgentId, store]);
 
   useInput((_input, key) => {
     // Compose mode — swallow ALL keys
@@ -75,6 +86,8 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
     const keyName = key.tab ? 'tab'
       : key.escape ? 'escape'
       : key.return ? 'return'
+      : key.backspace ? 'backspace'
+      : key.delete ? 'backspace'
       : key.upArrow ? 'up'
       : key.downArrow ? 'down'
       : _input;
@@ -109,7 +122,7 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
         ) : null}
         <Box flexDirection="row" flexGrow={1}>
           <Sidebar
-            agents={state.agents}
+            agents={filteredAgents}
             focusedAgentId={state.focusedAgentId}
             phase={state.phase}
             totalCost={state.totalCost}

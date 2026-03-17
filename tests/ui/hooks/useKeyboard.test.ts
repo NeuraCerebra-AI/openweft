@@ -278,4 +278,105 @@ describe('handleKeypress', () => {
     expect(result).toBe('handled');
     expect(removed).toEqual(['q1']);
   });
+
+  it('typing in INPUT mode appends to filterText', () => {
+    const store = createUIStore();
+    store.getState().setMode('input');
+    handleKeypress(store, 'a');
+    handleKeypress(store, 'b');
+    expect(store.getState().filterText).toBe('ab');
+  });
+
+  it('backspace in INPUT mode removes last char', () => {
+    const store = createUIStore();
+    store.getState().setMode('input');
+    store.getState().setFilterText('abc');
+    handleKeypress(store, 'backspace');
+    expect(store.getState().filterText).toBe('ab');
+  });
+
+  it('backspace in INPUT mode on empty filter stays handled and empty', () => {
+    const store = createUIStore();
+    store.getState().setMode('input');
+    const result = handleKeypress(store, 'backspace');
+    expect(result).toBe('handled');
+    expect(store.getState().filterText).toBe('');
+  });
+
+  it('Enter in INPUT mode returns to normal with filter kept', () => {
+    const store = createUIStore();
+    store.getState().setMode('input');
+    store.getState().setFilterText('auth');
+    handleKeypress(store, 'return');
+    expect(store.getState().mode).toBe('normal');
+    expect(store.getState().filterText).toBe('auth');
+  });
+
+  it('Esc in INPUT mode clears filter and returns to normal', () => {
+    const store = createUIStore();
+    store.getState().setMode('input');
+    store.getState().setFilterText('auth');
+    handleKeypress(store, 'escape');
+    expect(store.getState().mode).toBe('normal');
+    expect(store.getState().filterText).toBe('');
+  });
+
+  it('navigates only through visible agents when filter is active', () => {
+    const store = createUIStore();
+    store.getState().addAgent({ id: 'a1', name: 'Auth One', feature: 'auth-login' });
+    store.getState().addAgent({ id: 'a2', name: 'Billing', feature: 'payments' });
+    store.getState().addAgent({ id: 'a3', name: 'Auth Two', feature: 'auth-signup' });
+    store.getState().setFocusedAgent('a1');
+    store.getState().setFilterText('auth');
+    handleKeypress(store, 'down');
+    expect(store.getState().focusedAgentId).toBe('a3');
+    handleKeypress(store, 'up');
+    expect(store.getState().focusedAgentId).toBe('a1');
+  });
+
+  it('d is unhandled when focused agent is filtered out', () => {
+    const store = createUIStore();
+    store.getState().addAgent({ id: 'a1', name: 'Alpha', feature: 'auth', removable: true });
+    store.getState().addAgent({ id: 'a2', name: 'Billing', feature: 'payments', removable: true });
+    store.getState().setFocusedAgent('a1');
+    store.getState().setFilterText('bill');
+    const removed: string[] = [];
+    const result = handleKeypress(store, 'd', {
+      onRemoveAgent: (id) => { removed.push(id); }
+    });
+    expect(result).toBe('unhandled');
+    expect(removed).toEqual([]);
+  });
+
+  it('typing in INPUT mode rehomes focus to the first visible agent', () => {
+    const store = createUIStore();
+    store.getState().addAgent({ id: 'a1', name: 'Alpha', feature: 'auth' });
+    store.getState().addAgent({ id: 'a2', name: 'Billing', feature: 'payments' });
+    store.getState().setFocusedAgent('a1');
+    store.getState().setMode('input');
+    handleKeypress(store, 'b');
+    expect(store.getState().filterText).toBe('b');
+    expect(store.getState().focusedAgentId).toBe('a2');
+  });
+
+  it('typing in INPUT mode can clear focus when there are no matches', () => {
+    const store = createUIStore();
+    store.getState().addAgent({ id: 'a1', name: 'Alpha', feature: 'auth' });
+    store.getState().setFocusedAgent('a1');
+    store.getState().setMode('input');
+    handleKeypress(store, 'z');
+    expect(store.getState().focusedAgentId).toBeNull();
+  });
+
+  it('slash clears quit confirmation before entering INPUT mode', () => {
+    const store = createUIStore();
+    store.getState().requestExecution();
+    handleKeypress(store, 'q');
+    expect(store.getState().quitConfirmPending).toBe(true);
+    const result = handleKeypress(store, '/');
+    expect(result).toBe('handled');
+    expect(store.getState().mode).toBe('input');
+    expect(store.getState().quitConfirmPending).toBe(false);
+    expect(store.getState().notice).toBeNull();
+  });
 });

@@ -1,6 +1,6 @@
 import type { StoreApi } from 'zustand/vanilla';
 
-import type { UIStore } from '../store.js';
+import type { AgentState, UIStore } from '../store.js';
 
 export type KeypressResult = 'handled' | 'quit' | 'unhandled';
 
@@ -11,12 +11,30 @@ export interface KeypressHandlers {
   onRemoveAgent?: (agentId: string) => void;
 }
 
+export const filterAgents = (agents: readonly AgentState[], filterText: string): AgentState[] => {
+  const query = filterText.toLowerCase();
+  return query
+    ? agents.filter((agent) =>
+        agent.name.toLowerCase().includes(query) ||
+        agent.feature.toLowerCase().includes(query)
+      )
+    : [...agents];
+};
+
 export const handleKeypress = (
   store: StoreApi<UIStore>,
   key: string,
   handlers: KeypressHandlers = {}
 ): KeypressResult => {
   const state = store.getState();
+  const visibleAgents = filterAgents(state.agents, state.filterText);
+
+  const syncFocusToVisible = (filterText: string): void => {
+    const nextVisibleAgents = filterAgents(state.agents, filterText);
+    if (!nextVisibleAgents.some((agent) => agent.id === state.focusedAgentId)) {
+      state.setFocusedAgent(nextVisibleAgents[0]?.id ?? null);
+    }
+  };
 
   // Help overlay takes priority
   if (state.showHelp) {
@@ -62,10 +80,16 @@ export const handleKeypress = (
             return 'handled';
           }
           return 'unhandled';
-        case '/': state.setMode('input'); return 'handled';
+        case '/':
+          if (state.quitConfirmPending) {
+            state.setQuitConfirmPending(false);
+            state.setNotice(null);
+          }
+          state.setMode('input');
+          return 'handled';
         case 'd':
           if (!state.executionRequested && state.focusedAgentId && handlers.onRemoveAgent) {
-            const focused = state.agents.find((a) => a.id === state.focusedAgentId);
+            const focused = visibleAgents.find((a) => a.id === state.focusedAgentId);
             if (focused?.removable) {
               handlers.onRemoveAgent(state.focusedAgentId);
               return 'handled';
@@ -81,9 +105,15 @@ export const handleKeypress = (
 
         case 'up':
           if (state.sidebarFocused) {
-            const idx = state.agents.findIndex((a) => a.id === state.focusedAgentId);
+            if (visibleAgents.length === 0) return 'handled';
+            const idx = visibleAgents.findIndex((a) => a.id === state.focusedAgentId);
+            if (idx === -1) {
+              const first = visibleAgents[0];
+              if (first !== undefined) state.setFocusedAgent(first.id);
+              return 'handled';
+            }
             if (idx > 0) {
-              const prev = state.agents[idx - 1];
+              const prev = visibleAgents[idx - 1];
               if (prev !== undefined) state.setFocusedAgent(prev.id);
             }
           } else {
@@ -93,9 +123,15 @@ export const handleKeypress = (
 
         case 'down':
           if (state.sidebarFocused) {
-            const idx = state.agents.findIndex((a) => a.id === state.focusedAgentId);
-            if (idx < state.agents.length - 1) {
-              const next = state.agents[idx + 1];
+            if (visibleAgents.length === 0) return 'handled';
+            const idx = visibleAgents.findIndex((a) => a.id === state.focusedAgentId);
+            if (idx === -1) {
+              const first = visibleAgents[0];
+              if (first !== undefined) state.setFocusedAgent(first.id);
+              return 'handled';
+            }
+            if (idx < visibleAgents.length - 1) {
+              const next = visibleAgents[idx + 1];
               if (next !== undefined) state.setFocusedAgent(next.id);
             }
           } else {
@@ -151,7 +187,24 @@ export const handleKeypress = (
           state.setMode('normal');
           state.setFilterText('');
           return 'handled';
-        default: return 'unhandled';
+        case 'return':
+          state.setMode('normal');
+          return 'handled';
+        case 'backspace':
+          {
+            const nextFilterText = state.filterText.slice(0, -1);
+            state.setFilterText(nextFilterText);
+            syncFocusToVisible(nextFilterText);
+          }
+          return 'handled';
+        default:
+          if (key.length === 1) {
+            const nextFilterText = state.filterText + key;
+            state.setFilterText(nextFilterText);
+            syncFocusToVisible(nextFilterText);
+            return 'handled';
+          }
+          return 'unhandled';
       }
   }
 };
