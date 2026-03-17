@@ -23,61 +23,81 @@ export interface AgentState {
   readonly cost: number;
   readonly elapsed: number;
   readonly outputLines: OutputLine[];
+  readonly files: readonly string[];
+  readonly tokens: number;
   readonly approvalRequest: ApprovalRequest | null;
 }
 
 export interface UIStore {
-  phase: { current: number; total: number } | null;
+  phase: { current: number; total: number; label?: string } | null;
   totalCost: number;
+  totalTokens: number;
   elapsed: number;
+  spinnerFrame: number;
+  completion: { status: string; plannedCount: number; mergedCount: number } | null;
   notice: { level: 'info' | 'error'; message: string } | null;
   agents: AgentState[];
   focusedAgentId: string | null;
   mode: 'normal' | 'approval' | 'input';
   sidebarFocused: boolean;
   filterText: string;
+  filterCursorOffset: number;
   scrollOffset: number;
   showHelp: boolean;
   executionRequested: boolean;
   quitConfirmPending: boolean;
   addInputText: string | null;
-  addAgent: (init: { id: string; name: string; feature: string; status?: AgentStatus; removable?: boolean }) => void;
+  addInputCursorOffset: number;
+  addAgent: (init: { id: string; name: string; feature: string; status?: AgentStatus; removable?: boolean; files?: readonly string[] }) => void;
   removeAgent: (id: string) => void;
-  updateAgent: (id: string, patch: Partial<Pick<AgentState, 'status' | 'cost' | 'elapsed' | 'currentTool' | 'approvalRequest'>>) => void;
+  updateAgent: (id: string, patch: Partial<Pick<AgentState, 'status' | 'cost' | 'elapsed' | 'currentTool' | 'approvalRequest' | 'tokens'>>) => void;
   appendOutput: (agentId: string, line: OutputLine) => void;
   setFocusedAgent: (id: string | null) => void;
   setMode: (mode: UIStore['mode']) => void;
   togglePanel: () => void;
-  setPhase: (phase: { current: number; total: number } | null) => void;
+  setPhase: (phase: { current: number; total: number; label?: string } | null) => void;
   setTotalCost: (cost: number) => void;
+  setTotalTokens: (tokens: number) => void;
   setElapsed: (elapsed: number) => void;
   tickAgentElapsed: () => void;
+  tickSpinnerFrame: () => void;
+  setCompletion: (completion: UIStore['completion']) => void;
   setScrollOffset: (offset: number) => void;
   setShowHelp: (show: boolean) => void;
   setFilterText: (text: string) => void;
+  setFilterCursorOffset: (offset: number) => void;
   setNotice: (notice: UIStore['notice']) => void;
   requestExecution: () => void;
   setQuitConfirmPending: (pending: boolean) => void;
   setAddInputText: (text: string | null) => void;
-  clearQueuedAgents: () => void;
+  setAddInputCursorOffset: (offset: number) => void;
+  adoptQueuedPlaceholder: (agent: { id: string; name: string; feature: string }) => boolean;
 }
+
+const isQueuedPlaceholder = (agent: AgentState): boolean =>
+  agent.status === 'queued' && agent.id.startsWith('queued');
 
 export const createUIStore = () =>
   createStore<UIStore>((set) => ({
     phase: null,
     totalCost: 0,
+    totalTokens: 0,
     elapsed: 0,
+    spinnerFrame: 0,
+    completion: null,
     notice: null,
     agents: [],
     focusedAgentId: null,
     mode: 'normal',
     sidebarFocused: true,
     filterText: '',
+    filterCursorOffset: 0,
     scrollOffset: 0,
     showHelp: false,
     executionRequested: false,
     quitConfirmPending: false,
     addInputText: null,
+    addInputCursorOffset: 0,
 
     addAgent: (init) =>
       set((state) => ({
@@ -91,6 +111,8 @@ export const createUIStore = () =>
             cost: 0,
             elapsed: 0,
             outputLines: [],
+            files: init.files ?? [],
+            tokens: 0,
             approvalRequest: null,
           },
         ],
@@ -130,6 +152,7 @@ export const createUIStore = () =>
     togglePanel: () => set((state) => ({ sidebarFocused: !state.sidebarFocused })),
     setPhase: (phase) => set({ phase }),
     setTotalCost: (cost) => set({ totalCost: cost }),
+    setTotalTokens: (tokens) => set({ totalTokens: tokens }),
     setElapsed: (elapsed) => set({ elapsed }),
     tickAgentElapsed: () =>
       set((state) => ({
@@ -139,21 +162,57 @@ export const createUIStore = () =>
             : agent
         )
       })),
+    tickSpinnerFrame: () => set((state) => ({ spinnerFrame: state.spinnerFrame + 1 })),
+    setCompletion: (completion) => set({ completion }),
     setScrollOffset: (offset) => set({ scrollOffset: offset }),
     setShowHelp: (show) => set({ showHelp: show }),
-    setFilterText: (text) => set({ filterText: text }),
+    setFilterText: (text) => set({ filterText: text, filterCursorOffset: text.length }),
+    setFilterCursorOffset: (offset) =>
+      set((state) => ({ filterCursorOffset: Math.max(0, Math.min(offset, state.filterText.length)) })),
     setNotice: (notice) => set({ notice }),
     requestExecution: () => set({ executionRequested: true }),
     setQuitConfirmPending: (pending) => set({ quitConfirmPending: pending }),
-    setAddInputText: (text) => set({ addInputText: text }),
-    clearQueuedAgents: () =>
+    setAddInputText: (text) => set({ addInputText: text, addInputCursorOffset: text?.length ?? 0 }),
+    setAddInputCursorOffset: (offset) =>
+      set((state) => ({
+        addInputCursorOffset: Math.max(0, Math.min(offset, state.addInputText?.length ?? 0)),
+      })),
+    adoptQueuedPlaceholder: (agent) => {
+      let adopted = false;
+
       set((state) => {
-        const filtered = state.agents.filter((a) => a.status !== 'queued');
-        const focusStillExists = filtered.some((a) => a.id === state.focusedAgentId);
-        return {
-          agents: filtered,
-          focusedAgentId: focusStillExists ? state.focusedAgentId : (filtered[0]?.id ?? null),
-          scrollOffset: 0,
+        const placeholderIndex = state.agents.findIndex(isQueuedPlaceholder);
+        if (placeholderIndex === -1) {
+          return state;
+        }
+
+        adopted = true;
+        const placeholder = state.agents[placeholderIndex];
+        if (!placeholder) {
+          return state;
+        }
+
+        const nextAgents = [...state.agents];
+        nextAgents[placeholderIndex] = {
+          ...placeholder,
+          id: agent.id,
+          name: agent.name,
+          feature: agent.feature,
+          status: 'running',
+          removable: false,
+          currentTool: null,
+          approvalRequest: null
         };
-      }),
+
+        const focusedAgentId = state.focusedAgentId === placeholder.id ? agent.id : state.focusedAgentId;
+
+        return {
+          agents: nextAgents,
+          focusedAgentId,
+          scrollOffset: state.focusedAgentId === placeholder.id ? 0 : state.scrollOffset
+        };
+      });
+
+      return adopted;
+    },
   }));

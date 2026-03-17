@@ -16,6 +16,8 @@ describe('UIStore', () => {
     expect(state.sidebarFocused).toBe(true);
     expect(state.phase).toBeNull();
     expect(state.totalCost).toBe(0);
+    expect(state.spinnerFrame).toBe(0);
+    expect(state.completion).toBeNull();
     expect(state.scrollOffset).toBe(0);
     expect(state.showHelp).toBe(false);
   });
@@ -83,6 +85,28 @@ describe('UIStore', () => {
     expect(store.getState().executionRequested).toBe(true);
   });
 
+  it('adopts the next queued placeholder into a live agent row', () => {
+    store.getState().addAgent({ id: 'cp1', name: 'Resume checkpoint', feature: 'checkpoint', status: 'queued', removable: false });
+    store.getState().addAgent({ id: 'queued-1', name: 'Queued request', feature: 'Queued request', status: 'queued', removable: true });
+    store.getState().setFocusedAgent('queued-1');
+
+    store.getState().adoptQueuedPlaceholder({
+      id: '001',
+      name: '001 Planned request',
+      feature: 'Planned request'
+    });
+
+    expect(store.getState().agents.map((agent) => agent.id)).toEqual(['cp1', '001']);
+    expect(store.getState().agents[1]).toMatchObject({
+      id: '001',
+      name: '001 Planned request',
+      feature: 'Planned request',
+      status: 'running',
+      removable: false
+    });
+    expect(store.getState().focusedAgentId).toBe('001');
+  });
+
   it('adds agent with custom status when provided', () => {
     store.getState().addAgent({ id: 'beta', name: 'Beta', feature: 'api', status: 'queued' });
     expect(store.getState().agents[0]?.status).toBe('queued');
@@ -141,15 +165,43 @@ describe('UIStore', () => {
     expect(store.getState().addInputText).toBeNull();
   });
 
-  it('clears queued agents', () => {
-    store.getState().addAgent({ id: 'q1', name: 'Q1', feature: 'f1', status: 'queued' });
-    store.getState().addAgent({ id: 'r1', name: 'R1', feature: 'f2', status: 'running' });
-    store.getState().addAgent({ id: 'q2', name: 'Q2', feature: 'f3', status: 'queued' });
-    store.getState().setFocusedAgent('q1');
-    store.getState().clearQueuedAgents();
-    expect(store.getState().agents).toHaveLength(1);
-    expect(store.getState().agents[0]?.id).toBe('r1');
-    expect(store.getState().focusedAgentId).toBe('r1');
+  it('advances spinner frame independently of agent status', () => {
+    store.getState().tickSpinnerFrame();
+    store.getState().tickSpinnerFrame();
+    expect(store.getState().spinnerFrame).toBe(2);
+  });
+
+  it('stores completion summary state', () => {
+    store.getState().setCompletion({ status: 'completed', plannedCount: 3, mergedCount: 2 });
+    expect(store.getState().completion).toEqual({ status: 'completed', plannedCount: 3, mergedCount: 2 });
+  });
+
+  it('ticks elapsed only for running or approval agents', () => {
+    store.getState().addAgent({ id: 'run', name: 'Run', feature: 'f1', status: 'running' });
+    store.getState().addAgent({ id: 'approve', name: 'Approve', feature: 'f2', status: 'approval' });
+    store.getState().addAgent({ id: 'done', name: 'Done', feature: 'f3', status: 'completed' });
+    store.getState().tickAgentElapsed();
+
+    const [runningAgent, approvalAgent, completedAgent] = store.getState().agents;
+    expect(runningAgent?.elapsed).toBe(1);
+    expect(approvalAgent?.elapsed).toBe(1);
+    expect(completedAgent?.elapsed).toBe(0);
+  });
+
+  it('leaves the store unchanged when there is no queued placeholder to adopt', () => {
+    store.getState().addAgent({ id: '001', name: 'Resume checkpoint', feature: 'checkpoint', status: 'queued', removable: false });
+
+    store.getState().adoptQueuedPlaceholder({
+      id: '002',
+      name: '002 Planned request',
+      feature: 'Planned request'
+    });
+
+    expect(store.getState().agents.map((agent) => agent.id)).toEqual(['001']);
+    expect(store.getState().agents[0]).toMatchObject({
+      id: '001',
+      status: 'queued'
+    });
   });
 
   it('adds agent with removable flag', () => {
@@ -160,5 +212,30 @@ describe('UIStore', () => {
   it('defaults removable to false', () => {
     store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1' });
     expect(store.getState().agents[0]?.removable).toBe(false);
+  });
+
+  it('addAgent initializes files and tokens to defaults', () => {
+    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1' });
+    const agent = store.getState().agents[0];
+    expect(agent?.files).toEqual([]);
+    expect(agent?.tokens).toBe(0);
+  });
+
+  it('addAgent accepts files in init', () => {
+    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1', files: ['src/index.ts', 'src/app.ts'] });
+    const agent = store.getState().agents[0];
+    expect(agent?.files).toEqual(['src/index.ts', 'src/app.ts']);
+  });
+
+  it('updateAgent patches tokens', () => {
+    store.getState().addAgent({ id: 'a1', name: 'A1', feature: 'f1' });
+    store.getState().updateAgent('a1', { tokens: 1500 });
+    expect(store.getState().agents[0]?.tokens).toBe(1500);
+  });
+
+  it('tracks totalTokens', () => {
+    expect(store.getState().totalTokens).toBe(0);
+    store.getState().setTotalTokens(42000);
+    expect(store.getState().totalTokens).toBe(42000);
   });
 });
