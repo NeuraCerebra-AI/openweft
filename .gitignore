@@ -21,7 +21,12 @@ docs/superpowers/
 .playwright-mcp/
 .claude/
 AGENTS.md
+CLAUDE.md
+AUDIT.md
 
 # Prototype screenshots and design artifacts
 prototype-*.png
 winner-*.png
+prototype/
+docs/plans/
+docs/cli-design-research.md
