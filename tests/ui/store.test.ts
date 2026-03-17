@@ -13,12 +13,10 @@ describe('UIStore', () => {
     expect(state.agents).toEqual([]);
     expect(state.focusedAgentId).toBeNull();
     expect(state.mode).toBe('normal');
-    expect(state.sidebarFocused).toBe(true);
     expect(state.phase).toBeNull();
     expect(state.totalCost).toBe(0);
     expect(state.spinnerFrame).toBe(0);
     expect(state.completion).toBeNull();
-    expect(state.scrollOffset).toBe(0);
     expect(state.showHelp).toBe(false);
   });
 
@@ -50,14 +48,6 @@ describe('UIStore', () => {
   it('sets focused agent', () => {
     store.getState().setFocusedAgent('alpha');
     expect(store.getState().focusedAgentId).toBe('alpha');
-  });
-
-  it('toggles panel focus', () => {
-    expect(store.getState().sidebarFocused).toBe(true);
-    store.getState().togglePanel();
-    expect(store.getState().sidebarFocused).toBe(false);
-    store.getState().togglePanel();
-    expect(store.getState().sidebarFocused).toBe(true);
   });
 
   it('sets mode', () => {

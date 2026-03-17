@@ -39,10 +39,8 @@ export interface UIStore {
   agents: AgentState[];
   focusedAgentId: string | null;
   mode: 'normal' | 'approval' | 'input';
-  sidebarFocused: boolean;
   filterText: string;
   filterCursorOffset: number;
-  scrollOffset: number;
   showHelp: boolean;
   executionRequested: boolean;
   quitConfirmPending: boolean;
@@ -54,7 +52,6 @@ export interface UIStore {
   appendOutput: (agentId: string, line: OutputLine) => void;
   setFocusedAgent: (id: string | null) => void;
   setMode: (mode: UIStore['mode']) => void;
-  togglePanel: () => void;
   setPhase: (phase: { current: number; total: number; label?: string } | null) => void;
   setTotalCost: (cost: number) => void;
   setTotalTokens: (tokens: number) => void;
@@ -62,7 +59,6 @@ export interface UIStore {
   tickAgentElapsed: () => void;
   tickSpinnerFrame: () => void;
   setCompletion: (completion: UIStore['completion']) => void;
-  setScrollOffset: (offset: number) => void;
   setShowHelp: (show: boolean) => void;
   setFilterText: (text: string) => void;
   setFilterCursorOffset: (offset: number) => void;
@@ -89,10 +85,8 @@ export const createUIStore = () =>
     agents: [],
     focusedAgentId: null,
     mode: 'normal',
-    sidebarFocused: true,
     filterText: '',
     filterCursorOffset: 0,
-    scrollOffset: 0,
     showHelp: false,
     executionRequested: false,
     quitConfirmPending: false,
@@ -127,7 +121,7 @@ export const createUIStore = () =>
           const next = filtered[idx] ?? filtered[idx - 1] ?? null;
           nextFocused = next?.id ?? null;
         }
-        return { agents: filtered, focusedAgentId: nextFocused, scrollOffset: 0 };
+        return { agents: filtered, focusedAgentId: nextFocused };
       }),
 
     updateAgent: (id, patch) =>
@@ -147,9 +141,8 @@ export const createUIStore = () =>
         }),
       })),
 
-    setFocusedAgent: (id) => set({ focusedAgentId: id, scrollOffset: 0 }),
+    setFocusedAgent: (id) => set({ focusedAgentId: id }),
     setMode: (mode) => set({ mode }),
-    togglePanel: () => set((state) => ({ sidebarFocused: !state.sidebarFocused })),
     setPhase: (phase) => set({ phase }),
     setTotalCost: (cost) => set({ totalCost: cost }),
     setTotalTokens: (tokens) => set({ totalTokens: tokens }),
@@ -164,7 +157,6 @@ export const createUIStore = () =>
       })),
     tickSpinnerFrame: () => set((state) => ({ spinnerFrame: state.spinnerFrame + 1 })),
     setCompletion: (completion) => set({ completion }),
-    setScrollOffset: (offset) => set({ scrollOffset: offset }),
     setShowHelp: (show) => set({ showHelp: show }),
     setFilterText: (text) => set({ filterText: text, filterCursorOffset: text.length }),
     setFilterCursorOffset: (offset) =>
@@ -208,8 +200,7 @@ export const createUIStore = () =>
 
         return {
           agents: nextAgents,
-          focusedAgentId,
-          scrollOffset: state.focusedAgentId === placeholder.id ? 0 : state.scrollOffset
+          focusedAgentId
         };
       });
 
