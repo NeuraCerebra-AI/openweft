@@ -1,10 +1,14 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { App } from '../../src/ui/App.js';
 import { createUIStore } from '../../src/ui/store.js';
 
 describe('App', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('renders without crashing', () => {
     const store = createUIStore();
     const { lastFrame } = render(<App store={store} />);
@@ -30,6 +34,31 @@ describe('App', () => {
     expect(lastFrame()).toContain('openweft');
   });
 
+  it('renders an AgentCard for each agent in the store', () => {
+    const store = createUIStore();
+    store.getState().addAgent({ id: 'a1', name: 'Alpha', feature: 'auth' });
+    store.getState().addAgent({ id: 'a2', name: 'Beta', feature: 'payments' });
+
+    const { lastFrame } = render(<App store={store} />);
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('Alpha');
+    expect(frame).toContain('auth');
+    expect(frame).toContain('Beta');
+    expect(frame).toContain('payments');
+  });
+
+  it('renders MeterBar when phase is set', () => {
+    const store = createUIStore();
+    store.getState().setPhase({ current: 1, total: 3 });
+    store.getState().addAgent({ id: 'a1', name: 'Alpha', feature: 'auth' });
+
+    const { lastFrame } = render(<App store={store} />);
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('Phase 1/3');
+  });
+
   it('clamps hidden focus to the first visible filtered agent', async () => {
     const store = createUIStore();
     store.getState().addAgent({ id: 'a1', name: 'Alpha Hidden', feature: 'auth' });
@@ -44,6 +73,83 @@ describe('App', () => {
     expect(store.getState().focusedAgentId).toBe('a2');
     expect(frame).toContain('Billing Visible');
     expect(frame).not.toContain('Alpha Hidden');
-    expect(frame).toContain('◆ Billing Visible');
+  });
+
+  it('renders a completion summary when the run finishes', () => {
+    const store = createUIStore();
+    store.getState().setCompletion({ status: 'completed', plannedCount: 2, mergedCount: 2 });
+
+    const { lastFrame } = render(<App store={store} />);
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('Run complete');
+    expect(frame).toContain('Planned 2');
+    expect(frame).toContain('Merged 2');
+    expect(frame).toContain('Returning to shell');
+  });
+
+  it('auto-clears notices after a timeout', async () => {
+    vi.useFakeTimers();
+
+    const store = createUIStore();
+    render(<App store={store} />);
+    store.getState().setNotice({ level: 'error', message: 'Queue write failed' });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(store.getState().notice).toBeNull();
+  });
+
+  it('auto-clearing the quit confirmation notice also resets the pending flag', async () => {
+    vi.useFakeTimers();
+
+    const store = createUIStore();
+    render(<App store={store} />);
+    store.getState().setQuitConfirmPending(true);
+    store.getState().setNotice({ level: 'info', message: 'Press q again to stop after current phase, Esc to cancel' });
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(store.getState().notice).toBeNull();
+    expect(store.getState().quitConfirmPending).toBe(false);
+  });
+
+  it('renders the compose cursor at the insertion point', () => {
+    const store = createUIStore();
+    store.getState().setAddInputText('hello');
+    store.getState().setAddInputCursorOffset(3);
+
+    const { lastFrame } = render(<App store={store} />);
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('hel');
+    expect(frame).toContain('█lo');
+  });
+
+  it('renders the filter cursor at the insertion point in INPUT mode', () => {
+    const store = createUIStore();
+    store.getState().setMode('input');
+    store.getState().setFilterText('auth');
+    store.getState().setFilterCursorOffset(2);
+
+    const { lastFrame } = render(<App store={store} />);
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('filter');
+    expect(frame).toContain('au');
+    expect(frame).toContain('█th');
+  });
+
+  it('shows readyStateDetail for removable queued agents before execution', () => {
+    const store = createUIStore();
+    store.getState().addAgent({ id: 'a1', name: 'Queued Feature', feature: 'stuff', status: 'queued', removable: true });
+    store.getState().setFocusedAgent('a1');
+
+    const { lastFrame } = render(<App store={store} />);
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('Press d to remove');
   });
 });

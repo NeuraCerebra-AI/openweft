@@ -5,8 +5,8 @@ import type { StoreApi } from 'zustand/vanilla';
 
 import { ThemeContext, catppuccinMocha } from './theme.js';
 import { StatusBar } from './StatusBar.js';
-import { Sidebar } from './Sidebar.js';
-import { MainPanel } from './MainPanel.js';
+import { MeterBar } from './MeterBar.js';
+import { AgentCard } from './AgentCard.js';
 import { HelpOverlay } from './HelpOverlay.js';
 import { Footer } from './Footer.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
@@ -29,8 +29,6 @@ interface AppProps {
   readonly onAddRequest?: (request: string) => void;
 }
 
-// StatusBar (1 line) + Footer (1 line) + borders (2 lines) = 4 lines reserved
-const BASE_CHROME_LINES = 4;
 const NOTICE_AUTO_CLEAR_MS = 5000;
 
 export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecision, onStartRequest, onRemoveAgent, onAddRequest }) => {
@@ -39,11 +37,9 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
   const { rows } = useTerminalSize();
 
   const filteredAgents = filterAgents(state.agents, state.filterText);
-  const focusedAgent = filteredAgents.find((a) => a.id === state.focusedAgentId) ?? null;
   const activeCount = state.agents.filter((a) => a.status === 'running' || a.status === 'approval').length;
   const pendingCount = state.agents.filter((a) => a.status === 'queued').length;
-  const chromeLines = BASE_CHROME_LINES + (state.notice ? 1 : 0);
-  const viewportHeight = Math.max(5, rows - chromeLines);
+  const completedCount = state.agents.filter((a) => a.status === 'completed').length;
 
   const startTimeRef = useRef<number | null>(null);
 
@@ -210,33 +206,57 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
             </Text>
           </Box>
         ) : null}
-        <Box flexDirection="row" flexGrow={1}>
-          <Sidebar
-            agents={filteredAgents}
-            focusedAgentId={state.focusedAgentId}
-            phase={state.phase}
-            totalCost={state.totalCost}
-            isFocused={state.sidebarFocused}
-            mode={state.mode}
-            filterText={state.filterText}
-            filterCursorOffset={state.filterCursorOffset}
-            addInputText={state.addInputText}
-            addInputCursorOffset={state.addInputCursorOffset}
-            spinnerFrame={state.spinnerFrame}
-            executionRequested={state.executionRequested}
-            viewportHeight={viewportHeight}
-          />
-          {state.showHelp ? (
-            <HelpOverlay mode={state.mode} executionStarted={state.executionRequested} />
-          ) : (
-            <MainPanel
-              agentName={focusedAgent?.name ?? null}
-              lines={focusedAgent?.outputLines ?? []}
-              scrollOffset={state.scrollOffset}
-              viewportHeight={viewportHeight}
+        {state.showHelp ? (
+          <HelpOverlay mode={state.mode} executionStarted={state.executionRequested} />
+        ) : (
+          <Box flexDirection="column" flexGrow={1}>
+            <MeterBar
+              phase={state.phase}
+              completedCount={completedCount}
+              totalAgentCount={state.agents.length}
+              totalTokens={state.totalTokens}
+              elapsed={state.elapsed}
             />
-          )}
-        </Box>
+            {state.addInputText !== null ? (
+              <Box borderStyle="round" borderColor={catppuccinMocha.colors.green} paddingX={1} marginX={1}>
+                <Text color={catppuccinMocha.colors.green}>{'> '}</Text>
+                <Text>{state.addInputText.slice(0, state.addInputCursorOffset)}</Text>
+                <Text color={catppuccinMocha.colors.muted}>{'█'}</Text>
+                <Text>{state.addInputText.slice(state.addInputCursorOffset)}</Text>
+              </Box>
+            ) : state.mode === 'input' ? (
+              <Box borderStyle="round" borderColor={catppuccinMocha.colors.surface1} paddingX={1} marginX={1}>
+                <Text color={catppuccinMocha.colors.muted}>{'filter '}</Text>
+                <Text>{state.filterText.slice(0, state.filterCursorOffset)}</Text>
+                <Text color={catppuccinMocha.colors.muted}>{'█'}</Text>
+                <Text>{state.filterText.slice(state.filterCursorOffset)}</Text>
+              </Box>
+            ) : null}
+            <Box flexDirection="column" flexGrow={1}>
+              {filteredAgents.map((agent) => (
+                <AgentCard
+                  key={agent.id}
+                  name={agent.name}
+                  feature={agent.feature}
+                  status={agent.status}
+                  focused={agent.id === state.focusedAgentId}
+                  files={agent.files}
+                  tokens={agent.tokens}
+                  cost={agent.cost}
+                  elapsed={agent.elapsed}
+                  currentTool={agent.currentTool}
+                  approvalRequest={agent.approvalRequest}
+                  spinnerFrame={state.spinnerFrame}
+                  readyStateDetail={
+                    !state.executionRequested && agent.status === 'queued'
+                      ? (agent.removable ? 'Press d to remove' : 'Resumable checkpoint')
+                      : null
+                  }
+                />
+              ))}
+            </Box>
+          </Box>
+        )}
         <Footer mode={state.mode} executionStarted={state.executionRequested} composing={state.addInputText !== null} />
       </Box>
     </ThemeContext.Provider>
