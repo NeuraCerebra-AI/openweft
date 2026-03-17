@@ -12,6 +12,13 @@ import { Footer } from './Footer.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
 import { filterAgents, handleKeypress } from './hooks/useKeyboard.js';
 import type { UIStore } from './store.js';
+import {
+  deleteBackward,
+  deleteBackwardWord,
+  insertAtCursor,
+  moveCursorLeft,
+  moveCursorRight,
+} from './textEditing.js';
 
 interface AppProps {
   readonly store: StoreApi<UIStore>;
@@ -24,6 +31,7 @@ interface AppProps {
 
 // StatusBar (1 line) + Footer (1 line) + borders (2 lines) = 4 lines reserved
 const BASE_CHROME_LINES = 4;
+const NOTICE_AUTO_CLEAR_MS = 5000;
 
 export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecision, onStartRequest, onRemoveAgent, onAddRequest }) => {
   const state = useStore(store);
@@ -33,6 +41,7 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
   const filteredAgents = filterAgents(state.agents, state.filterText);
   const focusedAgent = filteredAgents.find((a) => a.id === state.focusedAgentId) ?? null;
   const activeCount = state.agents.filter((a) => a.status === 'running' || a.status === 'approval').length;
+  const pendingCount = state.agents.filter((a) => a.status === 'queued').length;
   const chromeLines = BASE_CHROME_LINES + (state.notice ? 1 : 0);
   const viewportHeight = Math.max(5, rows - chromeLines);
 
@@ -46,6 +55,7 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
       const currentState = store.getState();
       currentState.setElapsed(Math.floor((Date.now() - origin) / 1000));
       currentState.tickAgentElapsed();
+      currentState.tickSpinnerFrame();
     }, 1000);
     return () => clearInterval(timer);
   }, [store, state.executionRequested]);
@@ -60,10 +70,31 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
     }
   }, [filteredAgents, state.focusedAgentId, store]);
 
+  useEffect(() => {
+    if (state.notice === null) {
+      return;
+    }
+
+    const activeNotice = state.notice;
+    const timer = setTimeout(() => {
+      const currentState = store.getState();
+      if (currentState.notice !== activeNotice) {
+        return;
+      }
+      currentState.setNotice(null);
+      if (currentState.quitConfirmPending) {
+        currentState.setQuitConfirmPending(false);
+      }
+    }, NOTICE_AUTO_CLEAR_MS);
+
+    return () => clearTimeout(timer);
+  }, [state.notice, store]);
+
   useInput((_input, key) => {
     // Compose mode — swallow ALL keys
     const currentAddText = store.getState().addInputText;
     if (currentAddText !== null) {
+      const currentAddCursorOffset = store.getState().addInputCursorOffset;
       if (key.escape) {
         store.getState().setAddInputText(null);
         return;
@@ -73,12 +104,33 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
         if (trimmed && onAddRequest) onAddRequest(trimmed);
         return;
       }
+      if (key.leftArrow) {
+        store.getState().setAddInputCursorOffset(
+          moveCursorLeft({ value: currentAddText, cursorOffset: currentAddCursorOffset }).cursorOffset
+        );
+        return;
+      }
+      if (key.rightArrow) {
+        store.getState().setAddInputCursorOffset(
+          moveCursorRight({ value: currentAddText, cursorOffset: currentAddCursorOffset }).cursorOffset
+        );
+        return;
+      }
       if (key.backspace || key.delete) {
-        store.getState().setAddInputText(currentAddText.slice(0, -1));
+        const nextState = key.meta
+          ? deleteBackwardWord({ value: currentAddText, cursorOffset: currentAddCursorOffset })
+          : deleteBackward({ value: currentAddText, cursorOffset: currentAddCursorOffset });
+        store.getState().setAddInputText(nextState.value);
+        store.getState().setAddInputCursorOffset(nextState.cursorOffset);
         return;
       }
       if (_input && !key.ctrl && !key.meta) {
-        store.getState().setAddInputText(currentAddText + _input);
+        const nextState = insertAtCursor(
+          { value: currentAddText, cursorOffset: currentAddCursorOffset },
+          _input,
+        );
+        store.getState().setAddInputText(nextState.value);
+        store.getState().setAddInputCursorOffset(nextState.cursorOffset);
       }
       return;
     }
@@ -87,7 +139,9 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
       : key.escape ? 'escape'
       : key.return ? 'return'
       : key.backspace ? 'backspace'
-      : key.delete ? 'backspace'
+      : key.delete ? 'delete'
+      : key.leftArrow ? 'left'
+      : key.rightArrow ? 'right'
       : key.upArrow ? 'up'
       : key.downArrow ? 'down'
       : _input;
@@ -97,11 +151,46 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
       ...(onApprovalDecision ? { onApprovalDecision } : {}),
       ...(onStartRequest ? { onStartRequest } : {}),
       ...(onRemoveAgent ? { onRemoveAgent } : {}),
-    });
+    }, { meta: key.meta });
     if (result === 'quit') {
       exit();
     }
   });
+
+  if (state.completion !== null) {
+    const completionLabel = state.completion.status === 'completed' ? 'Run complete' : 'Run finished';
+    const completionColor = state.completion.status === 'completed'
+      ? catppuccinMocha.colors.green
+      : catppuccinMocha.colors.yellow;
+
+    return (
+      <ThemeContext.Provider value={catppuccinMocha}>
+        <Box flexDirection="column" width="100%" height={rows}>
+          <StatusBar
+            phase={null}
+            activeCount={0}
+            pendingCount={0}
+            totalCount={state.agents.length}
+            totalTokens={state.totalTokens}
+            elapsed={state.elapsed}
+          />
+          <Box
+            flexDirection="column"
+            flexGrow={1}
+            justifyContent="center"
+            alignItems="center"
+            borderStyle={catppuccinMocha.borders.panelActive}
+            borderColor={completionColor}
+          >
+            <Text bold color={completionColor}>{completionLabel}</Text>
+            <Text>{`Planned ${state.completion.plannedCount} · Merged ${state.completion.mergedCount}`}</Text>
+            <Text color={catppuccinMocha.colors.muted}>{`Status: ${state.completion.status}`}</Text>
+            <Text color={catppuccinMocha.colors.muted}>{'Returning to shell...'}</Text>
+          </Box>
+        </Box>
+      </ThemeContext.Provider>
+    );
+  }
 
   return (
     <ThemeContext.Provider value={catppuccinMocha}>
@@ -109,8 +198,9 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
         <StatusBar
           phase={state.phase}
           activeCount={activeCount}
+          pendingCount={pendingCount}
           totalCount={state.agents.length}
-          cost={state.totalCost}
+          totalTokens={state.totalTokens}
           elapsed={state.elapsed}
         />
         {state.notice ? (
@@ -127,10 +217,17 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
             phase={state.phase}
             totalCost={state.totalCost}
             isFocused={state.sidebarFocused}
+            mode={state.mode}
+            filterText={state.filterText}
+            filterCursorOffset={state.filterCursorOffset}
             addInputText={state.addInputText}
+            addInputCursorOffset={state.addInputCursorOffset}
+            spinnerFrame={state.spinnerFrame}
+            executionRequested={state.executionRequested}
+            viewportHeight={viewportHeight}
           />
           {state.showHelp ? (
-            <HelpOverlay />
+            <HelpOverlay mode={state.mode} executionStarted={state.executionRequested} />
           ) : (
             <MainPanel
               agentName={focusedAgent?.name ?? null}

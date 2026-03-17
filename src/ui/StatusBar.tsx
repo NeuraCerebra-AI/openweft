@@ -5,44 +5,48 @@ import { useTheme } from './theme.js';
 import { formatTime } from './utils.js';
 
 interface StatusBarProps {
-  readonly phase: { current: number; total: number } | null;
+  readonly phase: { current: number; total: number; label?: string } | null;
   readonly activeCount: number;
+  readonly pendingCount: number;
   readonly totalCount: number;
-  readonly cost: number;
+  readonly totalTokens: number;
   readonly elapsed: number;
 }
 
-export const StatusBar: React.FC<StatusBarProps> = React.memo(({ phase, activeCount, totalCount, cost, elapsed }) => {
-  const { colors } = useTheme();
+export const StatusBar: React.FC<StatusBarProps> = React.memo(
+  ({ phase, activeCount, pendingCount, totalCount: _totalCount, totalTokens, elapsed }) => {
+    const { colors } = useTheme();
 
-  return (
-    <Box flexDirection="row" gap={1}>
-      <Text color={colors.mauve} bold>{'◆ openweft'}</Text>
-      {phase !== null && (
+    return (
+      <Box flexDirection="row" gap={1}>
+        <Text color={colors.mauve} bold>{'◆ openweft'}</Text>
+        {phase !== null && (
+          <Text>
+            <Text color={colors.muted}>{'│ '}</Text>
+            <Text color={colors.blue}>{`⚙ ${phase.label ?? `${phase.current}/${phase.total}`}`}</Text>
+          </Text>
+        )}
+        {(activeCount > 0 || pendingCount > 0) && (
+          <Text>
+            <Text color={colors.muted}>{'│ '}</Text>
+            <Text color={colors.green}>{`active ${activeCount}`}</Text>
+            <Text color={colors.muted}>{' · '}</Text>
+            <Text color={colors.teal}>{`pending ${pendingCount}`}</Text>
+          </Text>
+        )}
+        {totalTokens > 0 && (
+          <Text>
+            <Text color={colors.muted}>{'│ '}</Text>
+            <Text color={colors.peach}>{`${totalTokens >= 1000 ? `${(totalTokens / 1000).toFixed(1)}k` : String(totalTokens)} tokens`}</Text>
+          </Text>
+        )}
         <Text>
           <Text color={colors.muted}>{'│ '}</Text>
-          <Text color={colors.blue}>{`⚙ ${phase.current}/${phase.total}`}</Text>
+          <Text>{formatTime(elapsed)}</Text>
         </Text>
-      )}
-      {totalCount > 0 && (
-        <Text>
-          <Text color={colors.muted}>{'│ '}</Text>
-          <Text color={colors.green}>{`${activeCount}`}</Text>
-          <Text color={colors.muted}>{`/${totalCount}`}</Text>
-        </Text>
-      )}
-      {cost > 0 && (
-        <Text>
-          <Text color={colors.muted}>{'│ '}</Text>
-          <Text color={colors.peach}>{`$${cost.toFixed(2)}`}</Text>
-        </Text>
-      )}
-      <Text>
-        <Text color={colors.muted}>{'│ '}</Text>
-        <Text>{formatTime(elapsed)}</Text>
-      </Text>
-    </Box>
-  );
-});
+      </Box>
+    );
+  }
+);
 
 StatusBar.displayName = 'StatusBar';
