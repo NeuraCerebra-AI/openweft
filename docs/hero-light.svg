@@ -1,0 +1,104 @@
+<svg fill="none" viewBox="0 0 640 204" width="640" height="204" xmlns="http://www.w3.org/2000/svg">
+  <foreignObject width="100%" height="100%">
+    <div xmlns="http://www.w3.org/1999/xhtml">
+      <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        .terminal {
+          background: #ffffff;
+          border-radius: 10px;
+          border: 1px solid #d1d9e0;
+          overflow: hidden;
+          width: 620px;
+          margin: 8px auto;
+          font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+          box-shadow: 0 1px 3px rgba(31, 35, 40, 0.08), 0 2px 8px rgba(31, 35, 40, 0.04);
+        }
+
+        .titlebar {
+          background: #f6f8fa;
+          padding: 11px 14px;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          border-bottom: 1px solid #d1d9e0;
+        }
+
+        .dot {
+          width: 12px;
+          height: 12px;
+          border-radius: 50%;
+          display: inline-block;
+        }
+
+        .body { padding: 16px 20px 12px 20px; }
+
+        .line {
+          overflow: hidden;
+          white-space: nowrap;
+          width: 0;
+          font-size: 14px;
+          line-height: 1.75;
+          display: block;
+          height: 1.75em;
+        }
+
+        .prompt { color: #656d76; }
+        .cmd { color: #1f2328; }
+        .str { color: #0550ae; }
+        .flag { color: #8250df; }
+
+        .line1 { animation: t1 1.3s steps(26, end) 0.6s forwards; }
+        .line2 { animation: t2 1.45s steps(29, end) 2.4s forwards; }
+        .line3 { animation: t3 1.05s steps(21, end) 4.4s forwards; }
+
+        .result {
+          font-size: 14px;
+          line-height: 1.75;
+          height: 1.75em;
+          color: #1a7f37;
+          opacity: 0;
+          animation: fadeIn 0.6s ease 6.2s forwards;
+        }
+
+        .ready {
+          font-size: 14px;
+          line-height: 1.75;
+          height: 1.75em;
+          opacity: 0;
+          animation: fadeIn 0.3s ease 7.0s forwards;
+        }
+
+        .cursor {
+          display: inline;
+          color: #1f2328;
+          animation: blink 1s step-end 7.0s infinite;
+        }
+
+        @keyframes t1 { from { width: 0 } to { width: 26ch } }
+        @keyframes t2 { from { width: 0 } to { width: 29ch } }
+        @keyframes t3 { from { width: 0 } to { width: 21ch } }
+        @keyframes fadeIn { to { opacity: 1 } }
+        @keyframes blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0; }
+        }
+      </style>
+
+      <div class="terminal">
+        <div class="titlebar">
+          <div class="dot" style="background: #ff5f57;"> </div>
+          <div class="dot" style="background: #febc2e;"> </div>
+          <div class="dot" style="background: #28c840;"> </div>
+        </div>
+        <div class="body">
+          <div class="line line1"><span class="prompt">$ </span><span class="cmd">openweft add </span><span class="str">"auth flow"</span></div>
+          <div class="line line2"><span class="prompt">$ </span><span class="cmd">openweft add </span><span class="str">"rate limiter"</span></div>
+          <div class="line line3"><span class="prompt">$ </span><span class="cmd">openweft start </span><span class="flag">--bg</span></div>
+          <div class="result">✓ 2 merged, 0 conflicts</div>
+          <div class="ready"><span class="prompt">$ </span><span class="cursor">▌</span></div>
+        </div>
+      </div>
+    </div>
+  </foreignObject>
+</svg>
