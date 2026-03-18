@@ -34,11 +34,18 @@ const buildMockSessionId = (request: AdapterTurnRequest): string => {
   return request.sessionId ?? `mock-${request.featureId}-${request.stage}`;
 };
 
+const isMetaInstruction = (line: string): boolean => {
+  const trimmed = line.trim().toUpperCase();
+  return trimmed.startsWith('CRITICAL INSTRUCTION') ||
+    trimmed.startsWith('IMPORTANT:') ||
+    trimmed.startsWith('DO NOT');
+};
+
 const buildDefaultManifest = (request: AdapterTurnRequest): Manifest => {
   const seedLine =
     request.prompt
       .split(/\r?\n/)
-      .find((line) => line.trim().length > 0)
+      .find((line) => line.trim().length > 0 && !isMetaInstruction(line))
       ?.trim() ?? request.featureId;
 
   return {

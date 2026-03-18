@@ -945,6 +945,7 @@ const runTurnAndRecord = async (
   return result;
 };
 
+/** Try to extract a manifest plan from markdown, with up to 2 repair attempts. */
 const repairPlanMarkdownIfNeeded = async (
   input: RealRunInput,
   checkpoint: OrchestratorCheckpoint,
@@ -953,27 +954,37 @@ const repairPlanMarkdownIfNeeded = async (
   initialMarkdown: string,
   shadowMarkdown: string | null
 ): Promise<{ markdown: string; manifest: Manifest; sessionId: string | null }> => {
-  try {
-    const parsed = parseManifestDocument(initialMarkdown, {
-      ...(shadowMarkdown
-        ? {
-            lastKnownGood: parseManifestDocument(shadowMarkdown).manifest
-          }
-        : {})
-    });
+  const lastKnownGoodOpts: { lastKnownGood?: Manifest } = {};
+  if (shadowMarkdown) {
+    try { lastKnownGoodOpts.lastKnownGood = parseManifestDocument(shadowMarkdown).manifest; } catch { /* ignore */ }
+  }
 
+  // Attempt 1: parse the initial markdown directly
+  try {
+    const parsed = parseManifestDocument(initialMarkdown, lastKnownGoodOpts);
     return {
       markdown: updateManifestInMarkdown(initialMarkdown, parsed.manifest),
       manifest: parsed.manifest,
       sessionId: null
     };
-  } catch (error) {
+  } catch {
+    // Fall through to repair attempts
+  }
+
+  // Up to 2 repair attempts — ask the agent to rewrite with a valid manifest
+  const MAX_REPAIR_ATTEMPTS = 2;
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= MAX_REPAIR_ATTEMPTS; attempt++) {
     const repairPrompt = [
-      `Your previous plan output for feature ${featureId} was invalid.`,
+      `Your previous plan output for feature ${featureId} was invalid (attempt ${attempt}).`,
       `Feature request: ${request}`,
-      `Validation error: ${error instanceof Error ? error.message : String(error)}`,
-      'Rewrite the full plan and include a valid ## Manifest block with strict JSON.'
-    ].join('\n\n');
+      '',
+      'You MUST output the complete Markdown plan as your text response.',
+      'The plan MUST include a "## Manifest" heading followed by a ```json code block containing { "create": [], "modify": [], "delete": [] }.',
+      'Do NOT write any files. Do NOT enter plan mode. Do NOT use Write, Edit, or ExitPlanMode tools.',
+      'Return the full plan document as plain text in your response.',
+    ].join('\n');
 
     const repairResult = await runTurnAndRecord(
       input,
@@ -982,23 +993,29 @@ const repairPlanMarkdownIfNeeded = async (
     );
 
     if (!repairResult.ok) {
-      throw new Error(repairResult.error);
+      lastError = new Error(`Repair attempt ${attempt} failed: ${repairResult.error}`);
+      continue;
     }
 
-    const repaired = parseManifestDocument(repairResult.finalMessage, {
-      ...(shadowMarkdown
-        ? {
-            lastKnownGood: parseManifestDocument(shadowMarkdown).manifest
-          }
-        : {})
-    });
-
-    return {
-      markdown: updateManifestInMarkdown(repairResult.finalMessage, repaired.manifest),
-      manifest: repaired.manifest,
-      sessionId: repairResult.sessionId
-    };
+    try {
+      const repaired = parseManifestDocument(repairResult.finalMessage, lastKnownGoodOpts);
+      return {
+        markdown: updateManifestInMarkdown(repairResult.finalMessage, repaired.manifest),
+        manifest: repaired.manifest,
+        sessionId: repairResult.sessionId
+      };
+    } catch (parseError) {
+      lastError = new Error(
+        `Repair attempt ${attempt}: ${parseError instanceof Error ? parseError.message : String(parseError)}`
+      );
+    }
   }
+
+  throw new Error(
+    `Failed to extract manifest for feature ${featureId} after ${MAX_REPAIR_ATTEMPTS} repair attempts. ` +
+    `${lastError?.message ?? 'No additional details.'} ` +
+    `This usually means the AI backend returned a summary instead of the full plan markdown.`
+  );
 };
 
 const planPendingRequests = async (
@@ -1064,11 +1081,18 @@ const planPendingRequests = async (
         throw new Error(`Planning stage 1 returned too little output for feature ${featureId}.`);
       }
 
+      const manifestInstruction = [
+        'CRITICAL INSTRUCTION: Your response text must BE the full Markdown plan document.',
+        'Include a "## Manifest" heading with a ```json code block containing { "create": [], "modify": [], "delete": [] }.',
+        'Do NOT write files. Do NOT use Write, Edit, or ExitPlanMode tools. Return the plan as your response text ONLY.'
+      ].join(' ');
+
       const stageTwoPrompt = [
+        manifestInstruction,
+        '',
         stageOne.finalMessage.trim(),
         '',
-        'IMPORTANT: Do NOT write any files. Do NOT enter plan mode. Do NOT use tools like Write, Edit, or ExitPlanMode.',
-        'Output the complete Markdown plan as your text response, including a ## Manifest section with a JSON code block containing create, modify, and delete arrays.'
+        manifestInstruction
       ].join('\n');
 
       const stageTwo = await runTurnAndRecord(
