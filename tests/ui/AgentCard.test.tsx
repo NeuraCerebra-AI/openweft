@@ -38,6 +38,17 @@ describe('AgentCard', () => {
     expect(frame).toContain('auth-system');
   });
 
+  it('does not repeat the secondary line when feature matches the name', () => {
+    const request = 'make the CLI UI even prettier please';
+    const { lastFrame } = renderCard({
+      name: request,
+      feature: request,
+      status: 'queued',
+    });
+    const frame = lastFrame() ?? '';
+    expect(frame.match(new RegExp(request, 'g'))).toHaveLength(1);
+  });
+
   it('shows file count badge when files provided', () => {
     const { lastFrame } = renderCard({ files: ['a.ts', 'b.ts', 'c.ts'] });
     const frame = lastFrame() ?? '';

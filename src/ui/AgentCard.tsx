@@ -54,6 +54,7 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(({
   const { icon, colorKey } = getStatusIcon(status, spinnerFrame);
   const borderColor = statusBorderColor(status, focused, colors);
   const dim = status === 'completed' && !focused;
+  const showSecondaryFeature = feature !== name;
 
   return (
     <Box
@@ -65,7 +66,9 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(({
       {/* Top row */}
       <Box>
         <Text color={colors[colorKey]} dimColor={dim}>{icon} </Text>
-        <Text bold={focused} dimColor={dim}>{name}</Text>
+        <Box flexGrow={1}>
+          <Text bold={focused} dimColor={dim} wrap="truncate-end">{name}</Text>
+        </Box>
         <Box flexGrow={1} />
         {files.length > 0 && <Text color={colors.green} dimColor={dim}>{` ${files.length} files `}</Text>}
         {tokens > 0 && <Text color={colors.peach} dimColor={dim}>{` ${formatTokens(tokens)} tok `}</Text>}
@@ -74,15 +77,17 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(({
 
       {/* Detail section */}
       <Box flexDirection="column" paddingLeft={2}>
-        <Text color={colors.subtext} dimColor={dim}>{feature}</Text>
+        {showSecondaryFeature && (
+          <Text color={colors.subtext} dimColor={dim} wrap="truncate-end">{feature}</Text>
+        )}
         {focused && files.length > 0 && (
           <Box>
             <Text color={colors.green}>{'files: '}</Text>
-            <Text color={colors.muted}>{files.join(', ')}</Text>
+            <Text color={colors.muted} wrap="truncate-end">{files.join(', ')}</Text>
           </Box>
         )}
-        {currentTool !== null && <Text color={colors.mauve} dimColor={dim}>{`▸ ${currentTool}`}</Text>}
-        {focused && readyStateDetail !== null && <Text color={colors.teal}>{readyStateDetail}</Text>}
+        {currentTool !== null && <Text color={colors.mauve} dimColor={dim} wrap="truncate-end">{`▸ ${currentTool}`}</Text>}
+        {focused && readyStateDetail !== null && <Text color={colors.teal} wrap="truncate-end">{readyStateDetail}</Text>}
         {focused && approvalRequest !== null && (
           <Box
             flexDirection="column"

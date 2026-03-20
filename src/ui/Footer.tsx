@@ -32,7 +32,7 @@ export const Footer: React.FC<FooterProps> = React.memo(({ mode, executionStarte
   const hints = getHints(mode, executionStarted, composing);
 
   return (
-    <Box flexDirection="row" gap={1} alignItems="center">
+    <Box flexDirection="row" gap={1} alignItems="center" flexShrink={0}>
       <Text bold color={colors[colorKey]}>{` ${label} `}</Text>
       {hints.map(([key, desc]) => (
         <Text key={key}>
