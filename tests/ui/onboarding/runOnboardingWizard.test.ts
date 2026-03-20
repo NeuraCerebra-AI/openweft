@@ -57,6 +57,7 @@ vi.mock('../../../src/fs/paths.js', () => ({
     auditLogFile: '/fake/cwd/.openweft/audit-trail.jsonl',
     worktreesDir: '/fake/cwd/.openweft/worktrees',
     shadowPlansDir: '/fake/cwd/.openweft/shadow-plans',
+    promptBArtifactsDir: '/fake/cwd/feature_requests/briefs',
   })),
 }));
 

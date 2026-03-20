@@ -30,16 +30,21 @@ describe('adapter prompt helpers', () => {
     ).toThrow(`Prompt template is missing marker ${USER_REQUEST_MARKER}.`);
   });
 
-  it('builds the execution prompt with plan content and file reference', () => {
+  it('builds the execution prompt with prompt b and plan context', () => {
     const prompt = buildExecutionPrompt({
+      promptBFilePath: '/repo/feature_requests/briefs/001_prompt-b.md',
+      promptBContent: '# Prompt B\nWork carefully',
       planFilePath: '/repo/feature_requests/001_plan.md',
       planContent: '# Plan\nDo it'
     });
 
+    expect(prompt).toContain('/repo/feature_requests/briefs/001_prompt-b.md');
+    expect(prompt).toContain('=== PROMPT B START ===');
+    expect(prompt).toContain('# Prompt B\nWork carefully');
     expect(prompt).toContain('/repo/feature_requests/001_plan.md');
     expect(prompt).toContain('=== PLAN START ===');
     expect(prompt).toContain('# Plan\nDo it');
-    expect(prompt).toContain('Do not modify the plan file');
+    expect(prompt).toContain('Do not modify the Prompt B file or the plan file');
   });
 
   it('builds a conflict-resolution prompt with plan context when available', () => {

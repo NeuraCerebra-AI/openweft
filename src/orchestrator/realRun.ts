@@ -18,7 +18,7 @@ import type { OrchestratorEventHandler } from '../ui/events.js';
 import type { ResolvedOpenWeftConfig } from '../config/index.js';
 import { addCostRecordToTotals, type CostRecord } from '../domain/costs.js';
 import { circuitBreakerTripped, classifyError } from '../domain/errors.js';
-import { createPlanFilename, formatFeatureId, slugifyFeatureRequest } from '../domain/featureIds.js';
+import { createPlanFilename, createPromptBFilename, formatFeatureId, slugifyFeatureRequest } from '../domain/featureIds.js';
 import { parseManifestDocument, type Manifest, updateManifestInMarkdown } from '../domain/manifest.js';
 import { buildExecutionPhases } from '../domain/phases.js';
 import type { PriorityTier } from '../domain/primitives.js';
@@ -231,6 +231,18 @@ const listMarkdownFiles = async (directoryPath: string): Promise<string[]> => {
   } catch {
     return [];
   }
+};
+
+const createPromptBArtifactPath = (
+  config: ResolvedOpenWeftConfig,
+  featureId: string,
+  request: string
+): string => {
+  const promptBFilename = createPromptBFilename(
+    Number.parseInt(featureId, 10),
+    request
+  );
+  return path.join(config.paths.promptBArtifactsDir, promptBFilename);
 };
 
 const countFeatureStatuses = (
@@ -701,6 +713,22 @@ const syncPlanFileToWorktree = async (
   return targetPlanPath;
 };
 
+const syncPromptBFileToWorktree = async (
+  config: ResolvedOpenWeftConfig,
+  promptBFile: string,
+  worktreePath: string
+): Promise<string> => {
+  const targetPromptBPath = path.join(
+    worktreePath,
+    '.openweft',
+    'prompt-b-briefs',
+    path.basename(promptBFile)
+  );
+  const content = await readTextFileWithRetry(promptBFile);
+  await writeTextFileAtomic(targetPromptBPath, content);
+  return targetPromptBPath;
+};
+
 const buildPlanningStageOneRequest = (
   input: RealRunInput,
   featureId: string,
@@ -1082,6 +1110,23 @@ const planPendingRequests = async (
         throw new Error(`Planning stage 1 returned too little output for feature ${featureId}.`);
       }
 
+      const promptBFilePath = createPromptBArtifactPath(
+        context.config,
+        featureId,
+        pending.request
+      );
+      const promptBMarkdown = `${stageOne.finalMessage.trimEnd()}\n`;
+      await writeTextFileAtomic(promptBFilePath, promptBMarkdown);
+      await appendAudit(context.config, {
+        level: 'info',
+        event: 'planner.prompt-b.persisted',
+        message: `Persisted Prompt B artifact for feature ${featureId}.`,
+        data: {
+          featureId,
+          promptBFile: promptBFilePath
+        }
+      });
+
       const manifestInstruction = [
         'CRITICAL INSTRUCTION: Your response text must BE the full Markdown plan document.',
         'Include a "## Ledger" section covering constraints, assumptions, watchpoints, and validation.',
@@ -1090,9 +1135,13 @@ const planPendingRequests = async (
       ].join(' ');
 
       const stageTwoPrompt = [
+        'IMPORTANT: You are receiving Prompt B, the generated worker brief for this feature.',
+        `IMPORTANT: The Prompt B artifact has been saved at ${promptBFilePath}.`,
         manifestInstruction,
         '',
-        stageOne.finalMessage.trim(),
+        '=== PROMPT B START ===',
+        promptBMarkdown.trim(),
+        '=== PROMPT B END ===',
         '',
         manifestInstruction
       ].join('\n');
@@ -1139,6 +1188,7 @@ const planPendingRequests = async (
         status: 'planned',
         attempts: 0,
         planFile: planFilePath,
+        promptBFile: promptBFilePath,
         branchName: null,
         worktreePath: null,
         sessionId: repairedPlan.sessionId,
@@ -1310,9 +1360,24 @@ const runFeatureExecutionAttempt = async (
   error?: string;
 }> => {
   const worktreeState = await createOrResetFeatureWorktree(context, feature, baseBranch);
+  const worktreePromptBFile = feature.promptBFile
+    ? await syncPromptBFileToWorktree(context.config, feature.promptBFile, worktreeState.worktreePath)
+    : null;
   const worktreePlanFile = feature.planFile
     ? await syncPlanFileToWorktree(context.config, feature.planFile, worktreeState.worktreePath)
     : null;
+
+  if (!feature.promptBFile || !worktreePromptBFile) {
+    return {
+      featureId: feature.id,
+      status: 'fatal',
+      branchName: worktreeState.branchName,
+      worktreePath: worktreeState.worktreePath,
+      sessionId: null,
+      baselineCommit: worktreeState.baselineCommit,
+      error: 'Prompt B artifact is missing.'
+    };
+  }
 
   if (!feature.planFile || !worktreePlanFile) {
     return {
@@ -1326,8 +1391,11 @@ const runFeatureExecutionAttempt = async (
     };
   }
 
+  const promptBContent = await readTextFileWithRetry(feature.promptBFile);
   const planContent = await readTextFileWithRetry(feature.planFile);
   const executionPrompt = buildExecutionPrompt({
+    promptBFilePath: worktreePromptBFile,
+    promptBContent,
     planFilePath: worktreePlanFile,
     planContent
   });

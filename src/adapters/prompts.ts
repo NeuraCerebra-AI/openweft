@@ -14,15 +14,24 @@ export const injectPromptTemplate = (
 };
 
 export const buildExecutionPrompt = (input: {
+  promptBFilePath: string;
+  promptBContent: string;
   planFilePath: string;
   planContent: string;
 }): string => {
-  return `You are executing a feature implementation plan. The full plan is provided below
-AND is available at ${input.planFilePath} for reference during execution.
+  return `You are executing a feature implementation using Prompt B, the primary worker brief for this feature.
+Prompt B is provided below and is also available at ${input.promptBFilePath}.
 
-Execute this plan completely. Follow every step. Run all tests specified in the plan.
-Do not skip steps. Do not modify the plan file - only modify the codebase files
+The supporting implementation plan is also provided below and is available at ${input.planFilePath}.
+Use Prompt B as the main execution brief. Use the plan as the supporting artifact that defines the manifest boundaries and required validation.
+
+Execute the work completely. Follow the brief carefully. Run all tests specified in the plan.
+Do not skip steps. Do not modify the Prompt B file or the plan file. Only modify the codebase files
 listed in the plan's manifest.
+
+=== PROMPT B START ===
+${input.promptBContent}
+=== PROMPT B END ===
 
 === PLAN START ===
 ${input.planContent}

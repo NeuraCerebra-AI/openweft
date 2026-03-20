@@ -42,7 +42,9 @@ const isMetaInstruction = (line: string): boolean => {
 };
 
 const extractPlannerOutput = (prompt: string): string | null => {
-  const match = prompt.match(/=== PLANNER OUTPUT START ===\n([\s\S]*?)\n=== PLANNER OUTPUT END ===/);
+  const match = prompt.match(
+    /=== (?:PLANNER OUTPUT|PROMPT B) START ===\n([\s\S]*?)\n=== (?:PLANNER OUTPUT|PROMPT B) END ===/
+  );
   return match?.[1]?.trim() ?? null;
 };
 

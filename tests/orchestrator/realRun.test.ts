@@ -585,11 +585,17 @@ describe('runRealOrchestration', () => {
     expect(result.mergedCount).toBe(2);
 
     const adjustmentRequest = adapter.requests.find((request) => request.stage === 'adjustment');
+    const executionRequest = adapter.requests.find(
+      (request) => request.stage === 'execution' && request.featureId === '002'
+    );
     expect(adjustmentRequest).toBeDefined();
+    expect(executionRequest).toBeDefined();
 
     const featureTwo = result.checkpoint.features['002'];
     expect(featureTwo?.planFile).toBeDefined();
+    expect(featureTwo?.promptBFile).toBeDefined();
     const planContent = await readFile(featureTwo?.planFile ?? '', 'utf8');
+    const promptBContent = await readFile(featureTwo?.promptBFile ?? '', 'utf8');
     const costRecords = (await readFile(path.join(repoRoot, '.openweft', 'costs.jsonl'), 'utf8'))
       .trim()
       .split('\n')
@@ -634,6 +640,9 @@ describe('runRealOrchestration', () => {
     );
 
     expect(adjustmentRequest?.prompt).toContain(featureTwo?.planFile ?? '');
+    expect(executionRequest?.prompt).toContain('=== PROMPT B START ===');
+    expect(executionRequest?.prompt).toContain(promptBContent.trim());
+    expect(executionRequest?.prompt).toContain(featureTwo?.promptBFile ?? '');
     expect(adjustmentRequest?.prompt).toContain('=== CURRENT PLAN START ===');
     expect(adjustmentRequest?.prompt).toContain(planContent.trim());
     expect(adjustmentRequest?.prompt).toContain('"merge_commit"');
@@ -814,6 +823,8 @@ describe('runRealOrchestration', () => {
       attempts: 0,
       backend: 'mock'
     });
+    expect(savedFeature?.promptBFile).toBeTruthy();
+    await expect(readFile(savedFeature?.promptBFile ?? '', 'utf8')).resolves.toContain('Runtime-generated Prompt B');
     expect(savedFeature?.planFile).toBeTruthy();
     await expect(readFile(savedFeature?.planFile ?? '', 'utf8')).resolves.toContain('## Manifest');
     await expect(readFile(savedFeature?.planFile ?? '', 'utf8')).resolves.toContain('## Ledger');

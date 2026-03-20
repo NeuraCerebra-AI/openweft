@@ -54,6 +54,7 @@ const makeFakePaths = (repoRoot = '/fake/cwd') => ({
   auditLogFile: `${repoRoot}/.openweft/audit-trail.jsonl`,
   worktreesDir: `${repoRoot}/.openweft/worktrees`,
   shadowPlansDir: `${repoRoot}/.openweft/shadow-plans`,
+  promptBArtifactsDir: `${repoRoot}/feature_requests/briefs`,
 });
 
 /** Build a fake config result with no config file (first-time user). */

@@ -6,7 +6,7 @@ import { assign, createActor, fromPromise, setup } from 'xstate';
 
 import { buildExecutionPrompt } from '../adapters/prompts.js';
 import type { AgentAdapter } from '../adapters/types.js';
-import { createPlanFilename, formatFeatureId } from '../domain/featureIds.js';
+import { createPlanFilename, createPromptBFilename, formatFeatureId } from '../domain/featureIds.js';
 import { addCostRecordToTotals } from '../domain/costs.js';
 import type { Manifest } from '../domain/primitives.js';
 import {
@@ -222,11 +222,22 @@ const planPendingRequests = async (
       throw new Error(stageOne.error);
     }
 
+    const promptBFilename = createPromptBFilename(nextId - 1, pending.request);
+    const promptBFilePath = path.join(input.config.paths.promptBArtifactsDir, promptBFilename);
+    const promptBMarkdown = `${stageOne.finalMessage.trimEnd()}\n`;
+    await writeTextFileAtomic(promptBFilePath, promptBMarkdown);
+
     const stageTwo = await input.adapter.runTurn({
       featureId,
       stage: 'planning-s2',
       cwd: input.config.repoRoot,
-      prompt: `Dry-run planning stage 2 for: ${pending.request}\n\n${stageOne.finalMessage}`,
+      prompt: [
+        `IMPORTANT: Dry-run planning stage 2 for: ${pending.request}`,
+        `IMPORTANT: The Prompt B artifact has been saved at ${promptBFilePath}.`,
+        '=== PROMPT B START ===',
+        promptBMarkdown.trim(),
+        '=== PROMPT B END ==='
+      ].join('\n'),
       model: DRY_RUN_MODEL,
       auth: { method: 'subscription' },
       sessionId: stageOne.sessionId
@@ -275,6 +286,7 @@ const planPendingRequests = async (
       status: 'planned',
       attempts: 0,
       planFile: planFilePath,
+      promptBFile: promptBFilePath,
       branchName: null,
       worktreePath: null,
       sessionId: stageTwo.sessionId,
@@ -357,12 +369,15 @@ const executePlannedFeatures = async (
     const settled = await Promise.allSettled(
       phase.features.map(async (feature) => {
         const featureCheckpoint = checkpoint.features[feature.id];
-        if (!featureCheckpoint?.planFile) {
+        if (!featureCheckpoint?.planFile || !featureCheckpoint?.promptBFile) {
           throw new Error(`Feature ${feature.id} does not have a plan file.`);
         }
 
+        const promptBContent = (await readTextFileIfExists(featureCheckpoint.promptBFile)) ?? '';
         const planContent = (await readTextFileIfExists(featureCheckpoint.planFile)) ?? '';
         const executionPrompt = buildExecutionPrompt({
+          promptBFilePath: featureCheckpoint.promptBFile,
+          promptBContent,
           planFilePath: featureCheckpoint.planFile,
           planContent
         });

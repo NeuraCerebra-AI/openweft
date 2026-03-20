@@ -172,14 +172,16 @@ describe('openweft CLI real mock flow', () => {
     const checkpoint = JSON.parse(
       await readFile(path.join(repoRoot, '.openweft', 'checkpoint.json'), 'utf8')
     ) as {
-      features: Record<string, { planFile: string; status: string }>;
+      features: Record<string, { planFile: string; promptBFile: string; status: string }>;
     };
 
     const savedFeature = checkpoint.features['001'];
     const planContent = await readFile(savedFeature?.planFile ?? '', 'utf8');
+    const promptBContent = await readFile(savedFeature?.promptBFile ?? '', 'utf8');
 
     expect(savedFeature?.status).toBe('completed');
     expect(planContent).toContain('## Ledger');
     expect(planContent).toContain('## Manifest');
+    expect(promptBContent).toContain('Runtime-generated Prompt B');
   });
 });

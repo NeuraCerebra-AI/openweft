@@ -68,14 +68,16 @@ describe('openweft CLI dry-run flow', () => {
       await readFile(path.join(repoRoot, '.openweft', 'checkpoint.json'), 'utf8')
     ) as {
       status: string;
-      features: Record<string, { status: string; planFile: string }>;
+      features: Record<string, { status: string; planFile: string; promptBFile: string }>;
     };
     expect(checkpoint.status).toBe('completed');
     expect(Object.values(checkpoint.features).every((feature) => feature.status === 'completed')).toBe(true);
 
     const firstPlan = await readFile(checkpoint.features['001']?.planFile ?? '', 'utf8');
+    const firstPromptB = await readFile(checkpoint.features['001']?.promptBFile ?? '', 'utf8');
     expect(firstPlan).toContain('## Ledger');
     expect(firstPlan).toContain('## Manifest');
+    expect(firstPromptB).toContain('Runtime-generated Prompt B');
 
     const statusOutput = await runCli(repoRoot, ['status']);
     expect(statusOutput.join('\n')).toContain('Status: completed');

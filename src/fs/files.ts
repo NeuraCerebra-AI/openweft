@@ -23,7 +23,8 @@ export const ensureRuntimeDirectories = async (paths: RuntimePaths): Promise<voi
     ensureDirectory(paths.openweftDir),
     ensureDirectory(paths.featureRequestsDir),
     ensureDirectory(paths.worktreesDir),
-    ensureDirectory(paths.shadowPlansDir)
+    ensureDirectory(paths.shadowPlansDir),
+    ensureDirectory(paths.promptBArtifactsDir)
   ]);
 };
 

@@ -74,3 +74,12 @@ export const createPlanFilename = (
   }
 };
 
+export const createPromptBFilename = (
+  featureId: number,
+  request: string,
+  maxSlugLength = SLUG_LIMIT
+): string => {
+  const id = formatFeatureId(featureId);
+  const slug = slugifyFeatureRequest(request, maxSlugLength);
+  return `${id}_${slug}.prompt-b.md`;
+};

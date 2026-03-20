@@ -42,6 +42,7 @@ export const FeatureCheckpointSchema = z
     status: FeatureStatusSchema,
     attempts: z.number().int().nonnegative(),
     planFile: z.string().nullable(),
+    promptBFile: z.string().nullable().optional(),
     branchName: z.string().nullable(),
     worktreePath: z.string().nullable(),
     sessionId: z.string().nullable(),

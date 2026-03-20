@@ -138,7 +138,7 @@ openweft status
 ## How it works
 
 1. OpenWeft reads pending requests from `feature_requests/queue.txt`.
-2. Prompt A compiles each request into Prompt B, a powerful worker brief rather than a tiny helper prompt.
+2. Prompt A compiles each request into Prompt B, a powerful worker brief rather than a tiny helper prompt, and OpenWeft persists that Prompt B artifact for inspection and recovery.
 3. OpenWeft launches Prompt-B workers inside isolated git worktrees that OpenWeft owns and controls.
 4. Each worker investigates the assigned codebase, edits code, validates its work, and maintains its execution ledger inside that assigned workspace.
 5. OpenWeft compares the real outcomes, including actual diffs and touched files, decides what is compatible, and merges the safe results in order.
@@ -196,6 +196,8 @@ OpenWeft needs two user-maintained prompt files. `openweft init` creates starter
 - `prompts/plan-adjustment.md` — must contain `{{CODE_EDIT_SUMMARY}}`
 
 Prompt A is a compiler for Prompt B. Prompt B is the worker brief that tells the downstream agent how to investigate, execute carefully, maintain its ledger, validate its work, and stay inside the OpenWeft-assigned workspace. OpenWeft owns worktree creation, queue control, compatibility decisions, and merges.
+
+Generated Prompt B artifacts are persisted under `feature_requests/briefs/` so they are durable, inspectable, and tied to feature IDs.
 
 The important boundary is:
 
