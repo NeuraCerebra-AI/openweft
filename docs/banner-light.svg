@@ -12,9 +12,18 @@
       <stop offset="50%" stop-color="#0550ae"/>
       <stop offset="100%" stop-color="#8250df"/>
     </linearGradient>
+    <radialGradient id="glow" cx="0.3" cy="0.5" r="0.4">
+      <stop offset="0%" stop-color="#0550ae" stop-opacity="0.025"/>
+      <stop offset="100%" stop-color="#0550ae" stop-opacity="0"/>
+      <animate attributeName="cx" values="0.2;0.5;0.8;0.5;0.2" dur="16s" repeatCount="indefinite"/>
+    </radialGradient>
   </defs>
-  <!-- Warp lines -->
-  <g opacity="0.06" stroke="#1f2328" stroke-width="1">
+
+  <!-- Ambient glow drift -->
+  <rect x="0" y="0" width="720" height="120" fill="url(#glow)"/>
+
+  <!-- Warp grid -->
+  <g opacity="0.04" stroke="#1f2328" stroke-width="1">
     <line x1="160" y1="0" x2="160" y2="120"/><line x1="180" y1="0" x2="180" y2="120"/>
     <line x1="200" y1="0" x2="200" y2="120"/><line x1="220" y1="0" x2="220" y2="120"/>
     <line x1="240" y1="0" x2="240" y2="120"/><line x1="260" y1="0" x2="260" y2="120"/>
@@ -27,42 +36,93 @@
     <line x1="520" y1="0" x2="520" y2="120"/><line x1="540" y1="0" x2="540" y2="120"/>
     <line x1="560" y1="0" x2="560" y2="120"/>
   </g>
-  <!-- Weft lines (animate: expand from center) -->
-  <rect x="360" y="15" width="0" height="1" fill="url(#wg)" opacity="0">
-    <animate attributeName="width" from="0" to="480" dur="0.8s" begin="0.3s" fill="freeze"/>
-    <animate attributeName="x" from="360" to="120" dur="0.8s" begin="0.3s" fill="freeze"/>
-    <animate attributeName="opacity" from="0" to="0.15" dur="0.8s" begin="0.3s" fill="freeze"/>
+
+  <!-- Animated weft lines -->
+  <rect x="150" y="5" width="420" height="1" fill="url(#wg)" opacity="0.04">
+    <animate attributeName="opacity" values="0.04;0.12;0.04" dur="7.0s" begin="0s" repeatCount="indefinite"/>
   </rect>
-  <rect x="360" y="33" width="0" height="1" fill="url(#wg)" opacity="0">
-    <animate attributeName="width" from="0" to="420" dur="0.8s" begin="0.5s" fill="freeze"/>
-    <animate attributeName="x" from="360" to="150" dur="0.8s" begin="0.5s" fill="freeze"/>
-    <animate attributeName="opacity" from="0" to="0.15" dur="0.8s" begin="0.5s" fill="freeze"/>
+  <rect x="130" y="15" width="460" height="1" fill="url(#wg)" opacity="0.04">
+    <animate attributeName="opacity" values="0.04;0.12;0.04" dur="8.0s" begin="3.2s" repeatCount="indefinite"/>
   </rect>
-  <rect x="360" y="65" width="0" height="1" fill="url(#wg)" opacity="0">
-    <animate attributeName="width" from="0" to="380" dur="0.8s" begin="0.7s" fill="freeze"/>
-    <animate attributeName="x" from="360" to="170" dur="0.8s" begin="0.7s" fill="freeze"/>
-    <animate attributeName="opacity" from="0" to="0.15" dur="0.8s" begin="0.7s" fill="freeze"/>
+  <rect x="120" y="25" width="480" height="1" fill="url(#wg)" opacity="0.04">
+    <animate attributeName="opacity" values="0.04;0.12;0.04" dur="6.5s" begin="1.5s" repeatCount="indefinite"/>
   </rect>
-  <rect x="360" y="88" width="0" height="1" fill="url(#wg)" opacity="0">
-    <animate attributeName="width" from="0" to="420" dur="0.8s" begin="0.9s" fill="freeze"/>
-    <animate attributeName="x" from="360" to="150" dur="0.8s" begin="0.9s" fill="freeze"/>
-    <animate attributeName="opacity" from="0" to="0.15" dur="0.8s" begin="0.9s" fill="freeze"/>
+  <rect x="135" y="35" width="450" height="1" fill="url(#wg)" opacity="0.04">
+    <animate attributeName="opacity" values="0.04;0.12;0.04" dur="7.5s" begin="4.8s" repeatCount="indefinite"/>
   </rect>
-  <rect x="360" y="105" width="0" height="1" fill="url(#wg)" opacity="0">
-    <animate attributeName="width" from="0" to="480" dur="0.8s" begin="1.1s" fill="freeze"/>
-    <animate attributeName="x" from="360" to="120" dur="0.8s" begin="1.1s" fill="freeze"/>
-    <animate attributeName="opacity" from="0" to="0.15" dur="0.8s" begin="1.1s" fill="freeze"/>
+  <rect x="160" y="48" width="400" height="1" fill="url(#wg)" opacity="0.04">
+    <animate attributeName="opacity" values="0.04;0.10;0.04" dur="6.0s" begin="2.1s" repeatCount="indefinite"/>
   </rect>
-  <!-- Title (fade in + rise) -->
-  <g opacity="0">
-    <animate attributeName="opacity" from="0" to="1" dur="0.6s" begin="0.2s" fill="freeze"/>
-    <animateTransform attributeName="transform" type="translate" from="0 6" to="0 0" dur="0.6s" begin="0.2s" fill="freeze"/>
-    <text x="360" y="55" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace" font-size="42" font-weight="700" letter-spacing="-1"><tspan fill="#1f2328">Open</tspan><tspan fill="url(#ag)">Weft</tspan></text>
-  </g>
-  <!-- Subtitle (fade in + rise, delayed) -->
-  <g opacity="0">
-    <animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="1.0s" fill="freeze"/>
-    <animateTransform attributeName="transform" type="translate" from="0 6" to="0 0" dur="0.5s" begin="1.0s" fill="freeze"/>
-    <text x="360" y="82" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" fill="#656d76" letter-spacing="2">FIRE-AND-FORGET AGENT ORCHESTRATION</text>
-  </g>
+  <rect x="170" y="58" width="380" height="1" fill="url(#wg)" opacity="0.04">
+    <animate attributeName="opacity" values="0.04;0.09;0.04" dur="8.5s" begin="5.5s" repeatCount="indefinite"/>
+  </rect>
+  <rect x="160" y="68" width="400" height="1" fill="url(#wg)" opacity="0.04">
+    <animate attributeName="opacity" values="0.04;0.10;0.04" dur="7.2s" begin="0.8s" repeatCount="indefinite"/>
+  </rect>
+  <rect x="135" y="78" width="450" height="1" fill="url(#wg)" opacity="0.04">
+    <animate attributeName="opacity" values="0.04;0.12;0.04" dur="6.8s" begin="3.9s" repeatCount="indefinite"/>
+  </rect>
+  <rect x="120" y="88" width="480" height="1" fill="url(#wg)" opacity="0.04">
+    <animate attributeName="opacity" values="0.04;0.12;0.04" dur="7.8s" begin="1.2s" repeatCount="indefinite"/>
+  </rect>
+  <rect x="130" y="98" width="460" height="1" fill="url(#wg)" opacity="0.04">
+    <animate attributeName="opacity" values="0.04;0.12;0.04" dur="6.3s" begin="4.5s" repeatCount="indefinite"/>
+  </rect>
+  <rect x="150" y="108" width="420" height="1" fill="url(#wg)" opacity="0.04">
+    <animate attributeName="opacity" values="0.04;0.12;0.04" dur="7.5s" begin="2.7s" repeatCount="indefinite"/>
+  </rect>
+  <rect x="170" y="115" width="380" height="1" fill="url(#wg)" opacity="0.04">
+    <animate attributeName="opacity" values="0.04;0.10;0.04" dur="8.2s" begin="5.1s" repeatCount="indefinite"/>
+  </rect>
+
+  <!-- Accent nodes -->
+  <circle cx="200" cy="15" r="1.5" fill="#1a7f37" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.16;0.03" dur="4.5s" begin="0.0s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="480" cy="8" r="1.5" fill="#0550ae" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.14;0.03" dur="5.2s" begin="1.3s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="300" cy="25" r="1.5" fill="#8250df" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.15;0.03" dur="4.0s" begin="2.8s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="520" cy="35" r="1.5" fill="#1a7f37" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.13;0.03" dur="5.8s" begin="0.5s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="180" cy="48" r="1.5" fill="#0550ae" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.15;0.03" dur="4.3s" begin="3.6s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="540" cy="58" r="1.5" fill="#8250df" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.12;0.03" dur="5.5s" begin="1.8s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="220" cy="68" r="1.5" fill="#1a7f37" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.14;0.03" dur="4.8s" begin="4.2s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="460" cy="78" r="1.5" fill="#0550ae" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.16;0.03" dur="5.0s" begin="0.3s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="340" cy="88" r="1.5" fill="#8250df" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.13;0.03" dur="4.2s" begin="2.5s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="240" cy="98" r="1.5" fill="#1a7f37" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.15;0.03" dur="5.3s" begin="3.1s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="500" cy="5" r="1.5" fill="#8250df" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.12;0.03" dur="4.6s" begin="1.0s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="380" cy="108" r="1.5" fill="#0550ae" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.14;0.03" dur="5.1s" begin="4.7s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="260" cy="115" r="1.5" fill="#1a7f37" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.13;0.03" dur="4.4s" begin="2.0s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="440" cy="48" r="1.5" fill="#8250df" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.12;0.03" dur="5.6s" begin="3.4s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="360" cy="35" r="1.5" fill="#0550ae" opacity="0.03">
+    <animate attributeName="opacity" values="0.03;0.11;0.03" dur="4.7s" begin="0.8s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- Text layer (always visible) -->
+  <text x="360" y="55" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace" font-size="42" font-weight="700" letter-spacing="-1"><tspan fill="#1f2328">Open</tspan><tspan fill="url(#ag)">Weft</tspan></text>
+  <text x="360" y="82" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" fill="#656d76" letter-spacing="2">FIRE-AND-FORGET AGENT ORCHESTRATION</text>
 </svg>
