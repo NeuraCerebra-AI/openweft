@@ -613,6 +613,46 @@ const loadOrCreateCheckpoint = async (
     await writeTextFileAtomic(input.config.paths.queueFile, recoveredQueueContent);
   }
 
+  let repairedPromptBFiles = false;
+  for (const feature of Object.values(checkpoint.features)) {
+    if (!ACTIONABLE_CHECKPOINT_FEATURE_STATUSES.has(feature.status)) {
+      continue;
+    }
+
+    const canonicalPromptBFile = createPromptBArtifactPath(input.config, feature.id, feature.request);
+    const configuredPromptBExists = feature.promptBFile ? await pathExists(feature.promptBFile) : false;
+    const canonicalPromptBExists = await pathExists(canonicalPromptBFile);
+
+    if (configuredPromptBExists) {
+      if (feature.promptBFile !== canonicalPromptBFile && canonicalPromptBExists) {
+        updateFeatureCheckpoint(checkpoint, feature.id, {
+          promptBFile: canonicalPromptBFile
+        });
+        repairedPromptBFiles = true;
+      }
+      continue;
+    }
+
+    if (canonicalPromptBExists) {
+      updateFeatureCheckpoint(checkpoint, feature.id, {
+        promptBFile: canonicalPromptBFile
+      });
+      repairedPromptBFiles = true;
+      continue;
+    }
+
+    if (repairedPromptBFiles) {
+      await saveCheckpointSnapshot(input.config, checkpoint);
+      repairedPromptBFiles = false;
+    }
+
+    throw new Error(`Prompt B artifact is missing for actionable feature ${feature.id}.`);
+  }
+
+  if (repairedPromptBFiles) {
+    await saveCheckpointSnapshot(input.config, checkpoint);
+  }
+
   checkpoint.currentPhase = null;
   checkpoint.currentState = 'idle';
 

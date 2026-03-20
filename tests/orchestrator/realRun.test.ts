@@ -13,6 +13,7 @@ import type {
   AdapterTurnResult
 } from '../../src/adapters/types.js';
 import { loadOpenWeftConfig } from '../../src/config/index.js';
+import { createPromptBFilename } from '../../src/domain/featureIds.js';
 import { createWorktree, getAutoGcSetting, listWorktrees, setAutoGc } from '../../src/git/index.js';
 import type { NotificationDependencies } from '../../src/notifications/index.js';
 import { ApprovalController } from '../../src/orchestrator/approval.js';
@@ -642,6 +643,105 @@ const seedInterruptedExecutionFeature = async (input: {
   });
 };
 
+const seedPlannedPromptBRecoveryFeature = async (input: {
+  config: Awaited<ReturnType<typeof loadOpenWeftConfig>>['config'];
+  configHash: string;
+  featureId?: string;
+  request?: string;
+  promptBFile?: string | null;
+  writeCanonicalPromptB?: boolean;
+}): Promise<{ planFile: string; canonicalPromptBFile: string }> => {
+  const featureId = input.featureId ?? '001';
+  const request = input.request ?? 'add dashboard filters';
+  const now = new Date().toISOString();
+  const planFile = path.join(input.config.paths.featureRequestsDir, `${featureId}.plan.md`);
+  const canonicalPromptBFile = path.join(
+    input.config.paths.promptBArtifactsDir,
+    createPromptBFilename(Number.parseInt(featureId, 10), request)
+  );
+
+  await mkdir(input.config.paths.featureRequestsDir, { recursive: true });
+  await mkdir(input.config.paths.promptBArtifactsDir, { recursive: true });
+  await writeFile(
+    planFile,
+    `# Feature Plan: ${featureId}
+
+## Ledger
+
+### Constraints
+- Keep the change set small.
+
+### Assumptions
+- Prompt B recovery should be deterministic.
+
+### Watchpoints
+- Preserve orchestrator state.
+
+### Validation
+- Run targeted checks.
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/target.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`,
+    'utf8'
+  );
+
+  if (input.writeCanonicalPromptB ?? true) {
+    await writeFile(canonicalPromptBFile, `Prompt B for ${request}.\n`, 'utf8');
+  }
+
+  const checkpoint = createEmptyCheckpoint({
+    orchestratorVersion: 'test',
+    configHash: input.configHash,
+    runId: 'test-run',
+    checkpointId: 'test-checkpoint',
+    createdAt: now
+  });
+  checkpoint.configHash = input.configHash;
+  checkpoint.status = 'in-progress';
+  checkpoint.currentState = 'planning';
+  checkpoint.features[featureId] = {
+    id: featureId,
+    request,
+    status: 'planned',
+    attempts: 0,
+    planFile,
+    promptBFile: input.promptBFile ?? null,
+    branchName: null,
+    worktreePath: null,
+    sessionId: null,
+    sessionScope: null,
+    manifest: {
+      create: ['src/target.ts'],
+      modify: [],
+      delete: []
+    },
+    updatedAt: now
+  };
+  checkpoint.queue = {
+    orderedFeatureIds: [featureId],
+    totalCount: 1
+  };
+
+  await saveCheckpoint({
+    checkpoint,
+    checkpointFile: input.config.paths.checkpointFile,
+    checkpointBackupFile: input.config.paths.checkpointBackupFile
+  });
+
+  return {
+    planFile,
+    canonicalPromptBFile
+  };
+};
+
 const createNotificationRecorder = () => {
   const lines: string[] = [];
   const dependencies: NotificationDependencies = {
@@ -1110,6 +1210,192 @@ describe('runRealOrchestration', () => {
     expect(Object.keys(restartResult.checkpoint.features).sort()).toEqual(['001', '002']);
     expect(restartResult.checkpoint.features['001']?.request).toBe('add dashboard filters');
     expect(restartResult.checkpoint.features['002']?.request).toBe('add export controls');
+  });
+
+  it('repairs a missing promptBFile from the canonical artifact before execution resumes', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const { canonicalPromptBFile } = await seedPlannedPromptBRecoveryFeature({
+      config,
+      configHash,
+      promptBFile: null,
+      writeCanonicalPromptB: true
+    });
+
+    vi.resetModules();
+    vi.doMock('../../src/domain/scoring.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/domain/scoring.js')>(
+        '../../src/domain/scoring.js'
+      );
+
+      return {
+        ...actual,
+        scoreQueue: vi.fn(() => {
+          throw new Error('scoring stage probe');
+        })
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runWithScoringProbe } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      await expect(
+        runWithScoringProbe({
+          config,
+          configHash,
+          adapter: new RecordingAdapter(new MockAgentAdapter()),
+          notificationDependencies: createNotificationRecorder().dependencies,
+          sleep: async () => {}
+        })
+      ).rejects.toThrow('scoring stage probe');
+    } finally {
+      vi.doUnmock('../../src/domain/scoring.js');
+      vi.resetModules();
+    }
+
+    const saved = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    expect(saved.checkpoint?.features['001']?.promptBFile).toBe(canonicalPromptBFile);
+  });
+
+  it('fails closed when an actionable feature has no usable Prompt B artifact to recover', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    await seedPlannedPromptBRecoveryFeature({
+      config,
+      configHash,
+      promptBFile: null,
+      writeCanonicalPromptB: false
+    });
+
+    await expect(
+      runRealOrchestration({
+        config,
+        configHash,
+        adapter: new RecordingAdapter(new MockAgentAdapter()),
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      })
+    ).rejects.toThrow(/Prompt B artifact/i);
+  });
+
+  it('persists earlier Prompt B repairs before failing on a later missing artifact', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const { canonicalPromptBFile } = await seedPlannedPromptBRecoveryFeature({
+      config,
+      configHash,
+      featureId: '001',
+      request: 'add dashboard filters',
+      promptBFile: null,
+      writeCanonicalPromptB: true
+    });
+
+    const secondPlanFile = path.join(config.paths.featureRequestsDir, '002.plan.md');
+    await writeFile(
+      secondPlanFile,
+      `# Feature Plan: 002
+
+## Ledger
+
+### Constraints
+- Keep the change set small.
+
+### Assumptions
+- Prompt B recovery should be deterministic.
+
+### Watchpoints
+- Preserve orchestrator state.
+
+### Validation
+- Run targeted checks.
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/secondary.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`,
+      'utf8'
+    );
+
+    const savedBefore = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+    if (!savedBefore.checkpoint) {
+      throw new Error('Expected seeded checkpoint to exist.');
+    }
+
+    savedBefore.checkpoint.features['002'] = {
+      id: '002',
+      request: 'add export controls',
+      status: 'planned',
+      attempts: 0,
+      planFile: secondPlanFile,
+      promptBFile: null,
+      branchName: null,
+      worktreePath: null,
+      sessionId: null,
+      sessionScope: null,
+      manifest: {
+        create: ['src/secondary.ts'],
+        modify: [],
+        delete: []
+      },
+      updatedAt: new Date().toISOString()
+    };
+    savedBefore.checkpoint.queue = {
+      orderedFeatureIds: ['001', '002'],
+      totalCount: 2
+    };
+
+    await saveCheckpoint({
+      checkpoint: savedBefore.checkpoint,
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    await expect(
+      runRealOrchestration({
+        config,
+        configHash,
+        adapter: new RecordingAdapter(new MockAgentAdapter()),
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      })
+    ).rejects.toThrow(/Prompt B artifact/i);
+
+    const savedAfter = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    expect(savedAfter.checkpoint?.features['001']?.promptBFile).toBe(canonicalPromptBFile);
   });
 
   it('resumes repo-scoped adjustment sessions across phases without reusing them for worktree execution', async () => {
