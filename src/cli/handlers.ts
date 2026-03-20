@@ -833,10 +833,44 @@ export const createCommandHandlers = (
 
       if (process.stdout.isTTY && !options.bg && !options.tmux && !tmuxMonitor && !options.dryRun) {
         let nextInlineQueuedAgentId = 1;
+        let nextPreloadedQueuedAgentId = 1;
+        const queueContent = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
+        const { pending } = parseQueueFile(queueContent);
+        const checkpointResult = await loadCheckpoint({
+          checkpointFile: config.paths.checkpointFile,
+          checkpointBackupFile: config.paths.checkpointBackupFile
+        });
 
         await startTuiSession({
           config,
           configHash,
+          prePopulate: (store) => {
+            if (checkpointResult.checkpoint) {
+              for (const feature of Object.values(checkpointResult.checkpoint.features)) {
+                if (!isActionableCheckpointFeature(feature)) {
+                  continue;
+                }
+                store.getState().addAgent({
+                  id: feature.id,
+                  name: feature.title ?? summarizeQueueRequest(feature.request),
+                  feature: feature.title ?? summarizeQueueRequest(feature.request),
+                  status: 'queued',
+                  removable: false,
+                });
+              }
+            }
+
+            for (const line of pending) {
+              const requestLabel = summarizeQueueRequest(line.request);
+              store.getState().addAgent({
+                id: `queued-start-${nextPreloadedQueuedAgentId++}`,
+                name: requestLabel,
+                feature: requestLabel,
+                status: 'queued',
+                removable: false,
+              });
+            }
+          },
           onAddRequest: async (request, store) => {
             const normalizedRequest = normalizeQueuedRequest(request);
             if (normalizedRequest === null) {

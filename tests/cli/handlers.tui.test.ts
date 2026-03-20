@@ -431,6 +431,69 @@ describe('TTY start handler', () => {
     await startPromise;
   });
 
+  it('preloads pending queue items into the direct start dashboard in queue order', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-tui-direct-start-queue-'));
+    let resolveStart: ((result: StartResult) => void) | null = null;
+
+    await writeLaunchProjectFiles(repoRoot, {
+      queueContent: 'alpha\nbeta\ngamma\n'
+    });
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async () => await new Promise<StartResult>((resolve) => {
+        resolveStart = resolve;
+      })
+    });
+
+    const startPromise = harness.handlers.start({});
+    await waitFor(() => harness.getAppProps() !== null && harness.getStore() !== null);
+
+    const store = harness.getStore();
+    if (!store) {
+      throw new Error('Expected App store to be captured.');
+    }
+
+    expect(store.getState().executionRequested).toBe(true);
+    expect(store.getState().agents.map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      status: agent.status,
+      removable: agent.removable
+    }))).toEqual([
+      {
+        id: 'queued-start-1',
+        name: 'alpha',
+        status: 'queued',
+        removable: false
+      },
+      {
+        id: 'queued-start-2',
+        name: 'beta',
+        status: 'queued',
+        removable: false
+      },
+      {
+        id: 'queued-start-3',
+        name: 'gamma',
+        status: 'queued',
+        removable: false
+      }
+    ]);
+
+    if (!resolveStart) {
+      throw new Error('Expected orchestration resolver to be set.');
+    }
+    const finishRun: (result: StartResult) => void = resolveStart;
+    finishRun({
+      checkpoint: { status: 'completed' },
+      mergedCount: 0,
+      plannedCount: 3
+    });
+
+    await startPromise;
+  });
+
   it('requests graceful stop on SIGINT in TTY mode', async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-tui-signal-'));
     let resolveStart: ((result: StartResult) => void) | null = null;
