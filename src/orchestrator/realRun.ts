@@ -19,7 +19,7 @@ import type { ResolvedOpenWeftConfig } from '../config/index.js';
 import { addCostRecordToTotals, type CostRecord } from '../domain/costs.js';
 import { circuitBreakerTripped, classifyError } from '../domain/errors.js';
 import { createPlanFilename, createPromptBFilename, formatFeatureId, slugifyFeatureRequest } from '../domain/featureIds.js';
-import { parseManifestDocument, type Manifest, updateManifestInMarkdown } from '../domain/manifest.js';
+import { assertLedgerSection, parseManifestDocument, type Manifest, updateManifestInMarkdown } from '../domain/manifest.js';
 import { buildExecutionPhases } from '../domain/phases.js';
 import type { PriorityTier } from '../domain/primitives.js';
 import {
@@ -1107,6 +1107,7 @@ const repairPlanMarkdownIfNeeded = async (
 
   // Attempt 1: parse the initial markdown directly
   try {
+    assertLedgerSection(initialMarkdown);
     const parsed = parseManifestDocument(initialMarkdown, lastKnownGoodOpts);
     return {
       markdown: updateManifestInMarkdown(initialMarkdown, parsed.manifest),
@@ -1145,6 +1146,7 @@ const repairPlanMarkdownIfNeeded = async (
     }
 
     try {
+      assertLedgerSection(repairResult.finalMessage);
       const repaired = parseManifestDocument(repairResult.finalMessage, lastKnownGoodOpts);
       return {
         markdown: updateManifestInMarkdown(repairResult.finalMessage, repaired.manifest),
@@ -2304,6 +2306,7 @@ const executePhases = async (
 
           const adjustedPlan = adjustment.finalMessage;
           const shadowPlan = await maybeReadShadowPlan(context.config, feature.id);
+          assertLedgerSection(adjustedPlan);
           const parsed = parseManifestDocument(adjustedPlan, {
             ...(shadowPlan
               ? {

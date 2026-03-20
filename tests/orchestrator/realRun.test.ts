@@ -21,6 +21,21 @@ import { StopController } from '../../src/orchestrator/stop.js';
 import { runRealOrchestration } from '../../src/orchestrator/realRun.js';
 import { createEmptyCheckpoint, loadCheckpoint, saveCheckpoint } from '../../src/state/checkpoint.js';
 
+const TEST_LEDGER_SECTION = `## Ledger
+
+### Constraints
+- Keep the change set small.
+
+### Assumptions
+- The manifest is conservative.
+
+### Watchpoints
+- Preserve orchestrator compatibility.
+
+### Validation
+- Run targeted checks.
+`;
+
 class RecordingAdapter implements AgentAdapter {
   readonly backend: AgentAdapter['backend'];
 
@@ -97,6 +112,8 @@ class DeterministicScoringAdapter implements AgentAdapter {
         ? 'Use src/target.ts for the implementation plan.'
         : request.stage === 'planning-s2'
           ? `# Feature Plan: ${request.featureId}
+
+${TEST_LEDGER_SECTION}
 
 ## Manifest
 
@@ -186,6 +203,8 @@ class DeterministicManifestAdapter implements AgentAdapter {
         : request.stage === 'planning-s2'
           ? `# Feature Plan: ${request.featureId}
 
+${TEST_LEDGER_SECTION}
+
 ## Manifest
 
 \`\`\`json manifest
@@ -201,7 +220,17 @@ ${JSON.stringify(
 \`\`\`
 `
           : request.stage === 'adjustment'
-            ? currentPlanMatch?.[1]?.trim() ?? '# Feature Plan\n\n## Manifest\n\n```json manifest\n{"create":[],"modify":[],"delete":[]}\n```'
+            ? currentPlanMatch?.[1]?.trim() ??
+              `# Feature Plan
+
+${TEST_LEDGER_SECTION}
+
+## Manifest
+
+\`\`\`json manifest
+{"create":[],"modify":[],"delete":[]}
+\`\`\`
+`
           : 'Execution complete.';
     const sessionId = `deterministic-${request.featureId}-${request.stage}`;
 
@@ -280,6 +309,8 @@ class PartialPlanningFailureAdapter implements AgentAdapter {
         ? 'Use src/target.ts for the implementation plan.'
         : request.stage === 'planning-s2'
           ? `# Feature Plan: ${request.featureId}
+
+${TEST_LEDGER_SECTION}
 
 ## Manifest
 
@@ -384,6 +415,20 @@ class StopDuringExecutionFailureAdapter implements AgentAdapter {
         sessionId: `stop-test-${request.stage}`,
         finalMessage: `# Feature Plan: ${request.featureId}
 
+## Ledger
+
+### Constraints
+- Keep the change set small.
+
+### Assumptions
+- The manifest is conservative.
+
+### Watchpoints
+- Preserve orchestrator compatibility.
+
+### Validation
+- Run targeted checks.
+
 ## Manifest
 
 \`\`\`json manifest
@@ -455,6 +500,70 @@ class StopDuringExecutionFailureAdapter implements AgentAdapter {
       backend: 'codex',
       sessionId: `stop-test-${request.stage}`,
       finalMessage: 'Adjustment complete.',
+      model: request.model,
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        cachedInputTokens: 0,
+        cacheCreationInputTokens: 0,
+        cacheReadInputTokens: 0,
+        totalCostUsd: 0,
+        raw: null
+      },
+      costRecord: {
+        featureId: request.featureId,
+        stage: request.stage,
+        model: request.model,
+        inputTokens: 10,
+        outputTokens: 5,
+        estimatedCostUsd: 0,
+        timestamp: new Date().toISOString()
+      },
+      artifacts: {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        command: this.buildCommand(request)
+      }
+    };
+  }
+}
+
+class MissingLedgerPlanningAdapter implements AgentAdapter {
+  readonly backend = 'codex' as const;
+
+  buildCommand(request: AdapterTurnRequest): AdapterCommandSpec {
+    return {
+      command: 'codex',
+      args: [request.stage],
+      cwd: request.cwd
+    };
+  }
+
+  async runTurn(request: AdapterTurnRequest): Promise<AdapterTurnResult> {
+    const finalMessage =
+      request.stage === 'planning-s1'
+        ? 'Use src/target.ts for the implementation plan.'
+        : request.stage === 'planning-s2'
+          ? `# Feature Plan: ${request.featureId}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/target.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`
+          : 'Execution complete.';
+
+    return {
+      ok: true,
+      backend: 'codex',
+      sessionId: `missing-ledger-${request.featureId}-${request.stage}`,
+      finalMessage,
       model: request.model,
       usage: {
         inputTokens: 10,
@@ -1396,6 +1505,103 @@ describe('runRealOrchestration', () => {
     });
 
     expect(savedAfter.checkpoint?.features['001']?.promptBFile).toBe(canonicalPromptBFile);
+  });
+
+  it('fails planning when the agent never returns the required ledger section', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+
+    await expect(
+      runRealOrchestration({
+        config,
+        configHash,
+        adapter: new MissingLedgerPlanningAdapter(),
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      })
+    ).rejects.toThrow(/Ledger/i);
+  });
+
+  it('fails adjustment when the agent drops the required ledger section', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 2,
+      queueRequests: ['first change', 'second change', 'third change']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(
+      new DeterministicManifestAdapter({
+        '001': ['src/shared.ts'],
+        '002': ['src/shared.ts'],
+        '003': ['src/other.ts']
+      })
+    );
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'adjustment' && request.featureId === '002') {
+        return {
+          ok: true,
+          backend: 'codex',
+          sessionId: 'missing-adjustment-ledger',
+          finalMessage: `# Feature Plan: ${request.featureId}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/shared.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`,
+          model: request.model,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cachedInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            totalCostUsd: 0,
+            raw: null
+          },
+          costRecord: {
+            featureId: request.featureId,
+            stage: request.stage,
+            model: request.model,
+            inputTokens: 10,
+            outputTokens: 5,
+            estimatedCostUsd: 0,
+            timestamp: new Date().toISOString()
+          },
+          artifacts: {
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+            command: adapter.buildCommand(request)
+          }
+        };
+      }
+
+      return originalRunTurn(request);
+    };
+
+    await expect(
+      runRealOrchestration({
+        config,
+        configHash,
+        adapter,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      })
+    ).rejects.toThrow(/Ledger/i);
   });
 
   it('resumes repo-scoped adjustment sessions across phases without reusing them for worktree execution', async () => {

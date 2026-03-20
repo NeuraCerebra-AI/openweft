@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  assertLedgerSection,
   findManifestOverlap,
   parseManifestFromMarkdown,
   parseManifestJson,
@@ -73,5 +74,43 @@ describe('manifest', () => {
         }
       )
     ).toEqual(['src/auth/login.ts']);
+  });
+
+  it('requires a ledger section with the expected subheadings when requested', () => {
+    expect(() =>
+      assertLedgerSection(`# Plan
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": [],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`)
+    ).toThrow(/Ledger/i);
+  });
+
+  it('accepts a ledger section when all required subheadings are present', () => {
+    expect(() =>
+      assertLedgerSection(`# Plan
+
+## Ledger
+
+### Constraints
+- Keep the change set small.
+
+### Assumptions
+- The manifest is conservative.
+
+### Watchpoints
+- Preserve orchestrator compatibility.
+
+### Validation
+- Run targeted checks.
+`)
+    ).not.toThrow();
   });
 });

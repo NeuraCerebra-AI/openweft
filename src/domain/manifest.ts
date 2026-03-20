@@ -33,6 +33,8 @@ export interface ParsedManifestDocument {
   block: ManifestBlock;
 }
 
+const REQUIRED_LEDGER_SUBHEADINGS = ['Constraints', 'Assumptions', 'Watchpoints', 'Validation'] as const;
+
 export const normalizeManifest = (manifest: Manifest): Manifest => {
   const normalizeEntries = (entries: string[]) => [...new Set(entries.map((entry) => normalizeRelativePath(entry)))];
 
@@ -76,6 +78,44 @@ export const extractManifestBlock = (markdown: string): ManifestBlock | null => 
   });
 
   return manifestNode;
+};
+
+export const extractLedgerSubheadings = (markdown: string): string[] => {
+  const tree = unified().use(remarkParse).parse(markdown);
+  let underLedgerHeading = false;
+  const subheadings: string[] = [];
+
+  visit(tree, (node) => {
+    if (node.type === 'heading' && node.depth === 2) {
+      underLedgerHeading = toString(node).trim() === 'Ledger';
+      return;
+    }
+
+    if (node.type === 'heading' && node.depth <= 2) {
+      underLedgerHeading = false;
+      return;
+    }
+
+    if (underLedgerHeading && node.type === 'heading' && node.depth === 3) {
+      subheadings.push(toString(node).trim());
+    }
+  });
+
+  return subheadings;
+};
+
+export const assertLedgerSection = (markdown: string): void => {
+  const subheadings = extractLedgerSubheadings(markdown);
+  if (subheadings.length === 0) {
+    throw new Error('No ledger section found under a "## Ledger" heading.');
+  }
+
+  const missing = REQUIRED_LEDGER_SUBHEADINGS.filter((heading) => !subheadings.includes(heading));
+  if (missing.length > 0) {
+    throw new Error(
+      `Ledger section must include the subheadings: ${missing.join(', ')}.`
+    );
+  }
 };
 
 export const parseManifestJson = (
