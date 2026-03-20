@@ -1,104 +1,25 @@
-<svg fill="none" viewBox="0 0 640 204" width="640" height="204" xmlns="http://www.w3.org/2000/svg">
-  <foreignObject width="100%" height="100%">
-    <div xmlns="http://www.w3.org/1999/xhtml">
-      <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
-        .terminal {
-          background: #ffffff;
-          border-radius: 10px;
-          border: 1px solid #d1d9e0;
-          overflow: hidden;
-          width: 620px;
-          margin: 8px auto;
-          font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
-          box-shadow: 0 1px 3px rgba(31, 35, 40, 0.08), 0 2px 8px rgba(31, 35, 40, 0.04);
-        }
-
-        .titlebar {
-          background: #f6f8fa;
-          padding: 11px 14px;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          border-bottom: 1px solid #d1d9e0;
-        }
-
-        .dot {
-          width: 12px;
-          height: 12px;
-          border-radius: 50%;
-          display: inline-block;
-        }
-
-        .body { padding: 16px 20px 12px 20px; }
-
-        .line {
-          overflow: hidden;
-          white-space: nowrap;
-          width: 0;
-          font-size: 14px;
-          line-height: 1.75;
-          display: block;
-          height: 1.75em;
-        }
-
-        .prompt { color: #656d76; }
-        .cmd { color: #1f2328; }
-        .str { color: #0550ae; }
-        .flag { color: #8250df; }
-
-        .line1 { animation: t1 1.3s steps(26, end) 0.6s forwards; }
-        .line2 { animation: t2 1.45s steps(29, end) 2.4s forwards; }
-        .line3 { animation: t3 1.05s steps(21, end) 4.4s forwards; }
-
-        .result {
-          font-size: 14px;
-          line-height: 1.75;
-          height: 1.75em;
-          color: #1a7f37;
-          opacity: 0;
-          animation: fadeIn 0.6s ease 6.2s forwards;
-        }
-
-        .ready {
-          font-size: 14px;
-          line-height: 1.75;
-          height: 1.75em;
-          opacity: 0;
-          animation: fadeIn 0.3s ease 7.0s forwards;
-        }
-
-        .cursor {
-          display: inline;
-          color: #1f2328;
-          animation: blink 1s step-end 7.0s infinite;
-        }
-
-        @keyframes t1 { from { width: 0 } to { width: 26ch } }
-        @keyframes t2 { from { width: 0 } to { width: 29ch } }
-        @keyframes t3 { from { width: 0 } to { width: 21ch } }
-        @keyframes fadeIn { to { opacity: 1 } }
-        @keyframes blink {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0; }
-        }
-      </style>
-
-      <div class="terminal">
-        <div class="titlebar">
-          <div class="dot" style="background: #ff5f57;"> </div>
-          <div class="dot" style="background: #febc2e;"> </div>
-          <div class="dot" style="background: #28c840;"> </div>
-        </div>
-        <div class="body">
-          <div class="line line1"><span class="prompt">$ </span><span class="cmd">openweft add </span><span class="str">"auth flow"</span></div>
-          <div class="line line2"><span class="prompt">$ </span><span class="cmd">openweft add </span><span class="str">"rate limiter"</span></div>
-          <div class="line line3"><span class="prompt">$ </span><span class="cmd">openweft start </span><span class="flag">--bg</span></div>
-          <div class="result">✓ 2 merged, 0 conflicts</div>
-          <div class="ready"><span class="prompt">$ </span><span class="cursor">▌</span></div>
-        </div>
-      </div>
-    </div>
-  </foreignObject>
+<svg viewBox="0 0 640 204" width="640" height="204" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="t"><rect x="10" y="2" width="620" height="200" rx="10"/></clipPath>
+  </defs>
+  <!-- Terminal frame -->
+  <g clip-path="url(#t)">
+    <rect x="10" y="2" width="620" height="200" fill="#ffffff"/>
+    <rect x="10" y="2" width="620" height="36" fill="#f6f8fa"/>
+    <line x1="10" y1="38" x2="630" y2="38" stroke="#d1d9e0" stroke-width="1"/>
+  </g>
+  <rect x="10" y="2" width="620" height="200" rx="10" fill="none" stroke="#d1d9e0" stroke-width="1"/>
+  <!-- Traffic lights -->
+  <circle cx="28" cy="20" r="6" fill="#ff5f57"/>
+  <circle cx="48" cy="20" r="6" fill="#febc2e"/>
+  <circle cx="68" cy="20" r="6" fill="#28c840"/>
+  <!-- Terminal content -->
+  <g font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace" font-size="14">
+    <text y="62"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">openweft add </tspan><tspan fill="#0550ae">"password reset flow"</tspan></text>
+    <text y="86"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">openweft add </tspan><tspan fill="#0550ae">"refactor auth for oauth2"</tspan></text>
+    <text y="110"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">openweft add </tspan><tspan fill="#0550ae">"audit log export"</tspan></text>
+    <text y="134"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">openweft start </tspan><tspan fill="#8250df">--bg</tspan></text>
+    <text x="30" y="158" fill="#1a7f37">&#x2713; 3 merged, 0 conflicts</text>
+    <text y="182"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">&#x258C;</tspan></text>
+  </g>
 </svg>
