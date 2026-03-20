@@ -1,6 +1,6 @@
-<svg viewBox="0 0 720 120" width="720" height="120" xmlns="http://www.w3.org/2000/svg">
+<svg viewBox="0 0 720 200" width="720" height="200" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="ag" gradientUnits="userSpaceOnUse" x1="340" y1="58" x2="470" y2="28">
+    <linearGradient id="ag" gradientUnits="userSpaceOnUse" x1="320" y1="96" x2="480" y2="56">
       <stop offset="0%" stop-color="#7ee787"/>
       <stop offset="50%" stop-color="#a5d6ff"/>
       <stop offset="100%" stop-color="#d2a8ff"/>
@@ -12,125 +12,140 @@
     </radialGradient>
   </defs>
 
-  <!-- Ambient glow drift -->
-  <rect x="0" y="0" width="720" height="120" fill="url(#glow)"/>
+  <!-- Ambient glow -->
+  <rect x="0" y="0" width="720" height="200" fill="url(#glow)"/>
 
-  <!-- Warp grid (static vertical threads — visible) -->
+  <!-- Warp grid (visible vertical threads) -->
   <g opacity="0.12" stroke="#e6edf3" stroke-width="1">
-    <line x1="160" y1="0" x2="160" y2="120"/><line x1="180" y1="0" x2="180" y2="120"/>
-    <line x1="200" y1="0" x2="200" y2="120"/><line x1="220" y1="0" x2="220" y2="120"/>
-    <line x1="240" y1="0" x2="240" y2="120"/><line x1="260" y1="0" x2="260" y2="120"/>
-    <line x1="280" y1="0" x2="280" y2="120"/><line x1="300" y1="0" x2="300" y2="120"/>
-    <line x1="320" y1="0" x2="320" y2="120"/><line x1="340" y1="0" x2="340" y2="120"/>
-    <line x1="360" y1="0" x2="360" y2="120"/><line x1="380" y1="0" x2="380" y2="120"/>
-    <line x1="400" y1="0" x2="400" y2="120"/><line x1="420" y1="0" x2="420" y2="120"/>
-    <line x1="440" y1="0" x2="440" y2="120"/><line x1="460" y1="0" x2="460" y2="120"/>
-    <line x1="480" y1="0" x2="480" y2="120"/><line x1="500" y1="0" x2="500" y2="120"/>
-    <line x1="520" y1="0" x2="520" y2="120"/><line x1="540" y1="0" x2="540" y2="120"/>
-    <line x1="560" y1="0" x2="560" y2="120"/>
+    <line x1="160" y1="0" x2="160" y2="200"/><line x1="180" y1="0" x2="180" y2="200"/>
+    <line x1="200" y1="0" x2="200" y2="200"/><line x1="220" y1="0" x2="220" y2="200"/>
+    <line x1="240" y1="0" x2="240" y2="200"/><line x1="260" y1="0" x2="260" y2="200"/>
+    <line x1="280" y1="0" x2="280" y2="200"/><line x1="300" y1="0" x2="300" y2="200"/>
+    <line x1="320" y1="0" x2="320" y2="200"/><line x1="340" y1="0" x2="340" y2="200"/>
+    <line x1="360" y1="0" x2="360" y2="200"/><line x1="380" y1="0" x2="380" y2="200"/>
+    <line x1="400" y1="0" x2="400" y2="200"/><line x1="420" y1="0" x2="420" y2="200"/>
+    <line x1="440" y1="0" x2="440" y2="200"/><line x1="460" y1="0" x2="460" y2="200"/>
+    <line x1="480" y1="0" x2="480" y2="200"/><line x1="500" y1="0" x2="500" y2="200"/>
+    <line x1="520" y1="0" x2="520" y2="200"/><line x1="540" y1="0" x2="540" y2="200"/>
+    <line x1="560" y1="0" x2="560" y2="200"/>
   </g>
 
-  <!-- === WEFT SHUTTLE LINES (flowing dashes, alternating L↔R like a real shuttle) === -->
+  <!-- === WEFT SHUTTLE LINES (alternating L↔R) === -->
 
-  <!-- Above title zone — bold -->
-  <line x1="100" y1="6" x2="620" y2="6" stroke="#7ee787" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 30" opacity="0.30">
+  <!-- Above title zone -->
+  <line x1="100" y1="10" x2="620" y2="10" stroke="#7ee787" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 30" opacity="0.30">
     <animate attributeName="stroke-dashoffset" from="0" to="-36" dur="10s" repeatCount="indefinite"/>
   </line>
-  <line x1="80" y1="14" x2="640" y2="14" stroke="#a5d6ff" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="12 24" opacity="0.25">
+  <line x1="80" y1="22" x2="640" y2="22" stroke="#a5d6ff" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="12 24" opacity="0.25">
     <animate attributeName="stroke-dashoffset" from="0" to="36" dur="14s" repeatCount="indefinite"/>
   </line>
-  <line x1="110" y1="22" x2="610" y2="22" stroke="#d2a8ff" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4 12 8 24" opacity="0.30">
+  <line x1="110" y1="35" x2="610" y2="35" stroke="#d2a8ff" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4 12 8 24" opacity="0.30">
     <animate attributeName="stroke-dashoffset" from="0" to="-48" dur="12s" repeatCount="indefinite"/>
   </line>
-  <!-- Near title — subtle -->
-  <line x1="140" y1="32" x2="580" y2="32" stroke="#7ee787" stroke-width="1" stroke-linecap="round" stroke-dasharray="8 28" opacity="0.12">
+  <line x1="80" y1="48" x2="640" y2="48" stroke="#7ee787" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="8 28" opacity="0.25">
     <animate attributeName="stroke-dashoffset" from="0" to="36" dur="16s" repeatCount="indefinite"/>
+  </line>
+  <line x1="100" y1="60" x2="620" y2="60" stroke="#a5d6ff" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="5 25" opacity="0.28">
+    <animate attributeName="stroke-dashoffset" from="0" to="-30" dur="9s" repeatCount="indefinite"/>
+  </line>
+
+  <!-- Near title — subtle -->
+  <line x1="150" y1="72" x2="570" y2="72" stroke="#d2a8ff" stroke-width="1" stroke-linecap="round" stroke-dasharray="6 30" opacity="0.12">
+    <animate attributeName="stroke-dashoffset" from="0" to="36" dur="18s" repeatCount="indefinite"/>
   </line>
 
   <!-- Near subtitle — subtle -->
-  <line x1="140" y1="88" x2="580" y2="88" stroke="#d2a8ff" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 15 10 20" opacity="0.12">
+  <line x1="150" y1="130" x2="570" y2="130" stroke="#7ee787" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 15 10 20" opacity="0.12">
     <animate attributeName="stroke-dashoffset" from="0" to="-48" dur="15s" repeatCount="indefinite"/>
   </line>
-  <!-- Below subtitle zone — bold -->
-  <line x1="100" y1="96" x2="620" y2="96" stroke="#a5d6ff" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="5 25" opacity="0.30">
-    <animate attributeName="stroke-dashoffset" from="0" to="30" dur="9s" repeatCount="indefinite"/>
+
+  <!-- Below subtitle zone -->
+  <line x1="100" y1="142" x2="620" y2="142" stroke="#a5d6ff" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="10 22" opacity="0.28">
+    <animate attributeName="stroke-dashoffset" from="0" to="32" dur="11s" repeatCount="indefinite"/>
   </line>
-  <line x1="80" y1="104" x2="640" y2="104" stroke="#7ee787" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="14 34" opacity="0.25">
+  <line x1="110" y1="155" x2="610" y2="155" stroke="#d2a8ff" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="14 34" opacity="0.30">
     <animate attributeName="stroke-dashoffset" from="0" to="-48" dur="18s" repeatCount="indefinite"/>
   </line>
-  <line x1="110" y1="114" x2="610" y2="114" stroke="#d2a8ff" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 18 3 21" opacity="0.30">
-    <animate attributeName="stroke-dashoffset" from="0" to="48" dur="13s" repeatCount="indefinite"/>
+  <line x1="80" y1="168" x2="640" y2="168" stroke="#7ee787" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="8 24" opacity="0.25">
+    <animate attributeName="stroke-dashoffset" from="0" to="32" dur="13s" repeatCount="indefinite"/>
+  </line>
+  <line x1="100" y1="180" x2="620" y2="180" stroke="#a5d6ff" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 18 3 21" opacity="0.30">
+    <animate attributeName="stroke-dashoffset" from="0" to="-48" dur="10s" repeatCount="indefinite"/>
+  </line>
+  <line x1="110" y1="192" x2="610" y2="192" stroke="#d2a8ff" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4 20" opacity="0.25">
+    <animate attributeName="stroke-dashoffset" from="0" to="24" dur="8s" repeatCount="indefinite"/>
   </line>
 
-  <!-- === INTERSECTION NODES (pulsing where weft crosses warp) === -->
+  <!-- === INTERSECTION NODES === -->
 
-  <!-- Row y=6 — diamonds, green -->
-  <path d="M200,3.5 L202.5,6 L200,8.5 L197.5,6Z" fill="#7ee787" opacity="0.08">
+  <!-- Upper zone -->
+  <path d="M200,7.5 L202.5,10 L200,12.5 L197.5,10Z" fill="#7ee787" opacity="0.08">
     <animate attributeName="opacity" values="0.08;0.40;0.08" dur="4.5s" begin="0s" repeatCount="indefinite"/>
   </path>
-  <path d="M340,3.5 L342.5,6 L340,8.5 L337.5,6Z" fill="#7ee787" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.2s" begin="1.8s" repeatCount="indefinite"/>
+  <path d="M400,7.5 L402.5,10 L400,12.5 L397.5,10Z" fill="#7ee787" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.2s" begin="2.1s" repeatCount="indefinite"/>
   </path>
-  <path d="M480,3.5 L482.5,6 L480,8.5 L477.5,6Z" fill="#7ee787" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.40;0.08" dur="3.8s" begin="3.1s" repeatCount="indefinite"/>
-  </path>
-
-  <!-- Row y=14 — circles, blue -->
-  <circle cx="260" cy="14" r="2" fill="#a5d6ff" opacity="0.08">
+  <circle cx="260" cy="22" r="2" fill="#a5d6ff" opacity="0.08">
     <animate attributeName="opacity" values="0.08;0.38;0.08" dur="5.0s" begin="0.5s" repeatCount="indefinite"/>
   </circle>
-  <circle cx="420" cy="14" r="2" fill="#a5d6ff" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="4.3s" begin="2.4s" repeatCount="indefinite"/>
+  <circle cx="480" cy="22" r="2" fill="#a5d6ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="4.3s" begin="3.2s" repeatCount="indefinite"/>
   </circle>
-  <circle cx="540" cy="14" r="2" fill="#a5d6ff" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.40;0.08" dur="5.6s" begin="4.1s" repeatCount="indefinite"/>
+  <path d="M180,32.5 L182.5,35 L180,37.5 L177.5,35Z" fill="#d2a8ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.40;0.08" dur="4.0s" begin="1.2s" repeatCount="indefinite"/>
+  </path>
+  <path d="M360,32.5 L362.5,35 L360,37.5 L357.5,35Z" fill="#d2a8ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.4s" begin="3.8s" repeatCount="indefinite"/>
+  </path>
+  <path d="M520,32.5 L522.5,35 L520,37.5 L517.5,35Z" fill="#d2a8ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.38;0.08" dur="3.6s" begin="0.8s" repeatCount="indefinite"/>
+  </path>
+  <circle cx="300" cy="48" r="2" fill="#7ee787" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.40;0.08" dur="4.8s" begin="2.5s" repeatCount="indefinite"/>
   </circle>
-
-  <!-- Row y=22 — diamonds, purple -->
-  <path d="M180,19.5 L182.5,22 L180,24.5 L177.5,22Z" fill="#d2a8ff" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.38;0.08" dur="4.0s" begin="1.2s" repeatCount="indefinite"/>
-  </path>
-  <path d="M360,19.5 L362.5,22 L360,24.5 L357.5,22Z" fill="#d2a8ff" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.4s" begin="3.5s" repeatCount="indefinite"/>
-  </path>
-  <path d="M500,19.5 L502.5,22 L500,24.5 L497.5,22Z" fill="#d2a8ff" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.40;0.08" dur="3.6s" begin="0.8s" repeatCount="indefinite"/>
-  </path>
-
-  <!-- Row y=96 — circles, blue -->
-  <circle cx="220" cy="96" r="2" fill="#a5d6ff" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.40;0.08" dur="4.8s" begin="0.3s" repeatCount="indefinite"/>
+  <circle cx="500" cy="48" r="2" fill="#7ee787" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.6s" begin="4.3s" repeatCount="indefinite"/>
   </circle>
-  <circle cx="380" cy="96" r="2" fill="#a5d6ff" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.1s" begin="2.7s" repeatCount="indefinite"/>
-  </circle>
-  <circle cx="520" cy="96" r="2" fill="#a5d6ff" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.38;0.08" dur="4.2s" begin="4.5s" repeatCount="indefinite"/>
-  </circle>
-
-  <!-- Row y=104 — diamonds, green -->
-  <path d="M280,101.5 L282.5,104 L280,106.5 L277.5,104Z" fill="#7ee787" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.38;0.08" dur="5.3s" begin="1.5s" repeatCount="indefinite"/>
+  <path d="M220,57.5 L222.5,60 L220,62.5 L217.5,60Z" fill="#a5d6ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.38;0.08" dur="3.8s" begin="1.6s" repeatCount="indefinite"/>
   </path>
-  <path d="M440,101.5 L442.5,104 L440,106.5 L437.5,104Z" fill="#7ee787" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.40;0.08" dur="4.1s" begin="3.8s" repeatCount="indefinite"/>
-  </path>
-  <path d="M560,101.5 L562.5,104 L560,106.5 L557.5,104Z" fill="#7ee787" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.7s" begin="0.6s" repeatCount="indefinite"/>
+  <path d="M440,57.5 L442.5,60 L440,62.5 L437.5,60Z" fill="#a5d6ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.1s" begin="3.4s" repeatCount="indefinite"/>
   </path>
 
-  <!-- Row y=114 — circles, purple -->
-  <circle cx="200" cy="114" r="2" fill="#d2a8ff" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="4.6s" begin="2.2s" repeatCount="indefinite"/>
+  <!-- Lower zone -->
+  <circle cx="240" cy="142" r="2" fill="#a5d6ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.40;0.08" dur="4.6s" begin="0.3s" repeatCount="indefinite"/>
   </circle>
-  <circle cx="340" cy="114" r="2" fill="#d2a8ff" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.40;0.08" dur="3.9s" begin="4.0s" repeatCount="indefinite"/>
+  <circle cx="460" cy="142" r="2" fill="#a5d6ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.3s" begin="2.8s" repeatCount="indefinite"/>
   </circle>
-  <circle cx="480" cy="114" r="2" fill="#d2a8ff" opacity="0.08">
-    <animate attributeName="opacity" values="0.08;0.38;0.08" dur="5.5s" begin="1.0s" repeatCount="indefinite"/>
+  <path d="M320,152.5 L322.5,155 L320,157.5 L317.5,155Z" fill="#d2a8ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.38;0.08" dur="4.2s" begin="1.4s" repeatCount="indefinite"/>
+  </path>
+  <path d="M540,152.5 L542.5,155 L540,157.5 L537.5,155Z" fill="#d2a8ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.40;0.08" dur="5.7s" begin="4.1s" repeatCount="indefinite"/>
+  </path>
+  <circle cx="200" cy="168" r="2" fill="#7ee787" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.0s" begin="0.7s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="420" cy="168" r="2" fill="#7ee787" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.40;0.08" dur="4.4s" begin="3.0s" repeatCount="indefinite"/>
+  </circle>
+  <path d="M280,177.5 L282.5,180 L280,182.5 L277.5,180Z" fill="#a5d6ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.38;0.08" dur="3.9s" begin="2.0s" repeatCount="indefinite"/>
+  </path>
+  <path d="M500,177.5 L502.5,180 L500,182.5 L497.5,180Z" fill="#a5d6ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.5s" begin="4.6s" repeatCount="indefinite"/>
+  </path>
+  <circle cx="340" cy="192" r="2" fill="#d2a8ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.40;0.08" dur="4.7s" begin="1.8s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="520" cy="192" r="2" fill="#d2a8ff" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.2s" begin="3.6s" repeatCount="indefinite"/>
   </circle>
 
-  <!-- === TEXT LAYER (always visible, rock solid) === -->
-  <text x="360" y="55" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace" font-size="42" font-weight="700" letter-spacing="-1"><tspan fill="#e6edf3">Open</tspan><tspan fill="url(#ag)">Weft</tspan></text>
-  <text x="360" y="82" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" fill="#7d8590" letter-spacing="2">FIRE-AND-FORGET AGENT ORCHESTRATION</text>
+  <!-- === TEXT LAYER === -->
+  <text x="360" y="92" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace" font-size="48" font-weight="700" letter-spacing="-1"><tspan fill="#e6edf3">Open</tspan><tspan fill="url(#ag)">Weft</tspan></text>
+  <text x="360" y="122" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" fill="#7d8590" letter-spacing="3">FIRE-AND-FORGET AGENT ORCHESTRATION</text>
 </svg>
