@@ -2,17 +2,17 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/NeuraCerebra-AI/openweft/main/docs/banner-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/NeuraCerebra-AI/openweft/main/docs/banner-light.svg">
-    <img alt="OpenWeft" src="https://raw.githubusercontent.com/NeuraCerebra-AI/openweft/main/docs/banner-dark.svg" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="./docs/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="./docs/banner-light.svg">
+    <img alt="OpenWeft" src="./docs/banner-dark.svg" width="100%">
   </picture>
 </p>
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/NeuraCerebra-AI/openweft/main/docs/hero-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/NeuraCerebra-AI/openweft/main/docs/hero-light.svg">
-    <img alt="OpenWeft terminal demo" src="https://raw.githubusercontent.com/NeuraCerebra-AI/openweft/main/docs/hero-dark.svg" width="100%">
+    <source media="(prefers-color-scheme: dark)" srcset="./docs/hero-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="./docs/hero-light.svg">
+    <img alt="OpenWeft terminal demo" src="./docs/hero-dark.svg" width="100%">
   </picture>
 </p>
 
@@ -20,9 +20,15 @@
 
 OpenWeft removes you from the loop.
 
+OpenWeft is for people who already have a list of things they want to add, fix, or refactor, but do not want to spend their day babysitting Codex or Claude Code across multiple terminals, worktrees, and merge decisions.
+
 <p align="center">
+  <!-- Enable after first public npm publish:
   <a href="https://www.npmjs.com/package/openweft"><img src="https://img.shields.io/npm/v/openweft?style=for-the-badge&color=cb3837" alt="npm"></a>
+  -->
+  <!-- Enable after the public repo/workflow badge resolves:
   <a href="https://github.com/NeuraCerebra-AI/openweft/actions"><img src="https://img.shields.io/github/actions/workflow/status/NeuraCerebra-AI/openweft/ci.yml?branch=main&style=for-the-badge" alt="CI"></a>
+  -->
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT"></a>
 </p>
 
@@ -132,6 +138,15 @@ openweft start --bg
 # Check in whenever
 openweft status
 ```
+
+## In one minute
+
+1. Run `openweft`
+2. Complete the setup wizard
+3. Add one or more coding requests
+4. Start execution
+5. OpenWeft plans, phases, runs, merges, and re-checks what remains
+6. You come back to commits, logs, and a durable checkpoint if anything was interrupted
 
 ---
 
@@ -318,7 +333,9 @@ Not a mystery. Here's everything:
 | `.openweft/audit-trail.jsonl` | structured audit log |
 | `.openweft/output.log` | `--bg` mode output |
 
-If you kill the process, reboot, lose power, or `Ctrl+C` at the worst possible moment — `openweft start` reads the checkpoint and picks up from the last phase boundary. That's what the checkpoint is for.
+If you kill the process, reboot, lose power, or `Ctrl+C` at the worst possible moment, `openweft start` recovers from the last safe checkpoint boundary and restarts unfinished work safely when needed.
+
+It is designed to recover cleanly, not to resurrect a live in-flight agent session byte-for-byte.
 
 ---
 
@@ -328,17 +345,18 @@ If you kill the process, reboot, lose power, or `Ctrl+C` at the worst possible m
 queue.txt / openweft add
         |
         v
-  Plan Creation (two stages)
-  Prompt A --> Prompt B --> Plan + Manifest
+  Worker Brief Creation
+  Prompt A --> Prompt B
+        |
+        v
+  Execution + Orchestration
+  Prompt B worker --> edits + validation + manifest-backed plan state
         |
         v
   Scoring + Phasing
   blast radius × success likelihood
   EMA dampening · hysteresis · tier buckets
   manifest overlap --> conflict-safe groups
-        |
-        v
-  Execution
   one git worktree per feature
   one agent session per feature
   CODEX_HOME isolation · staggered launch
@@ -358,6 +376,43 @@ queue.txt / openweft add
 Three backends behind one adapter interface: Codex, Claude, and mock. The mock powers `--dry-run` and the test suite.
 
 State machine (XState) manages the phase lifecycle. Session chains (not long-lived processes) keep agent context from degrading across phases. Plans on disk are the source of truth — if a session rots, start a fresh one loaded with the plan file.
+
+---
+
+## Best fit
+
+It is a strong fit for:
+
+- batching multiple coding requests that may or may not conflict
+- repositories where isolated git worktrees are acceptable
+- users already comfortable with Codex CLI or Claude Code
+- teams who want durable checkpoints and merge-aware orchestration
+
+## Not best fit
+
+OpenWeft is probably not the right tool for:
+
+- one tiny one-off edit where running an agent directly is faster
+- highly interactive pair-programming sessions
+- repos with unusual git constraints or very strict branch/worktree policies
+- users expecting a polished 1.0 product with zero operational rough edges
+
+---
+
+## Beta promises
+
+OpenWeft is aiming to be:
+
+- reliable enough to trust with real queues
+- explicit about what it writes to disk
+- conservative about git/worktree ownership
+- honest about failure and recovery behavior
+
+It is not yet promising:
+
+- perfect resumption of live in-flight agent sessions
+- zero manual review for every repo or workflow
+- final 1.0 stability guarantees across all environments
 
 ---
 
