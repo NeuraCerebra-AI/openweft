@@ -113,4 +113,37 @@ describe('manifest', () => {
 `)
     ).not.toThrow();
   });
+
+  it('rejects split ledger sections that only satisfy the required headings across multiple blocks', () => {
+    expect(() =>
+      assertLedgerSection(`# Plan
+
+## Ledger
+
+### Constraints
+- Keep the change set small.
+
+### Assumptions
+- The manifest is conservative.
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": [],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+
+## Ledger
+
+### Watchpoints
+- Preserve orchestrator compatibility.
+
+### Validation
+- Run targeted checks.
+`)
+    ).toThrow(/Ledger/i);
+  });
 });

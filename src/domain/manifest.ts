@@ -82,26 +82,40 @@ export const extractManifestBlock = (markdown: string): ManifestBlock | null => 
 
 export const extractLedgerSubheadings = (markdown: string): string[] => {
   const tree = unified().use(remarkParse).parse(markdown);
-  let underLedgerHeading = false;
-  const subheadings: string[] = [];
+  let currentLedgerSection: string[] | null = null;
+  const ledgerSections: string[][] = [];
 
   visit(tree, (node) => {
     if (node.type === 'heading' && node.depth === 2) {
-      underLedgerHeading = toString(node).trim() === 'Ledger';
+      if (currentLedgerSection) {
+        ledgerSections.push(currentLedgerSection);
+      }
+      currentLedgerSection = toString(node).trim() === 'Ledger' ? [] : null;
       return;
     }
 
     if (node.type === 'heading' && node.depth <= 2) {
-      underLedgerHeading = false;
+      if (currentLedgerSection) {
+        ledgerSections.push(currentLedgerSection);
+        currentLedgerSection = null;
+      }
       return;
     }
 
-    if (underLedgerHeading && node.type === 'heading' && node.depth === 3) {
-      subheadings.push(toString(node).trim());
+    if (currentLedgerSection && node.type === 'heading' && node.depth === 3) {
+      currentLedgerSection.push(toString(node).trim());
     }
   });
 
-  return subheadings;
+  if (currentLedgerSection) {
+    ledgerSections.push(currentLedgerSection);
+  }
+
+  const matchingSection = ledgerSections.find((section) =>
+    REQUIRED_LEDGER_SUBHEADINGS.every((heading) => section.includes(heading))
+  );
+
+  return matchingSection ?? [];
 };
 
 export const assertLedgerSection = (markdown: string): void => {

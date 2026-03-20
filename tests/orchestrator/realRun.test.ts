@@ -1507,6 +1507,49 @@ describe('runRealOrchestration', () => {
     expect(savedAfter.checkpoint?.features['001']?.promptBFile).toBe(canonicalPromptBFile);
   });
 
+  it('recovers a reusable interrupted execution even if its Prompt B artifact is missing', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      status: 'planned'
+    });
+
+    const savedBefore = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+    if (!savedBefore.checkpoint) {
+      throw new Error('Expected seeded checkpoint to exist.');
+    }
+
+    await writeFile(config.paths.queueFile, '', 'utf8');
+    savedBefore.checkpoint.configHash = configHash;
+    savedBefore.checkpoint.features['001']!.promptBFile = null;
+    await saveCheckpoint({
+      checkpoint: savedBefore.checkpoint,
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.checkpoint.features['001']?.status).toBe('completed');
+  });
+
   it('fails planning when the agent never returns the required ledger section', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
