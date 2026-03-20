@@ -1,6 +1,10 @@
 <svg viewBox="0 0 640 204" width="640" height="204" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <clipPath id="t"><rect x="10" y="2" width="620" height="200" rx="10"/></clipPath>
+    <clipPath id="c1"><rect x="28" y="0" width="0" height="210"><animate attributeName="width" from="0" to="600" dur="1.2s" begin="0.6s" fill="freeze"/></rect></clipPath>
+    <clipPath id="c2"><rect x="28" y="0" width="0" height="210"><animate attributeName="width" from="0" to="600" dur="1.4s" begin="2.3s" fill="freeze"/></rect></clipPath>
+    <clipPath id="c3"><rect x="28" y="0" width="0" height="210"><animate attributeName="width" from="0" to="600" dur="1.0s" begin="4.2s" fill="freeze"/></rect></clipPath>
+    <clipPath id="c4"><rect x="28" y="0" width="0" height="210"><animate attributeName="width" from="0" to="600" dur="0.7s" begin="5.7s" fill="freeze"/></rect></clipPath>
   </defs>
   <!-- Terminal frame -->
   <g clip-path="url(#t)">
@@ -9,17 +13,16 @@
     <line x1="10" y1="38" x2="630" y2="38" stroke="#d1d9e0" stroke-width="1"/>
   </g>
   <rect x="10" y="2" width="620" height="200" rx="10" fill="none" stroke="#d1d9e0" stroke-width="1"/>
-  <!-- Traffic lights -->
   <circle cx="28" cy="20" r="6" fill="#ff5f57"/>
   <circle cx="48" cy="20" r="6" fill="#febc2e"/>
   <circle cx="68" cy="20" r="6" fill="#28c840"/>
-  <!-- Terminal content -->
   <g font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace" font-size="14">
-    <text y="62"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">openweft add </tspan><tspan fill="#0550ae">"password reset flow"</tspan></text>
-    <text y="86"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">openweft add </tspan><tspan fill="#0550ae">"refactor auth for oauth2"</tspan></text>
-    <text y="110"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">openweft add </tspan><tspan fill="#0550ae">"audit log export"</tspan></text>
-    <text y="134"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">openweft start </tspan><tspan fill="#8250df">--bg</tspan></text>
-    <text x="30" y="158" fill="#1a7f37">&#x2713; 3 merged, 0 conflicts</text>
-    <text y="182"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">&#x258C;</tspan></text>
+    <g clip-path="url(#c1)"><text y="62"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">openweft add </tspan><tspan fill="#0550ae">"password reset flow"</tspan></text></g>
+    <g clip-path="url(#c2)"><text y="86"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">openweft add </tspan><tspan fill="#0550ae">"refactor auth for oauth2"</tspan></text></g>
+    <g clip-path="url(#c3)"><text y="110"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">openweft add </tspan><tspan fill="#0550ae">"audit log export"</tspan></text></g>
+    <g clip-path="url(#c4)"><text y="134"><tspan x="30" fill="#656d76">$ </tspan><tspan fill="#1f2328">openweft start </tspan><tspan fill="#8250df">--bg</tspan></text></g>
+    <text x="30" y="158" fill="#1a7f37" opacity="0">&#x2713; 3 merged, 0 conflicts<animate attributeName="opacity" from="0" to="1" dur="0.5s" begin="7.0s" fill="freeze"/></text>
+    <text x="30" y="182" fill="#656d76" opacity="0">$ <animate attributeName="opacity" from="0" to="1" dur="0.3s" begin="7.8s" fill="freeze"/></text>
+    <text x="47" y="182" fill="#1f2328" opacity="0">&#x258C;<animate id="ci" attributeName="opacity" from="0" to="1" dur="0.15s" begin="7.8s" fill="freeze"/><animate attributeName="opacity" values="1;1;0;0" dur="1.06s" begin="ci.end" repeatCount="indefinite"/></text>
   </g>
 </svg>
