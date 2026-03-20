@@ -229,7 +229,11 @@ describe('command handlers', () => {
     const planAdjustment = await readFile(planAdjustmentPath, 'utf8');
 
     expect(promptA).toContain('{{USER_REQUEST}}');
+    expect(promptA).toContain('Return a Prompt B');
+    expect(promptA).toContain('## Ledger');
+    expect(promptA).toContain('not create additional git worktrees');
     expect(planAdjustment).toContain('{{CODE_EDIT_SUMMARY}}');
+    expect(planAdjustment).toContain('## Ledger');
     expect(output).toContain('Prompts: prompt-a=created, plan-adjustment=created');
 
     await writeFile(promptAPath, 'custom prompt a\n', 'utf8');

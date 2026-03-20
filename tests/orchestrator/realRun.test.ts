@@ -816,6 +816,7 @@ describe('runRealOrchestration', () => {
     });
     expect(savedFeature?.planFile).toBeTruthy();
     await expect(readFile(savedFeature?.planFile ?? '', 'utf8')).resolves.toContain('## Manifest');
+    await expect(readFile(savedFeature?.planFile ?? '', 'utf8')).resolves.toContain('## Ledger');
   });
 
   it('persists planned features before the post-planning checkpoint save returns', async () => {

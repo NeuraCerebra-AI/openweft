@@ -113,6 +113,20 @@ ${input.request}
 2. Implement the requested change in the smallest safe slice.
 3. Run targeted validation before completion.
 
+## Ledger
+
+### Constraints
+- Keep the dry-run plan conservative and reversible.
+
+### Assumptions
+- Stage summaries are advisory and may be refined by real planner turns.
+
+### Watchpoints
+- Preserve manifest-driven scoring and phasing behavior.
+
+### Validation
+- Run the targeted validation listed in the plan.
+
 ## Manifest
 
 \`\`\`json manifest

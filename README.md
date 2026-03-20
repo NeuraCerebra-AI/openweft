@@ -138,13 +138,15 @@ openweft status
 ## How it works
 
 1. OpenWeft reads pending requests from `feature_requests/queue.txt`.
-2. Each request goes through a two-stage planning workflow: Prompt A produces Prompt B, Prompt B produces a feature plan with a strict file manifest.
-3. Plans are scored by blast radius and estimated AI success likelihood. The queue stabilizes so it doesn't thrash between re-scores.
-4. Non-conflicting features (different files) are grouped into parallel phases. Conflicting features (same files) wait their turn.
-5. Each feature executes in its own git worktree with its own agent session. No `index.lock` fights. No context bleed.
-6. After a phase merges, every remaining plan is re-evaluated against the changed codebase. Then the next phase starts.
+2. Prompt A compiles each request into Prompt B, a powerful worker brief rather than a tiny helper prompt.
+3. OpenWeft launches Prompt-B workers inside isolated git worktrees that OpenWeft owns and controls.
+4. Each worker investigates the assigned codebase, edits code, validates its work, and maintains its execution ledger inside that assigned workspace.
+5. OpenWeft compares the real outcomes, including actual diffs and touched files, decides what is compatible, and merges the safe results in order.
+6. After merges land, OpenWeft re-evaluates what remains against the new repository state and keeps going until the queue is empty.
 
 The loop runs until the queue is empty or you tell it to stop.
+
+For the full target design, see [ARCHITECTURE.md](./ARCHITECTURE.md) and [docs/prompt-b-first-migration-plan.md](./docs/prompt-b-first-migration-plan.md). The current runtime still contains some legacy plan-first seams while converging toward that Prompt-B-first architecture.
 
 ---
 
@@ -193,7 +195,15 @@ OpenWeft needs two user-maintained prompt files. `openweft init` creates starter
 - `prompts/prompt-a.md` — must contain `{{USER_REQUEST}}`
 - `prompts/plan-adjustment.md` — must contain `{{CODE_EDIT_SUMMARY}}`
 
-Prompt A drives stage 1. Its output is Prompt B, which is generated at runtime and fed into stage 2. Stage 2 produces the actual feature plan.
+Prompt A is a compiler for Prompt B. Prompt B is the worker brief that tells the downstream agent how to investigate, execute carefully, maintain its ledger, validate its work, and stay inside the OpenWeft-assigned workspace. OpenWeft owns worktree creation, queue control, compatibility decisions, and merges.
+
+The important boundary is:
+
+- Prompt A shapes the worker
+- Prompt B performs the work
+- OpenWeft owns topology and reconciliation
+
+If you are tuning prompts, optimize for stronger Prompt-B workers, not for making Prompt A look short or elegant.
 
 **Minimal Prompt A:**
 
@@ -206,8 +216,10 @@ User request:
 Return a Prompt B that tells the next agent to produce a compact Markdown feature plan with:
 - a short request summary
 - 3-5 implementation steps
+- a `## Ledger` section covering constraints, assumptions, watchpoints, and validation
 - a `## Manifest` section containing a strict JSON manifest code block with `create`, `modify`, and `delete` arrays
 - targeted validation steps
+- explicit instructions to use the current assigned repository/worktree only and not create additional git worktrees, clones, sibling checkouts, or ad hoc branches unless explicitly instructed by the orchestrator
 
 Prefer the smallest safe change set.
 ```
@@ -219,12 +231,15 @@ Review these merged edits:
 {{CODE_EDIT_SUMMARY}}
 
 Investigate whether they interfere with the referenced feature plan.
-If they do, update the plan file in place, including the manifest.
-If they do not, leave the plan unchanged.
+Use the `## Ledger` section to preserve or update constraints, assumptions, watchpoints, and validation.
+If they do, return the updated full plan markdown, including the `## Ledger` and `## Manifest` sections.
+If they do not, return the original plan unchanged.
 Do not modify source files during this adjustment step.
 ```
 
 These are starting points. The quality of your prompts directly determines the quality of the plans. Invest here.
+
+More specifically: the quality of Prompt A determines the quality of Prompt B, and Prompt B is where most of the system's horsepower lives.
 
 ---
 

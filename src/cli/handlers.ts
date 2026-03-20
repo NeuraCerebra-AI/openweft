@@ -83,8 +83,10 @@ User request:
 Return a Prompt B that tells the next agent to produce a compact Markdown feature plan with:
 - a short request summary
 - 3-5 implementation steps
+- a \`## Ledger\` section covering constraints, assumptions, watchpoints, and validation
 - a \`## Manifest\` section containing a strict JSON manifest code block with \`create\`, \`modify\`, and \`delete\` arrays
 - targeted validation steps
+- explicit instructions to use the current assigned repository/worktree only and not create additional git worktrees, clones, sibling checkouts, or ad hoc branches unless explicitly instructed by the orchestrator
 
 Prefer the smallest safe change set.
 `;
@@ -93,8 +95,9 @@ export const DEFAULT_PLAN_ADJUSTMENT_TEMPLATE = `Review these merged edits:
 {{CODE_EDIT_SUMMARY}}
 
 Investigate whether they interfere with the referenced feature plan.
-If they do, update the plan file in place, including the manifest.
-If they do not, leave the plan unchanged.
+Use the \`## Ledger\` section to preserve or update constraints, assumptions, watchpoints, and validation.
+If they do, return the updated full plan markdown, including the \`## Ledger\` and \`## Manifest\` sections.
+If they do not, return the original plan unchanged.
 Do not modify source files during this adjustment step.
 `;
 

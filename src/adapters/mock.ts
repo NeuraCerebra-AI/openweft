@@ -41,11 +41,17 @@ const isMetaInstruction = (line: string): boolean => {
     trimmed.startsWith('DO NOT');
 };
 
+const extractPlannerOutput = (prompt: string): string | null => {
+  const match = prompt.match(/=== PLANNER OUTPUT START ===\n([\s\S]*?)\n=== PLANNER OUTPUT END ===/);
+  return match?.[1]?.trim() ?? null;
+};
+
 const buildDefaultManifest = (request: AdapterTurnRequest): Manifest => {
+  const seedSource = extractPlannerOutput(request.prompt) ?? request.prompt;
   const seedLine =
-    request.prompt
+    seedSource
       .split(/\r?\n/)
-      .find((line) => line.trim().length > 0 && !isMetaInstruction(line))
+      .find((line) => line.trim().length > 0 && !isMetaInstruction(line) && !line.trim().startsWith('==='))
       ?.trim() ?? request.featureId;
 
   return {
@@ -69,6 +75,20 @@ ${request.prompt.trim()}
 1. Inspect the current repository area for this request.
 2. Implement the requested change in the smallest safe slice.
 3. Run targeted validation before completion.
+
+## Ledger
+
+### Constraints
+- Keep the change set small and reversible.
+
+### Assumptions
+- The manifest is conservative and may be refined by planner review.
+
+### Watchpoints
+- Preserve compatibility with the existing orchestrator flow.
+
+### Validation
+- Run targeted validation before completion.
 
 ## Manifest
 

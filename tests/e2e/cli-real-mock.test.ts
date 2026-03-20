@@ -143,4 +143,43 @@ describe('openweft CLI real mock flow', () => {
     expect(statusOutput.join('\n')).toContain('Background: not running');
     expect(statusOutput.join('\n')).toContain('Features: 2 total (2 completed)');
   });
+
+  it('keeps the init-created default prompts and persists ledger-bearing plans', async () => {
+    await installMockCliAdapters();
+    const repoRoot = await createTempRepo();
+
+    await runCli(repoRoot, ['init']);
+    await writeFile(
+      path.join(repoRoot, '.openweftrc.json'),
+      `${JSON.stringify(
+        {
+          backend: 'codex',
+          concurrency: {
+            maxParallelAgents: 1,
+            staggerDelayMs: 0
+          }
+        },
+        null,
+        2
+      )}\n`,
+      'utf8'
+    );
+
+    await runCli(repoRoot, ['add', 'add planner ledger coverage']);
+    const startOutput = await runCli(repoRoot, ['start']);
+    expect(startOutput).toContain('Run complete: planned 1, merged 1, status completed.');
+
+    const checkpoint = JSON.parse(
+      await readFile(path.join(repoRoot, '.openweft', 'checkpoint.json'), 'utf8')
+    ) as {
+      features: Record<string, { planFile: string; status: string }>;
+    };
+
+    const savedFeature = checkpoint.features['001'];
+    const planContent = await readFile(savedFeature?.planFile ?? '', 'utf8');
+
+    expect(savedFeature?.status).toBe('completed');
+    expect(planContent).toContain('## Ledger');
+    expect(planContent).toContain('## Manifest');
+  });
 });

@@ -506,7 +506,7 @@ const buildPlanAdjustmentPrompt = (input: {
     'You are re-evaluating a feature implementation plan after recent merged edits.',
     `The plan file to inspect is at ${input.planFilePath}.`,
     'Review the current repository state and determine whether the merged edits interfere with this plan.',
-    'Do not write to disk. Return the full plan markdown, including the ## Manifest block.',
+    'Do not write to disk. Return the full plan markdown, including the ## Ledger and ## Manifest sections.',
     'If no changes are needed, return the original plan unchanged.',
     '',
     '=== CURRENT PLAN START ===',
@@ -981,6 +981,7 @@ const repairPlanMarkdownIfNeeded = async (
       `Feature request: ${request}`,
       '',
       'You MUST output the complete Markdown plan as your text response.',
+      'The plan MUST include a "## Ledger" section covering constraints, assumptions, watchpoints, and validation.',
       'The plan MUST include a "## Manifest" heading followed by a ```json code block containing { "create": [], "modify": [], "delete": [] }.',
       'Do NOT write any files. Do NOT enter plan mode. Do NOT use Write, Edit, or ExitPlanMode tools.',
       'Return the full plan document as plain text in your response.',
@@ -1083,6 +1084,7 @@ const planPendingRequests = async (
 
       const manifestInstruction = [
         'CRITICAL INSTRUCTION: Your response text must BE the full Markdown plan document.',
+        'Include a "## Ledger" section covering constraints, assumptions, watchpoints, and validation.',
         'Include a "## Manifest" heading with a ```json code block containing { "create": [], "modify": [], "delete": [] }.',
         'Do NOT write files. Do NOT use Write, Edit, or ExitPlanMode tools. Return the plan as your response text ONLY.'
       ].join(' ');
