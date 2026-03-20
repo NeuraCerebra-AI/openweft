@@ -74,6 +74,12 @@ import type { StopController } from './stop.js';
 
 const STAGE_ONE_MIN_LENGTH = 10;
 const MAX_SCORING_FILE_BYTES = 512 * 1024;
+const RECOVERABLE_PLANNING_ERROR_PATTERNS = [
+  'Claude output did not include a result string.',
+  'Planning stage 1 returned too little output',
+  'No ledger section found under a "## Ledger" heading.',
+  'Failed to extract manifest for feature'
+] as const;
 const BINARY_SCORING_EXTENSIONS = new Set([
   '.bmp',
   '.class',
@@ -146,6 +152,9 @@ interface RecoveredExecutionResult {
 }
 
 const timestamp = (): string => new Date().toISOString();
+
+const isRecoverablePlanningError = (message: string): boolean =>
+  RECOVERABLE_PLANNING_ERROR_PATTERNS.some((pattern) => message.includes(pattern));
 
 const cloneCheckpoint = (checkpoint: OrchestratorCheckpoint): OrchestratorCheckpoint => {
   return structuredClone(checkpoint);
@@ -1133,10 +1142,19 @@ const planPendingRequests = async (
       break;
     }
 
-    try {
-      const featureId = formatFeatureId(nextFeatureId);
-      nextFeatureId += 1;
+    const featureId = formatFeatureId(nextFeatureId);
+    nextFeatureId += 1;
+    let promptBFilePath: string | null = null;
 
+    let repairedPlan:
+      | {
+          markdown: string;
+          manifest: Manifest;
+          sessionId: string | null;
+        }
+      | null = null;
+
+    try {
       const stageOnePrompt = injectPromptTemplate(
         promptTemplate,
         USER_REQUEST_MARKER,
@@ -1156,7 +1174,7 @@ const planPendingRequests = async (
         throw new Error(`Planning stage 1 returned too little output for feature ${featureId}.`);
       }
 
-      const promptBFilePath = createPromptBArtifactPath(
+      promptBFilePath = createPromptBArtifactPath(
         context.config,
         featureId,
         pending.request
@@ -1203,7 +1221,7 @@ const planPendingRequests = async (
       }
 
       const shadowMarkdown = await maybeReadShadowPlan(context.config, featureId);
-      const repairedPlan = await repairPlanMarkdownIfNeeded({
+      repairedPlan = await repairPlanMarkdownIfNeeded({
         featureId,
         request: pending.request,
         initialMarkdown: stageTwo.finalMessage,
@@ -1215,13 +1233,32 @@ const planPendingRequests = async (
             buildPlanningStageTwoRequest(context, featureId, prompt)
           )
       });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!isRecoverablePlanningError(message)) {
+        throw error;
+      }
 
-      const planFilename = createPlanFilename(Number.parseInt(featureId, 10), pending.request, usedPlanFiles);
-      usedPlanFiles.add(planFilename);
-      const planFilePath = path.join(context.config.paths.featureRequestsDir, planFilename);
-
-      await writeTextFileAtomic(planFilePath, repairedPlan.markdown);
-      await writeShadowPlan(context.config, featureId, repairedPlan.markdown);
+      checkpoint.features[featureId] = {
+        id: featureId,
+        title: summarizeQueueRequest(pending.request),
+        request: pending.request,
+        status: 'skipped',
+        attempts: 0,
+        planFile: null,
+        promptBFile: promptBFilePath,
+        branchName: null,
+        worktreePath: null,
+        sessionId: null,
+        sessionScope: null,
+        backend: context.adapter.backend,
+        manifest: null,
+        priorityScore: null,
+        priorityTier: null,
+        scoringCycles: 0,
+        lastError: message,
+        updatedAt: timestamp()
+      };
 
       updatedQueueContent = markQueueLineProcessed(
         updatedQueueContent,
@@ -1231,39 +1268,84 @@ const planPendingRequests = async (
         pending.request
       );
 
-      checkpoint.features[featureId] = {
-        id: featureId,
-        title: summarizeQueueRequest(pending.request),
-        request: pending.request,
-        status: 'planned',
-        attempts: 0,
-        planFile: planFilePath,
-        promptBFile: promptBFilePath,
-        branchName: null,
-        worktreePath: null,
-        sessionId: repairedPlan.sessionId,
-        sessionScope: repairedPlan.sessionId ? 'repo' : null,
-        backend: context.adapter.backend,
-        manifest: repairedPlan.manifest,
-        priorityScore: null,
-        priorityTier: null,
-        scoringCycles: 0,
-        updatedAt: timestamp()
-      };
       workingQueue = parseQueueFile(updatedQueueContent);
       checkpoint.pendingRequests = workingQueue.pending.map((line) => ({
         request: line.request,
         queuedAt: checkpoint.createdAt
       }));
+
+      await appendAudit(context.config, {
+        level: 'error',
+        event: 'feature.planning.skipped',
+        message: `Skipped feature ${featureId} after planning failed.`,
+        data: {
+          featureId,
+          request: pending.request,
+          error: message,
+          promptBFile: promptBFilePath
+        }
+      });
+      await announceProgress(
+        context,
+        `Skipping feature ${featureId} because planning failed: ${message}`
+      );
       await saveCheckpointSnapshot(context.config, checkpoint);
       await writeTextFileAtomic(
         context.config.paths.queueFile,
         updatedQueueContent || '# OpenWeft feature queue\n'
       );
-      plannedCount += 1;
-    } catch (error) {
-      throw error;
+      continue;
     }
+
+    if (!repairedPlan) {
+      throw new Error(`Planning completed without a repaired plan for feature ${featureId}.`);
+    }
+
+    const planFilename = createPlanFilename(Number.parseInt(featureId, 10), pending.request, usedPlanFiles);
+    usedPlanFiles.add(planFilename);
+    const planFilePath = path.join(context.config.paths.featureRequestsDir, planFilename);
+
+    await writeTextFileAtomic(planFilePath, repairedPlan.markdown);
+    await writeShadowPlan(context.config, featureId, repairedPlan.markdown);
+
+    updatedQueueContent = markQueueLineProcessed(
+      updatedQueueContent,
+      pending.lineIndex,
+      featureId,
+      pending.request,
+      pending.request
+    );
+
+    checkpoint.features[featureId] = {
+      id: featureId,
+      title: summarizeQueueRequest(pending.request),
+      request: pending.request,
+      status: 'planned',
+      attempts: 0,
+      planFile: planFilePath,
+      promptBFile: promptBFilePath,
+      branchName: null,
+      worktreePath: null,
+      sessionId: repairedPlan.sessionId,
+      sessionScope: repairedPlan.sessionId ? 'repo' : null,
+      backend: context.adapter.backend,
+      manifest: repairedPlan.manifest,
+      priorityScore: null,
+      priorityTier: null,
+      scoringCycles: 0,
+      updatedAt: timestamp()
+    };
+    workingQueue = parseQueueFile(updatedQueueContent);
+    checkpoint.pendingRequests = workingQueue.pending.map((line) => ({
+      request: line.request,
+      queuedAt: checkpoint.createdAt
+    }));
+    await saveCheckpointSnapshot(context.config, checkpoint);
+    await writeTextFileAtomic(
+      context.config.paths.queueFile,
+      updatedQueueContent || '# OpenWeft feature queue\n'
+    );
+    plannedCount += 1;
   }
 
   await writeTextFileAtomic(

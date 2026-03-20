@@ -1226,7 +1226,7 @@ describe('runRealOrchestration', () => {
     });
   });
 
-  it('persists already-planned requests when a later planning turn fails', async () => {
+  it('skips a malformed stage-two planning result and keeps the rest of the queue moving', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -1234,33 +1234,65 @@ describe('runRealOrchestration', () => {
     });
 
     const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
 
-    await expect(
-      runRealOrchestration({
-        config,
-        configHash,
-        adapter: new PartialPlanningFailureAdapter(),
-        notificationDependencies: createNotificationRecorder().dependencies,
-        sleep: async () => {}
-      })
-    ).rejects.toThrow('simulated second planning failure');
+    adapter.runTurn = async (request) => {
+      if (request.featureId === '002' && request.stage === 'planning-s2') {
+        return {
+          ok: false,
+          backend: 'codex',
+          sessionId: null,
+          model: request.model,
+          error: 'Claude output did not include a result string.',
+          classified: {
+            tier: 'fatal',
+            reason: 'Claude output did not include a result string.'
+          },
+          artifacts: {
+            stdout: '',
+            stderr: 'Claude output did not include a result string.',
+            exitCode: 1,
+            command: adapter.buildCommand(request)
+          }
+        };
+      }
+
+      return originalRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
 
     const saved = await loadCheckpoint({
       checkpointFile: config.paths.checkpointFile,
       checkpointBackupFile: config.paths.checkpointBackupFile
     });
 
+    expect(result.checkpoint.status).toBe('completed');
     expect(saved.checkpoint?.features['001']).toMatchObject({
       id: '001',
       request: 'add dashboard filters',
-      status: 'planned'
+      status: 'completed'
     });
-    expect(saved.checkpoint?.features['002']).toBeUndefined();
+    expect(saved.checkpoint?.features['002']).toMatchObject({
+      id: '002',
+      request: 'add export controls',
+      status: 'skipped',
+      planFile: null,
+      lastError: 'Claude output did not include a result string.'
+    });
 
     const queueContent = await readFile(config.paths.queueFile, 'utf8');
     expect(queueContent).toContain('# openweft queue format: v1');
     expect(queueContent).toContain('"type":"processed"');
     expect(queueContent).toContain('"featureId":"001"');
+    expect(queueContent).toContain('"featureId":"002"');
     expect(queueContent).toContain('"request":"add export controls"');
   });
 
@@ -1565,15 +1597,18 @@ describe('runRealOrchestration', () => {
 
     const { config, configHash } = await loadOpenWeftConfig(repoRoot);
 
-    await expect(
-      runRealOrchestration({
-        config,
-        configHash,
-        adapter: new MissingLedgerPlanningAdapter(),
-        notificationDependencies: createNotificationRecorder().dependencies,
-        sleep: async () => {}
-      })
-    ).rejects.toThrow(/Ledger/i);
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new MissingLedgerPlanningAdapter(),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'skipped'
+    });
+    expect(result.checkpoint.features['001']?.lastError).toMatch(/Ledger/i);
   });
 
   it('fails adjustment when the agent drops the required ledger section', async () => {
