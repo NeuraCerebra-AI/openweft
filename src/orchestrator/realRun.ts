@@ -53,6 +53,7 @@ import {
   restoreAutoGc,
   setAutoGc
 } from '../git/index.js';
+import { findReusableExecutionCommit } from '../git/worktrees.js';
 import { sendOpenWeftNotification, type NotificationDependencies, type NotificationResult } from '../notifications/index.js';
 import {
   createEmptyCheckpoint,
@@ -101,6 +102,7 @@ const ACTIONABLE_CHECKPOINT_FEATURE_STATUSES = new Set<FeatureCheckpoint['status
   'executing',
   'failed'
 ]);
+const RECOVERABLE_EXECUTION_STATUSES = new Set<FeatureCheckpoint['status']>(['planned', 'executing']);
 
 interface OrchestratorOutput {
   checkpoint: OrchestratorCheckpoint;
@@ -128,6 +130,16 @@ interface RealRunContext extends RealRunInput {
   mergedCount: number;
   plannedCount: number;
   error: string | null;
+  recoveredExecutions: Map<string, RecoveredExecutionResult>;
+}
+
+interface RecoveredExecutionResult {
+  featureId: string;
+  status: 'completed';
+  branchName: string;
+  worktreePath: string;
+  sessionId: null;
+  baselineCommit: null;
 }
 
 const timestamp = (): string => new Date().toISOString();
@@ -374,6 +386,10 @@ const shouldStopForBudget = (config: ResolvedOpenWeftConfig, checkpoint: Orchest
   return stopAt !== null && checkpoint.cost.totalEstimatedUsd >= stopAt;
 };
 
+const isMissingBranchError = (error: unknown): boolean => {
+  return error instanceof Error && /branch.+not found|not a valid branch/i.test(error.message);
+};
+
 const maybeNotify = async (
   input: RealRunInput,
   message: string
@@ -554,14 +570,20 @@ const sanitizeCommandForAudit = (command: AdapterCommandSpec): Record<string, un
 
 const loadOrCreateCheckpoint = async (
   input: RealRunInput
-): Promise<OrchestratorCheckpoint> => {
+): Promise<{
+  checkpoint: OrchestratorCheckpoint;
+  recoveredExecutions: Map<string, RecoveredExecutionResult>;
+}> => {
   const existing = await loadCheckpoint({
     checkpointFile: input.config.paths.checkpointFile,
     checkpointBackupFile: input.config.paths.checkpointBackupFile
   });
 
   if (!existing.checkpoint) {
-    return createFreshCheckpoint(input.configHash);
+    return {
+      checkpoint: createFreshCheckpoint(input.configHash),
+      recoveredExecutions: new Map()
+    };
   }
 
   if (
@@ -574,19 +596,60 @@ const loadOrCreateCheckpoint = async (
   }
 
   const checkpoint = cloneCheckpoint(existing.checkpoint);
+  const recoveredExecutions = new Map<string, RecoveredExecutionResult>();
+  const baseBranch = (await simpleGit(input.config.repoRoot).revparse(['--abbrev-ref', 'HEAD'])).trim();
   checkpoint.currentPhase = null;
   checkpoint.currentState = 'idle';
 
   for (const feature of Object.values(checkpoint.features)) {
-    if (feature.status === 'executing') {
-      feature.status = 'planned';
-      feature.sessionId = null;
-      feature.sessionScope = null;
-      feature.updatedAt = timestamp();
+    if (RECOVERABLE_EXECUTION_STATUSES.has(feature.status)) {
+      let alreadyMerged = false;
+      const recovered = await findReusableExecutionCommit({
+        repoRoot: input.config.repoRoot,
+        worktreesDir: input.config.paths.worktreesDir,
+        worktreePath: feature.worktreePath,
+        branchName: feature.branchName,
+        baseBranch,
+        expectedCommitMessage: `openweft: complete feature ${feature.id}`,
+        manifestPaths: getManifestPaths(feature)
+      });
+
+      if (recovered) {
+        if (recovered.kind === 'already-merged') {
+          alreadyMerged = true;
+          updateFeatureCheckpoint(checkpoint, feature.id, {
+            status: 'completed',
+            branchName: feature.branchName,
+            worktreePath: feature.worktreePath,
+            sessionId: null,
+            sessionScope: null,
+            lastError: null
+          });
+        } else {
+          recoveredExecutions.set(feature.id, {
+            featureId: feature.id,
+            status: 'completed',
+            branchName: recovered.branchName,
+            worktreePath: recovered.worktreePath,
+            sessionId: null,
+            baselineCommit: null
+          });
+        }
+      }
+
+      if (feature.status === 'executing' && !alreadyMerged) {
+        feature.status = 'planned';
+        feature.sessionId = null;
+        feature.sessionScope = null;
+        feature.updatedAt = timestamp();
+      }
     }
   }
 
-  return checkpoint;
+  return {
+    checkpoint,
+    recoveredExecutions
+  };
 };
 
 const collectScoringPaths = async (
@@ -1323,6 +1386,14 @@ const createOrResetFeatureWorktree = async (
       branchName,
       force: true
     });
+  } else if (feature.branchName) {
+    try {
+      await simpleGit(input.config.repoRoot).deleteLocalBranch(branchName, true);
+    } catch (error) {
+      if (!isMissingBranchError(error)) {
+        throw error;
+      }
+    }
   }
 
   const created = await createWorktree({
@@ -1727,6 +1798,20 @@ const executePhases = async (
             }
 
             try {
+              const recovered = context.recoveredExecutions.get(feature.id);
+              if (recovered) {
+                context.recoveredExecutions.delete(feature.id);
+                const result: ExecutionAttemptResult = recovered;
+                if (tmuxSlot !== null) {
+                  await appendTmuxSlotLine(
+                    context,
+                    tmuxSlot,
+                    `Recovered completed execution for ${getFeatureLabel(feature)} without rerunning the agent.`
+                  );
+                }
+                return result;
+              }
+
               const result = await runFeatureExecutionAttempt(context, checkpoint, feature, baseBranch);
               if (tmuxSlot !== null) {
                 await appendTmuxSlotLine(
@@ -1921,10 +2006,7 @@ const executePhases = async (
 
         const merged = await mergeBranchIntoCurrent(context.config.repoRoot, feature.branchName);
         if (merged.status === 'conflict') {
-          if (
-            feature.worktreePath &&
-            resolveReusableSessionId(feature, 'worktree')
-          ) {
+          if (feature.worktreePath) {
             const mergeIntoWorktree = await mergeBranchIntoWorktree(feature.worktreePath, baseBranch);
             if (mergeIntoWorktree.status === 'conflict') {
               updateFeatureCheckpoint(checkpoint, featureId, {
@@ -2027,6 +2109,7 @@ const executePhases = async (
               status: 'completed',
               lastError: null
             });
+            await saveCheckpointSnapshot(context.config, checkpoint);
             await announceProgress(context, `Feature ${getFeatureLabel(feature)} complete.`);
             await removeWorktree({
               repoRoot: context.config.repoRoot,
@@ -2061,6 +2144,7 @@ const executePhases = async (
           status: 'completed',
           lastError: null
         });
+        await saveCheckpointSnapshot(context.config, checkpoint);
         await announceProgress(context, `Feature ${getFeatureLabel(feature)} complete.`);
 
         if (feature.worktreePath) {
@@ -2237,13 +2321,14 @@ const executePhases = async (
 const runRealWorkflow = async (
   input: RealRunInput
 ): Promise<OrchestratorOutput> => {
-  const checkpoint = await loadOrCreateCheckpoint(input);
+  const { checkpoint, recoveredExecutions } = await loadOrCreateCheckpoint(input);
   let context: RealRunContext = {
     ...input,
     checkpoint,
     mergedCount: 0,
     plannedCount: 0,
-    error: null
+    error: null,
+    recoveredExecutions
   };
 
   while (true) {

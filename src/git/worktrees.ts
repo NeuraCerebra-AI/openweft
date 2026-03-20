@@ -77,7 +77,19 @@ export interface PruneOrphanedOpenWeftArtifactsResult {
   removedBranchNames: string[];
 }
 
+export interface ReusableExecutionCommit {
+  kind: 'reusable' | 'already-merged';
+  branchName: string;
+  worktreePath: string;
+}
+
 const createGit = (baseDir: string): SimpleGit => simpleGit(baseDir);
+const normalizePathForComparison = (value: string): string => {
+  const normalized = value.replace(/\\/g, '/');
+  return process.platform === 'win32'
+    ? normalized.toLowerCase()
+    : normalized;
+};
 
 const normalizeExistingPath = async (value: string): Promise<string> => {
   try {
@@ -143,6 +155,88 @@ export const getHeadCommit = async (repoRoot: string): Promise<string> => {
 export const listWorktrees = async (repoRoot: string): Promise<WorktreeRecord[]> => {
   const output = await createGit(repoRoot).raw(['worktree', 'list', '--porcelain']);
   return parsePorcelainWorktrees(output);
+};
+
+export const findReusableExecutionCommit = async (input: {
+  repoRoot: string;
+  worktreesDir: string;
+  worktreePath: string | null;
+  branchName: string | null;
+  baseBranch: string;
+  expectedCommitMessage: string;
+  manifestPaths: readonly string[];
+}): Promise<ReusableExecutionCommit | null> => {
+  try {
+    if (!input.worktreePath || !input.branchName) {
+      return null;
+    }
+
+    const normalizedWorktreesDir = await normalizeExistingPath(input.worktreesDir);
+    const normalizedWorktreePath = await normalizeExistingPath(input.worktreePath);
+    if (!isWithinDirectory(normalizedWorktreePath, normalizedWorktreesDir)) {
+      return null;
+    }
+
+    let matchingWorktree: WorktreeRecord | undefined;
+    for (const worktree of await listWorktrees(input.repoRoot)) {
+      const normalizedListedPath = await normalizeExistingPath(worktree.path);
+      if (normalizedListedPath === normalizedWorktreePath) {
+        matchingWorktree = worktree;
+        break;
+      }
+    }
+
+    if (!matchingWorktree || matchingWorktree.branch !== input.branchName) {
+      return null;
+    }
+
+    const status = await getWorktreeStatusSummary(input.worktreePath, input.baseBranch);
+    if (status.dirty) {
+      return null;
+    }
+
+    const headSubject = (await createGit(input.worktreePath).raw(['log', '-1', '--pretty=%s'])).trim();
+    if (headSubject !== input.expectedCommitMessage) {
+      return null;
+    }
+
+    const changedPaths = (await createGit(input.worktreePath).raw(['diff-tree', '-r', '--no-commit-id', '--name-only', 'HEAD']))
+      .split('\n')
+      .map((entry) => normalizePathForComparison(entry.trim()))
+      .filter(Boolean);
+    if (changedPaths.length === 0) {
+      return null;
+    }
+
+    const manifestPathSet = new Set(input.manifestPaths.map((manifestPath) => normalizePathForComparison(manifestPath)));
+    if (changedPaths.some((changedPath) => !manifestPathSet.has(changedPath))) {
+      return null;
+    }
+
+    if (status.ahead === 1) {
+      return {
+        kind: 'reusable',
+        branchName: input.branchName,
+        worktreePath: input.worktreePath
+      };
+    }
+
+    const alreadyMerged = await createGit(input.worktreePath)
+      .raw(['merge-base', '--is-ancestor', 'HEAD', input.baseBranch])
+      .then(() => true)
+      .catch(() => false);
+    if (!alreadyMerged) {
+      return null;
+    }
+
+    return {
+      kind: 'already-merged',
+      branchName: input.branchName,
+      worktreePath: input.worktreePath
+    };
+  } catch {
+    return null;
+  }
 };
 
 export const createWorktree = async (input: CreateWorktreeInput): Promise<WorktreeRecord> => {

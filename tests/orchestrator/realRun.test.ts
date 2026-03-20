@@ -18,7 +18,7 @@ import type { NotificationDependencies } from '../../src/notifications/index.js'
 import { ApprovalController } from '../../src/orchestrator/approval.js';
 import { StopController } from '../../src/orchestrator/stop.js';
 import { runRealOrchestration } from '../../src/orchestrator/realRun.js';
-import { loadCheckpoint } from '../../src/state/checkpoint.js';
+import { createEmptyCheckpoint, loadCheckpoint, saveCheckpoint } from '../../src/state/checkpoint.js';
 
 class RecordingAdapter implements AgentAdapter {
   readonly backend: AgentAdapter['backend'];
@@ -533,6 +533,113 @@ const writeProjectFiles = async (
     `${options.queueRequests.join('\n')}\n`,
     'utf8'
   );
+};
+
+
+const seedInterruptedExecutionFeature = async (input: {
+  repoRoot: string;
+  config: Awaited<ReturnType<typeof loadOpenWeftConfig>>['config'];
+  featureId?: string;
+  request?: string;
+  status?: 'planned' | 'executing';
+  commitMessage?: string;
+  leaveDirty?: boolean;
+  includeOffManifestFile?: boolean;
+}): Promise<void> => {
+  const featureId = input.featureId ?? '001';
+  const request = input.request ?? 'add dashboard filters';
+  const status = input.status ?? 'executing';
+  const branchName = `openweft-${featureId}-resume-test`;
+  const worktreePath = path.join(input.config.paths.worktreesDir, featureId);
+  const planFile = path.join(input.config.paths.featureRequestsDir, `${featureId}.plan.md`);
+  const promptBFile = path.join(input.config.paths.promptBArtifactsDir, `${featureId}.prompt-b.md`);
+  const now = new Date().toISOString();
+
+  await mkdir(input.config.paths.worktreesDir, { recursive: true });
+  await mkdir(input.config.paths.featureRequestsDir, { recursive: true });
+  await mkdir(input.config.paths.promptBArtifactsDir, { recursive: true });
+
+  await writeFile(
+    planFile,
+    `# Feature Plan: ${featureId}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/target.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`,
+    'utf8'
+  );
+  await writeFile(promptBFile, `Prompt B for ${request}.\n`, 'utf8');
+
+  await createWorktree({
+    repoRoot: input.repoRoot,
+    worktreePath,
+    branchName
+  });
+
+  const worktreeGit = simpleGit(worktreePath);
+  await mkdir(path.join(worktreePath, 'src'), { recursive: true });
+  await writeFile(path.join(worktreePath, 'src', 'target.ts'), `export const target = '${featureId}';\n`, 'utf8');
+  if (input.includeOffManifestFile) {
+    await writeFile(path.join(worktreePath, 'src', 'extra.ts'), `export const extra = '${featureId}';\n`, 'utf8');
+  }
+  await worktreeGit.add(input.includeOffManifestFile ? ['src/target.ts', 'src/extra.ts'] : ['src/target.ts']);
+  await worktreeGit.commit(input.commitMessage ?? `openweft: complete feature ${featureId}`);
+
+  if (input.leaveDirty) {
+    await writeFile(path.join(worktreePath, 'src', 'target.ts'), `export const target = '${featureId}-dirty';\n`, 'utf8');
+  }
+
+  const checkpoint = createEmptyCheckpoint({
+    orchestratorVersion: 'test',
+    configHash: 'test-config-hash',
+    runId: 'test-run',
+    checkpointId: 'test-checkpoint',
+    createdAt: now
+  });
+  checkpoint.configHash = 'test-config-hash';
+  checkpoint.status = 'in-progress';
+  checkpoint.currentState = 'executing';
+  checkpoint.currentPhase = {
+    index: 1,
+    name: 'Phase 1',
+    featureIds: [featureId],
+    startedAt: now
+  };
+  checkpoint.features[featureId] = {
+    id: featureId,
+    request,
+    status,
+    attempts: 0,
+    planFile,
+    promptBFile,
+    branchName,
+    worktreePath,
+    sessionId: 'resume-session',
+    sessionScope: 'worktree',
+    manifest: {
+      create: ['src/target.ts'],
+      modify: [],
+      delete: []
+    },
+    updatedAt: now
+  };
+  checkpoint.queue = {
+    orderedFeatureIds: [featureId],
+    totalCount: 1
+  };
+
+  await saveCheckpoint({
+    checkpoint,
+    checkpointFile: input.config.paths.checkpointFile,
+    checkpointBackupFile: input.config.paths.checkpointBackupFile
+  });
 };
 
 const createNotificationRecorder = () => {
@@ -1401,6 +1508,320 @@ describe('runRealOrchestration', () => {
     expect(featureThreeAdjustments).toHaveLength(1);
     expect(featureThreeAdjustments[0]?.prompt).toContain('src/a.ts');
     expect(featureThreeAdjustments[0]?.prompt).toContain('src/b.ts');
+  });
+
+  it('reuses an interrupted execution commit without rerunning execution', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config
+    });
+
+    const configHash = 'test-config-hash';
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.mergedCount).toBe(1);
+    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(false);
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'completed',
+      branchName: null,
+      worktreePath: null,
+      sessionId: null,
+      sessionScope: null
+    });
+  });
+
+  it('reuses an interrupted execution commit even after a prior restart already rewrote the feature back to planned', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      status: 'planned'
+    });
+
+    const configHash = 'test-config-hash';
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.mergedCount).toBe(1);
+    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(false);
+  });
+
+  it('reruns execution when an interrupted worktree commit does not match the expected OpenWeft completion commit', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      commitMessage: 'manual experiment commit'
+    });
+
+    const configHash = 'test-config-hash';
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.mergedCount).toBe(1);
+    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(true);
+  });
+
+  it('reruns execution when a matching completion commit changed files outside the manifest', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      includeOffManifestFile: true
+    });
+
+    const configHash = 'test-config-hash';
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.mergedCount).toBe(1);
+    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(true);
+  });
+
+  it('reruns execution when an interrupted worktree is still dirty', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      leaveDirty: true
+    });
+
+    const configHash = 'test-config-hash';
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.mergedCount).toBe(1);
+    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(true);
+  });
+
+  it('persists a merged feature as completed before cleanup can fail', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+
+    vi.resetModules();
+    vi.doMock('../../src/git/index.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
+        '../../src/git/index.js'
+      );
+
+      return {
+        ...actual,
+        removeWorktree: vi.fn(async (...args: Parameters<typeof actual.removeWorktree>) => {
+          throw new Error('post-merge cleanup probe');
+        })
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runRealOrchestrationWithCleanupProbe } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      await expect(
+        runRealOrchestrationWithCleanupProbe({
+          config,
+          configHash,
+          adapter: new DeterministicScoringAdapter(),
+          notificationDependencies: createNotificationRecorder().dependencies,
+          sleep: async () => {}
+        })
+      ).rejects.toThrow('post-merge cleanup probe');
+    } finally {
+      vi.doUnmock('../../src/git/index.js');
+      vi.resetModules();
+    }
+
+    const saved = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    expect(saved.checkpoint?.features['001']).toMatchObject({
+      status: 'completed'
+    });
+  });
+
+  it('recreates execution cleanly when a stale branch ref exists but the old worktree is gone', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      status: 'planned'
+    });
+
+    const staleWorktreePath = path.join(config.paths.worktreesDir, '001');
+    await simpleGit(repoRoot).raw(['worktree', 'remove', '--force', staleWorktreePath]);
+
+    const configHash = 'test-config-hash';
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.mergedCount).toBe(1);
+    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(true);
+  });
+
+  it('marks a stale planned feature complete when its completion commit is already merged into main', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      status: 'planned'
+    });
+
+    const staleBranchName = 'openweft-001-resume-test';
+    await simpleGit(repoRoot).merge(['--no-ff', '--no-edit', staleBranchName]);
+
+    const configHash = 'test-config-hash';
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(false);
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'completed'
+    });
+  });
+
+  it('reuses a completed feature commit after main advances on an unrelated file', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      status: 'planned'
+    });
+
+    await mkdir(path.join(repoRoot, 'src'), { recursive: true });
+    await writeFile(path.join(repoRoot, 'src', 'sibling.ts'), 'export const sibling = 1;\n', 'utf8');
+    const repoGit = simpleGit(repoRoot);
+    await repoGit.add(['src/sibling.ts']);
+    await repoGit.commit('advance main on unrelated file');
+
+    const configHash = 'test-config-hash';
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(false);
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'completed'
+    });
   });
 
   it('resolves execution approvals through the real control channel', async () => {
