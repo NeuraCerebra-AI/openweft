@@ -418,6 +418,59 @@ export const removePendingQueueLine = (
     : updated;
 };
 
+export const buildQueueContentFromCheckpointState = (input: {
+  existingContent: string;
+  processed: Array<{ featureId: string; request: string }>;
+  pendingRequests: string[];
+}): string => {
+  const lines: string[] = [V1_QUEUE_HEADER];
+  const existing = parseQueueFile(input.existingContent);
+  const processed = [...input.processed].sort(
+    (left, right) =>
+      (extractNumericFeatureId(left.featureId) ?? Number.POSITIVE_INFINITY) -
+      (extractNumericFeatureId(right.featureId) ?? Number.POSITIVE_INFINITY)
+  );
+
+  for (const line of existing.lines) {
+    if (line.kind === 'comment') {
+      if (isV1QueueHeader(line.raw)) {
+        continue;
+      }
+      lines.push(line.raw);
+      continue;
+    }
+
+    if (line.kind === 'blank') {
+      lines.push(line.raw);
+    }
+  }
+
+  for (const entry of processed) {
+    lines.push(
+      JSON.stringify({
+        version: 1,
+        type: 'processed',
+        id: createQueueId(),
+        featureId: entry.featureId,
+        request: entry.request
+      })
+    );
+  }
+
+  for (const request of input.pendingRequests) {
+    lines.push(
+      JSON.stringify({
+        version: 1,
+        type: 'pending',
+        id: createQueueId(),
+        request
+      })
+    );
+  }
+
+  return `${lines.join('\n')}\n`;
+};
+
 export const getNextFeatureIdFromQueue = (existingNames: Iterable<string>, queueContent = ''): number => {
   let highest = 0;
 

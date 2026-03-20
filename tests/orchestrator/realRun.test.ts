@@ -1049,6 +1049,69 @@ describe('runRealOrchestration', () => {
     expect(queueContent).toContain('"request":"add export controls"');
   });
 
+  it('recovers planned work after a crash that happens after queue rewrite but before the planning checkpoint is saved', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters', 'add export controls']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+
+    vi.resetModules();
+    vi.doMock('../../src/fs/files.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/fs/files.js')>(
+        '../../src/fs/files.js'
+      );
+
+      return {
+        ...actual,
+        writeTextFileAtomic: vi.fn(async (filePath: string, content: string) => {
+          await actual.writeTextFileAtomic(filePath, content);
+          if (
+            filePath === config.paths.queueFile &&
+            content.includes('"type":"processed"') &&
+            content.includes('"featureId":"001"')
+          ) {
+            throw new Error('post-queue-write crash probe');
+          }
+        })
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runWithQueueCrashProbe } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      await expect(
+        runWithQueueCrashProbe({
+          config,
+          configHash,
+          adapter: new RecordingAdapter(new MockAgentAdapter()),
+          notificationDependencies: createNotificationRecorder().dependencies,
+          sleep: async () => {}
+        })
+      ).rejects.toThrow('post-queue-write crash probe');
+    } finally {
+      vi.doUnmock('../../src/fs/files.js');
+      vi.resetModules();
+    }
+
+    const restartResult = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(restartResult.mergedCount).toBe(2);
+    expect(Object.keys(restartResult.checkpoint.features).sort()).toEqual(['001', '002']);
+    expect(restartResult.checkpoint.features['001']?.request).toBe('add dashboard filters');
+    expect(restartResult.checkpoint.features['002']?.request).toBe('add export controls');
+  });
+
   it('resumes repo-scoped adjustment sessions across phases without reusing them for worktree execution', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {

@@ -24,6 +24,7 @@ import { buildExecutionPhases } from '../domain/phases.js';
 import type { PriorityTier } from '../domain/primitives.js';
 import {
   getNextFeatureIdFromQueue,
+  buildQueueContentFromCheckpointState,
   markQueueLineProcessed,
   parseQueueFile,
   summarizeQueueRequest
@@ -598,6 +599,20 @@ const loadOrCreateCheckpoint = async (
   const checkpoint = cloneCheckpoint(existing.checkpoint);
   const recoveredExecutions = new Map<string, RecoveredExecutionResult>();
   const baseBranch = (await simpleGit(input.config.repoRoot).revparse(['--abbrev-ref', 'HEAD'])).trim();
+
+  if (existing.checkpoint.currentState === 'planning') {
+    const existingQueueContent = (await readTextFileIfExists(input.config.paths.queueFile)) ?? '';
+    const recoveredQueueContent = buildQueueContentFromCheckpointState({
+      existingContent: existingQueueContent,
+      processed: Object.values(existing.checkpoint.features).map((feature) => ({
+        featureId: feature.id,
+        request: feature.request
+      })),
+      pendingRequests: existing.checkpoint.pendingRequests.map((entry) => entry.request)
+    });
+    await writeTextFileAtomic(input.config.paths.queueFile, recoveredQueueContent);
+  }
+
   checkpoint.currentPhase = null;
   checkpoint.currentState = 'idle';
 
@@ -1263,20 +1278,18 @@ const planPendingRequests = async (
         scoringCycles: 0,
         updatedAt: timestamp()
       };
-      plannedCount += 1;
       workingQueue = parseQueueFile(updatedQueueContent);
       checkpoint.pendingRequests = workingQueue.pending.map((line) => ({
         request: line.request,
         queuedAt: checkpoint.createdAt
       }));
+      await saveCheckpointSnapshot(context.config, checkpoint);
+      await writeTextFileAtomic(
+        context.config.paths.queueFile,
+        updatedQueueContent || '# OpenWeft feature queue\n'
+      );
+      plannedCount += 1;
     } catch (error) {
-      if (plannedCount > 0) {
-        await writeTextFileAtomic(
-          context.config.paths.queueFile,
-          updatedQueueContent || '# OpenWeft feature queue\n'
-        );
-        await saveCheckpointSnapshot(context.config, checkpoint);
-      }
       throw error;
     }
   }

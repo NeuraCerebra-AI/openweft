@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   appendRequestsToQueueContent,
+  buildQueueContentFromCheckpointState,
   extractRequestsFromInput,
   removePendingQueueLine,
   markQueueLineProcessed,
@@ -112,5 +113,25 @@ describe('queue', () => {
 
   it('returns empty string when removing the only pending line', () => {
     expect(removePendingQueueLine('alpha\n', 0)).toBe('');
+  });
+
+  it('rebuilds queue content from processed features and pending requests', () => {
+    const rebuilt = buildQueueContentFromCheckpointState({
+      existingContent: '# sprint notes\n\nlegacy pending\n',
+      processed: [
+        { featureId: '002', request: 'add export controls' },
+        { featureId: '001', request: 'add dashboard filters' }
+      ],
+      pendingRequests: ['add keyboard shortcuts']
+    });
+    const parsed = parseQueueFile(rebuilt);
+
+    expect(parsed.processed.map((entry) => entry.featureId)).toEqual(['001', '002']);
+    expect(parsed.processed.map((entry) => entry.request)).toEqual([
+      'add dashboard filters',
+      'add export controls'
+    ]);
+    expect(parsed.pending.map((entry) => entry.request)).toEqual(['add keyboard shortcuts']);
+    expect(rebuilt).toContain('# sprint notes');
   });
 });
