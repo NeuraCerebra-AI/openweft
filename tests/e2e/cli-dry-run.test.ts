@@ -68,16 +68,33 @@ describe('openweft CLI dry-run flow', () => {
       await readFile(path.join(repoRoot, '.openweft', 'checkpoint.json'), 'utf8')
     ) as {
       status: string;
-      features: Record<string, { status: string; planFile: string; promptBFile: string }>;
+      features: Record<string, {
+        status: string;
+        planFile: string;
+        promptBFile: string;
+        manifest: {
+          create: string[];
+          modify: string[];
+          delete: string[];
+        };
+      }>;
     };
     expect(checkpoint.status).toBe('completed');
     expect(Object.values(checkpoint.features).every((feature) => feature.status === 'completed')).toBe(true);
 
     const firstPlan = await readFile(checkpoint.features['001']?.planFile ?? '', 'utf8');
     const firstPromptB = await readFile(checkpoint.features['001']?.promptBFile ?? '', 'utf8');
+    expect(checkpoint.features['001']?.manifest.create).toEqual([
+      'src/features/001-runtime-generated-prompt-b-for-001.ts'
+    ]);
     expect(firstPlan).toContain('## Ledger');
     expect(firstPlan).toContain('## Manifest');
+    expect(firstPlan).toContain('src/features/001-runtime-generated-prompt-b-for-001.ts');
     expect(firstPromptB).toContain('Runtime-generated Prompt B');
+
+    await expect(
+      readFile(path.join(repoRoot, 'src', 'features', '001-runtime-generated-prompt-b-for-001.ts'), 'utf8')
+    ).rejects.toThrow();
 
     const statusOutput = await runCli(repoRoot, ['status']);
     expect(statusOutput.join('\n')).toContain('Status: completed');

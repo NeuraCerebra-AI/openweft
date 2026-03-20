@@ -180,6 +180,19 @@ export const buildEditSummary = (input: {
   return EditSummarySchema.parse(summary);
 };
 
+export const listEditSummaryPaths = (summary: EditSummary): string[] => {
+  const paths = new Set<string>();
+
+  for (const file of summary.files) {
+    paths.add(file.path);
+    if (file.old_path) {
+      paths.add(file.old_path);
+    }
+  }
+
+  return [...paths].sort();
+};
+
 export const buildCodeEditSummary = (input: {
   mergeCommit: string;
   branch: string;

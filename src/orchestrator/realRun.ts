@@ -17,6 +17,7 @@ import type { AgentAdapter, AdapterCommandSpec, AdapterTurnRequest, AdapterTurnR
 import type { OrchestratorEventHandler } from '../ui/events.js';
 import type { ResolvedOpenWeftConfig } from '../config/index.js';
 import { addCostRecordToTotals, type CostRecord } from '../domain/costs.js';
+import { listEditSummaryPaths, type EditSummary } from '../domain/editSummary.js';
 import { circuitBreakerTripped, classifyError } from '../domain/errors.js';
 import { createPlanFilename, createPromptBFilename, formatFeatureId, slugifyFeatureRequest } from '../domain/featureIds.js';
 import { assertLedgerSection, parseManifestDocument, type Manifest, updateManifestInMarkdown } from '../domain/manifest.js';
@@ -67,6 +68,7 @@ import { getTmuxSlotLogFile, type TmuxMonitor } from '../tmux/index.js';
 import { OPENWEFT_VERSION } from '../version.js';
 import { appendAuditEntry } from './audit.js';
 import { TurnApprovalError } from './approval.js';
+import { repairPlanMarkdownIfNeeded } from './planMarkdown.js';
 import type { ApprovalController } from './approval.js';
 import type { StopController } from './stop.js';
 
@@ -1091,82 +1093,6 @@ const runTurnAndRecord = async (
   return result;
 };
 
-/** Try to extract a manifest plan from markdown, with up to 2 repair attempts. */
-const repairPlanMarkdownIfNeeded = async (
-  input: RealRunInput,
-  checkpoint: OrchestratorCheckpoint,
-  featureId: string,
-  request: string,
-  initialMarkdown: string,
-  shadowMarkdown: string | null
-): Promise<{ markdown: string; manifest: Manifest; sessionId: string | null }> => {
-  const lastKnownGoodOpts: { lastKnownGood?: Manifest } = {};
-  if (shadowMarkdown) {
-    try { lastKnownGoodOpts.lastKnownGood = parseManifestDocument(shadowMarkdown).manifest; } catch { /* ignore */ }
-  }
-
-  // Attempt 1: parse the initial markdown directly
-  try {
-    assertLedgerSection(initialMarkdown);
-    const parsed = parseManifestDocument(initialMarkdown, lastKnownGoodOpts);
-    return {
-      markdown: updateManifestInMarkdown(initialMarkdown, parsed.manifest),
-      manifest: parsed.manifest,
-      sessionId: null
-    };
-  } catch {
-    // Fall through to repair attempts
-  }
-
-  // Up to 2 repair attempts — ask the agent to rewrite with a valid manifest
-  const MAX_REPAIR_ATTEMPTS = 2;
-  let lastError: Error | null = null;
-
-  for (let attempt = 1; attempt <= MAX_REPAIR_ATTEMPTS; attempt++) {
-    const repairPrompt = [
-      `Your previous plan output for feature ${featureId} was invalid (attempt ${attempt}).`,
-      `Feature request: ${request}`,
-      '',
-      'You MUST output the complete Markdown plan as your text response.',
-      'The plan MUST include a "## Ledger" section covering constraints, assumptions, watchpoints, and validation.',
-      'The plan MUST include a "## Manifest" heading followed by a ```json code block containing { "create": [], "modify": [], "delete": [] }.',
-      'Do NOT write any files. Do NOT enter plan mode. Do NOT use Write, Edit, or ExitPlanMode tools.',
-      'Return the full plan document as plain text in your response.',
-    ].join('\n');
-
-    const repairResult = await runTurnAndRecord(
-      input,
-      checkpoint,
-      buildPlanningStageTwoRequest(input, featureId, repairPrompt)
-    );
-
-    if (!repairResult.ok) {
-      lastError = new Error(`Repair attempt ${attempt} failed: ${repairResult.error}`);
-      continue;
-    }
-
-    try {
-      assertLedgerSection(repairResult.finalMessage);
-      const repaired = parseManifestDocument(repairResult.finalMessage, lastKnownGoodOpts);
-      return {
-        markdown: updateManifestInMarkdown(repairResult.finalMessage, repaired.manifest),
-        manifest: repaired.manifest,
-        sessionId: repairResult.sessionId
-      };
-    } catch (parseError) {
-      lastError = new Error(
-        `Repair attempt ${attempt}: ${parseError instanceof Error ? parseError.message : String(parseError)}`
-      );
-    }
-  }
-
-  throw new Error(
-    `Failed to extract manifest for feature ${featureId} after ${MAX_REPAIR_ATTEMPTS} repair attempts. ` +
-    `${lastError?.message ?? 'No additional details.'} ` +
-    `This usually means the AI backend returned a summary instead of the full plan markdown.`
-  );
-};
-
 const planPendingRequests = async (
   context: RealRunContext
 ): Promise<{ checkpoint: OrchestratorCheckpoint; plannedCount: number }> => {
@@ -1277,14 +1203,18 @@ const planPendingRequests = async (
       }
 
       const shadowMarkdown = await maybeReadShadowPlan(context.config, featureId);
-      const repairedPlan = await repairPlanMarkdownIfNeeded(
-        context,
-        checkpoint,
+      const repairedPlan = await repairPlanMarkdownIfNeeded({
         featureId,
-        pending.request,
-        stageTwo.finalMessage,
-        shadowMarkdown
-      );
+        request: pending.request,
+        initialMarkdown: stageTwo.finalMessage,
+        shadowMarkdown,
+        runRepairTurn: async (prompt) =>
+          runTurnAndRecord(
+            context,
+            checkpoint,
+            buildPlanningStageTwoRequest(context, featureId, prompt)
+          )
+      });
 
       const planFilename = createPlanFilename(Number.parseInt(featureId, 10), pending.request, usedPlanFiles);
       usedPlanFiles.add(planFilename);
@@ -1469,6 +1399,22 @@ const createOrResetFeatureWorktree = async (
 const getManifestPaths = (feature: FeatureCheckpoint): string[] => {
   const manifest = feature.manifest ?? { create: [], modify: [], delete: [] };
   return [...manifest.create, ...manifest.modify, ...manifest.delete];
+};
+
+const normalizeRepoRelativePath = (value: string): string => value.replace(/\\/g, '/');
+
+const buildMergedPathSet = (
+  mergeSummaries: Array<{ featureId: string; summary: EditSummary }>
+): Set<string> => {
+  const paths = new Set<string>();
+
+  for (const mergeSummary of mergeSummaries) {
+    for (const filePath of listEditSummaryPaths(mergeSummary.summary)) {
+      paths.add(normalizeRepoRelativePath(filePath));
+    }
+  }
+
+  return paths;
 };
 
 const runFeatureExecutionAttempt = async (
@@ -2051,7 +1997,7 @@ const executePhases = async (
           return rightScore - leftScore;
         });
 
-      const mergeSummaries: Array<{ featureId: string; summary: Record<string, unknown> }> = [];
+      const mergeSummaries: Array<{ featureId: string; summary: EditSummary }> = [];
 
       for (const featureId of successfulFeatureIds) {
         const feature = checkpoint.features[featureId];
@@ -2157,7 +2103,7 @@ const executePhases = async (
 
             mergeSummaries.push({
               featureId,
-              summary: retryMerge.editSummary as unknown as Record<string, unknown>
+              summary: retryMerge.editSummary
             });
             mergedCount += 1;
             updateFeatureCheckpoint(checkpoint, featureId, {
@@ -2192,7 +2138,7 @@ const executePhases = async (
 
         mergeSummaries.push({
           featureId,
-          summary: merged.editSummary as unknown as Record<string, unknown>
+          summary: merged.editSummary
         });
         mergedCount += 1;
         updateFeatureCheckpoint(checkpoint, featureId, {
@@ -2229,6 +2175,7 @@ const executePhases = async (
       );
       if (remaining.length > 0 && mergeSummaries.length > 0) {
         const template = await readTextFileWithRetry(context.config.paths.planAdjustment);
+        const mergedPathSet = buildMergedPathSet(mergeSummaries);
         const aggregatedMergeSummaryJson = JSON.stringify(
           mergeSummaries.map((mergedSummary) => mergedSummary.summary),
           null,
@@ -2236,6 +2183,12 @@ const executePhases = async (
         );
         for (const feature of remaining) {
           if (!feature.planFile) {
+            continue;
+          }
+          const hasOverlap = getManifestPaths(feature)
+            .map((manifestPath) => normalizeRepoRelativePath(manifestPath))
+            .some((manifestPath) => mergedPathSet.has(manifestPath));
+          if (!hasOverlap) {
             continue;
           }
 

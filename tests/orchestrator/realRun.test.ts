@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -878,7 +878,12 @@ describe('runRealOrchestration', () => {
     });
 
     const { config, configHash } = await loadOpenWeftConfig(repoRoot);
-    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const adapter = new RecordingAdapter(
+      new DeterministicManifestAdapter({
+        '001': ['src/shared.ts'],
+        '002': ['src/shared.ts']
+      })
+    );
     const { lines, dependencies } = createNotificationRecorder();
     const progressLines: string[] = [];
     const events: string[] = [];
@@ -958,7 +963,8 @@ describe('runRealOrchestration', () => {
     expect(adjustmentRequest?.prompt).toContain(featureTwo?.planFile ?? '');
     expect(executionRequest?.prompt).toContain('=== PROMPT B START ===');
     expect(executionRequest?.prompt).toContain(promptBContent.trim());
-    expect(executionRequest?.prompt).toContain(featureTwo?.promptBFile ?? '');
+    expect(executionRequest?.prompt).toContain(path.basename(featureTwo?.promptBFile ?? ''));
+    expect(executionRequest?.prompt).toContain('.openweft/prompt-b-briefs');
     expect(adjustmentRequest?.prompt).toContain('=== CURRENT PLAN START ===');
     expect(adjustmentRequest?.prompt).toContain(planContent.trim());
     expect(adjustmentRequest?.prompt).toContain('"merge_commit"');
@@ -966,10 +972,10 @@ describe('runRealOrchestration', () => {
     expect(result.checkpoint.cost.totalOutputTokens).toBe(totalOutputTokens);
     expect(result.checkpoint.cost.totalEstimatedUsd).toBe(Number.parseFloat(totalEstimatedUsd.toFixed(6)));
     expect(adjustmentAudit?.data?.returnedSessionId).toBe(true);
-    expect(adjustmentAudit?.data?.command?.command).toBe('mock');
-    expect(freshExecutionAudit?.data?.command?.args).toEqual(['run', 'execution']);
+    expect(adjustmentAudit?.data?.command?.command).toBe('codex');
+    expect(freshExecutionAudit?.data?.command?.args).toEqual(['execution']);
 
-    expect(progressLines).toContain('OpenWeft run starting with backend mock.');
+    expect(progressLines).toContain('OpenWeft run starting with backend codex.');
     expect(progressLines.some((line) => line.includes('Phase 1 starting'))).toBe(true);
     expect(progressLines.some((line) => line.includes('Feature 001 add dashboard filters complete.'))).toBe(true);
     expect(progressLines.some((line) => line.includes('Phase 1 complete. Re-planning remaining work.'))).toBe(true);
@@ -1659,7 +1665,13 @@ describe('runRealOrchestration', () => {
     const result = await runRealOrchestration({
       config,
       configHash,
-      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      adapter: new RecordingAdapter(
+        new DeterministicManifestAdapter({
+          '001': ['src/a.ts'],
+          '002': ['src/b.ts'],
+          '003': ['src/a.ts', 'src/b.ts']
+        })
+      ),
       notificationDependencies: createNotificationRecorder().dependencies,
       sleep: async () => {}
     });
@@ -1697,7 +1709,7 @@ describe('runRealOrchestration', () => {
         entry.data.stage === 'execution'
     );
 
-    expect(resumedAdjustmentAudit?.data?.command?.args).toEqual(['run', 'adjustment']);
+    expect(resumedAdjustmentAudit?.data?.command?.args).toEqual(['adjustment']);
     expect(executionAudit?.data?.resumedSession).toBe(false);
   });
 
@@ -2080,14 +2092,15 @@ describe('runRealOrchestration', () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 2,
-      queueRequests: ['add feature alpha', 'add feature beta', 'add feature gamma']
+      queueRequests: ['add feature alpha', 'add feature beta', 'add feature gamma', 'add feature delta']
     });
 
     const { config, configHash } = await loadOpenWeftConfig(repoRoot);
     const adapter = new DeterministicManifestAdapter({
       '001': ['src/a.ts'],
       '002': ['src/b.ts'],
-      '003': ['src/a.ts', 'src/b.ts']
+      '003': ['src/a.ts', 'src/b.ts'],
+      '004': ['src/c.ts']
     });
 
     const result = await runRealOrchestration({
@@ -2103,9 +2116,13 @@ describe('runRealOrchestration', () => {
     const featureThreeAdjustments = adapter.requests.filter(
       (request) => request.stage === 'adjustment' && request.featureId === '003'
     );
+    const featureFourAdjustments = adapter.requests.filter(
+      (request) => request.stage === 'adjustment' && request.featureId === '004'
+    );
     expect(featureThreeAdjustments).toHaveLength(1);
     expect(featureThreeAdjustments[0]?.prompt).toContain('src/a.ts');
     expect(featureThreeAdjustments[0]?.prompt).toContain('src/b.ts');
+    expect(featureFourAdjustments).toHaveLength(0);
   });
 
   it('reuses an interrupted execution commit without rerunning execution', async () => {
@@ -2264,6 +2281,95 @@ describe('runRealOrchestration', () => {
     expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(true);
   });
 
+  it('resolves merge conflicts through the orchestrator worktree retry path', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['update shared module']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    const mergedEditSummary = {
+      merge_commit: 'merge-commit',
+      branch: 'openweft-001-update-shared-module',
+      pre_merge_commit: 'pre-merge-commit',
+      total_files_changed: 1,
+      total_lines_added: 2,
+      total_lines_removed: 1,
+      files: [
+        {
+          path: 'src/features/001-runtime-generated-prompt-b-for-001.ts',
+          change_type: 'modified' as const,
+          lines_added: 2,
+          lines_removed: 1,
+          old_path: null
+        }
+      ]
+    };
+
+    vi.resetModules();
+    vi.doMock('../../src/git/index.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
+        '../../src/git/index.js'
+      );
+      let mergeAttempts = 0;
+
+      return {
+        ...actual,
+        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
+          mergeAttempts += 1;
+          if (mergeAttempts === 1) {
+            return {
+              status: 'conflict' as const,
+              branch,
+              preMergeCommit: 'pre-merge-commit',
+              conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+            };
+          }
+
+          return {
+            status: 'merged' as const,
+            branch,
+            preMergeCommit: 'pre-merge-commit',
+            mergeCommit: 'merge-commit',
+            editSummary: mergedEditSummary
+          };
+        }),
+        mergeBranchIntoWorktree: vi.fn(async (_worktreePath: string, branch: string) => ({
+          status: 'staged' as const,
+          branch,
+          preMergeCommit: 'pre-merge-commit',
+          mergeHeadCommit: 'merge-head-commit',
+          editSummary: mergedEditSummary
+        })),
+        commitAllChanges: vi.fn(async () => 'resolved-commit')
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runRealOrchestrationWithConflictMocks } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithConflictMocks({
+        config,
+        configHash,
+        adapter,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('completed');
+      expect(result.mergedCount).toBe(1);
+      expect(adapter.requests.some((request) => request.stage === 'conflict-resolution')).toBe(true);
+    } finally {
+      vi.doUnmock('../../src/git/index.js');
+      vi.resetModules();
+    }
+  });
+
   it('persists a merged feature as completed before cleanup can fail', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
@@ -2332,6 +2438,39 @@ describe('runRealOrchestration', () => {
 
     const staleWorktreePath = path.join(config.paths.worktreesDir, '001');
     await simpleGit(repoRoot).raw(['worktree', 'remove', '--force', staleWorktreePath]);
+
+    const configHash = 'test-config-hash';
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.mergedCount).toBe(1);
+    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(true);
+  });
+
+  it('recreates execution cleanly when the checkpoint worktree path is missing but git still has the stale registration', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      status: 'planned'
+    });
+
+    const staleWorktreePath = path.join(config.paths.worktreesDir, '001');
+    await rm(staleWorktreePath, { recursive: true, force: true });
 
     const configHash = 'test-config-hash';
     const adapter = new RecordingAdapter(new MockAgentAdapter());

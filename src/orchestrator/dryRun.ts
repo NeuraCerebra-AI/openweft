@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 
 import { assign, createActor, fromPromise, setup } from 'xstate';
@@ -9,6 +9,7 @@ import type { AgentAdapter } from '../adapters/types.js';
 import { createPlanFilename, createPromptBFilename, formatFeatureId } from '../domain/featureIds.js';
 import { addCostRecordToTotals } from '../domain/costs.js';
 import type { Manifest } from '../domain/primitives.js';
+import { assertLedgerSection, parseManifestDocument } from '../domain/manifest.js';
 import {
   getNextFeatureIdFromQueue,
   markQueueLineProcessed,
@@ -18,6 +19,7 @@ import {
 import { buildExecutionPhases } from '../domain/phases.js';
 import {
   appendJsonLine,
+  ensureDirectory,
   ensureRuntimeDirectories,
   readTextFileIfExists,
   writeTextFileAtomic
@@ -32,12 +34,6 @@ import {
 import { OPENWEFT_VERSION } from '../version.js';
 
 const DRY_RUN_MODEL = 'mock-model';
-const EMPTY_MANIFEST: Manifest = {
-  create: [],
-  modify: [],
-  delete: []
-};
-
 interface PlannedFeature {
   id: string;
   request: string;
@@ -90,51 +86,6 @@ const createDryRunCheckpoint = (configHash: string): OrchestratorCheckpoint => {
   });
 };
 
-const createMockPlanMarkdown = (input: {
-  request: string;
-  featureId: string;
-  stageOneSummary: string;
-  stageTwoSummary: string;
-}): string => {
-  return `# Feature Plan: ${input.request}
-
-## Request
-
-${input.request}
-
-## Planning Notes
-
-- Stage 1 summary: ${input.stageOneSummary}
-- Stage 2 summary: ${input.stageTwoSummary}
-
-## Steps
-
-1. Review the relevant repository area for ${input.featureId}.
-2. Implement the requested change in the smallest safe slice.
-3. Run targeted validation before completion.
-
-## Ledger
-
-### Constraints
-- Keep the dry-run plan conservative and reversible.
-
-### Assumptions
-- Stage summaries are advisory and may be refined by real planner turns.
-
-### Watchpoints
-- Preserve manifest-driven scoring and phasing behavior.
-
-### Validation
-- Run the targeted validation listed in the plan.
-
-## Manifest
-
-\`\`\`json manifest
-${JSON.stringify(EMPTY_MANIFEST, null, 2)}
-\`\`\`
-`;
-};
-
 const listExistingPlanFiles = async (featureRequestsDir: string): Promise<string[]> => {
   try {
     const entries = await readdir(featureRequestsDir);
@@ -175,6 +126,16 @@ const updateFeatureCheckpoint = (
     ...patch,
     updatedAt: timestamp()
   };
+};
+
+const createDryRunScratchWorkspace = async (
+  config: ResolvedOpenWeftConfig,
+  featureId: string
+): Promise<string> => {
+  const scratchPath = path.join(config.paths.openweftDir, 'dry-run-workspaces', featureId);
+  await rm(scratchPath, { recursive: true, force: true });
+  await ensureDirectory(scratchPath);
+  return scratchPath;
 };
 
 const planPendingRequests = async (
@@ -251,17 +212,14 @@ const planPendingRequests = async (
     checkpoint.cost = addCostRecordToTotals(checkpoint.cost, stageOne.costRecord);
     checkpoint.cost = addCostRecordToTotals(checkpoint.cost, stageTwo.costRecord);
 
+    const planMarkdown = `${stageTwo.finalMessage.trimEnd()}\n`;
+    assertLedgerSection(planMarkdown);
+    const parsedPlan = parseManifestDocument(planMarkdown);
+
     const planFilename = createPlanFilename(nextId - 1, pending.request, usedPlanFiles);
     usedPlanFiles.add(planFilename);
     const planFilePath = path.join(input.config.paths.featureRequestsDir, planFilename);
-    const planContent = createMockPlanMarkdown({
-      request: pending.request,
-      featureId,
-      stageOneSummary: stageOne.finalMessage,
-      stageTwoSummary: stageTwo.finalMessage
-    });
-
-    await writeTextFileAtomic(planFilePath, planContent);
+    await writeTextFileAtomic(planFilePath, planMarkdown);
     updatedQueueContent = markQueueLineProcessed(
       updatedQueueContent,
       pending.lineIndex,
@@ -275,7 +233,7 @@ const planPendingRequests = async (
       request: pending.request,
       lineIndex: pending.lineIndex,
       planFilePath,
-      manifest: EMPTY_MANIFEST,
+      manifest: parsedPlan.manifest,
       priorityScore: 1
     };
     plannedFeatures.push(plannedFeature);
@@ -292,7 +250,7 @@ const planPendingRequests = async (
       sessionId: stageTwo.sessionId,
       sessionScope: stageTwo.sessionId ? 'repo' : null,
       backend: 'mock',
-      manifest: EMPTY_MANIFEST,
+      manifest: parsedPlan.manifest,
       priorityScore: 1,
       priorityTier: 'medium',
       updatedAt: timestamp()
@@ -382,10 +340,11 @@ const executePlannedFeatures = async (
           planContent
         });
 
+        const scratchWorkspace = await createDryRunScratchWorkspace(input.config, feature.id);
         const result = await input.adapter.runTurn({
           featureId: feature.id,
           stage: 'execution',
-          cwd: input.config.repoRoot,
+          cwd: scratchWorkspace,
           prompt: executionPrompt,
           model: DRY_RUN_MODEL,
           auth: { method: 'subscription' },
