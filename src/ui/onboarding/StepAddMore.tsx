@@ -67,10 +67,15 @@ export const StepAddMore: React.FC<StepAddMoreProps> = ({
   };
 
   const handleInputSubmit = (text: string) => {
-    void onQueueRequest(text).then(() => {
-      setInputValue('');
-      setMode('select');
-    });
+    void onQueueRequest(text).then(
+      () => {
+        setInputValue('');
+        setMode('select');
+      },
+      () => {
+        // Keep current input so user can retry.
+      }
+    );
   };
 
   const handleInputExit = () => {

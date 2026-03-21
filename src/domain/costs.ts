@@ -65,11 +65,17 @@ export const MODEL_PRICING: Record<string, PricingTableEntry> = {
 
 const normalizeModelName = (model: string): string => model.trim().toLowerCase();
 
+const warnedUnknownModels = new Set<string>();
+
 export const estimateCostUsd = (model: string, inputTokens: number, outputTokens: number): number => {
   const normalizedModel = normalizeModelName(model);
   const pricing = MODEL_PRICING[normalizedModel];
 
   if (!pricing) {
+    if (!warnedUnknownModels.has(normalizedModel)) {
+      warnedUnknownModels.add(normalizedModel);
+      console.warn(`OpenWeft: unknown model "${model}" — cost will be reported as $0.`);
+    }
     return 0;
   }
 

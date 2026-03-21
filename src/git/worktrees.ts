@@ -599,6 +599,15 @@ export const abortMerge = async (repoRoot: string): Promise<void> => {
   await createGit(repoRoot).merge(['--abort']);
 };
 
+const isMergeInProgress = async (gitDir: string): Promise<boolean> => {
+  try {
+    await createGit(gitDir).revparse(['--verify', 'MERGE_HEAD']);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const mergeBranchIntoCurrent = async (
   repoRoot: string,
   branch: string
@@ -627,6 +636,10 @@ export const mergeBranchIntoCurrent = async (
     await abortMerge(repoRoot).catch(() => {
       // If Git already cleaned up the merge state, there is nothing left to abort.
     });
+
+    if (await isMergeInProgress(repoRoot)) {
+      throw new Error(`Failed to clean up merge state in ${repoRoot} after conflict on branch ${branch}.`);
+    }
 
     return {
       status: 'conflict',
@@ -671,6 +684,10 @@ export const mergeBranchIntoWorktree = async (
       await git.raw(['merge', '--abort']);
     } catch {
       // best-effort; ignore failure
+    }
+
+    if (await isMergeInProgress(worktreePath)) {
+      throw new Error(`Failed to clean up merge state in ${worktreePath} after conflict on branch ${branch}.`);
     }
 
     return {

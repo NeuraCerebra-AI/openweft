@@ -1408,6 +1408,7 @@ const scoreAndPhaseCheckpoint = async (
       manifest: feature.manifest ?? { create: [], modify: [], delete: [] },
       previousSmoothedPriority: feature.priorityScore ?? undefined,
       previousTier: feature.priorityTier ?? undefined,
+      cyclesSeen: feature.scoringCycles ?? 0,
       successPenalty: feature.status === 'failed' ? 0.15 : 0
     })),
     repoContext,

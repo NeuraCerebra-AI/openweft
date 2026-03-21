@@ -232,11 +232,21 @@ export const saveCheckpoint = async (
 
   const paths = resolveCheckpointPaths(input);
 
+  let primaryContent: string | undefined;
   try {
-    const currentPrimary = await readFile(paths.checkpointFile, 'utf8');
-    await writeJsonFileAtomic(paths.backupFile, JSON.parse(currentPrimary));
+    primaryContent = await readFile(paths.checkpointFile, 'utf8');
   } catch {
     // No current primary checkpoint to back up yet.
+  }
+
+  if (primaryContent !== undefined) {
+    try {
+      await writeJsonFileAtomic(paths.backupFile, JSON.parse(primaryContent));
+    } catch (backupError) {
+      console.warn(
+        `OpenWeft: failed to write checkpoint backup to ${paths.backupFile}: ${backupError instanceof Error ? backupError.message : String(backupError)}`
+      );
+    }
   }
 
   await writeJsonFileAtomic(paths.checkpointFile, checkpoint);

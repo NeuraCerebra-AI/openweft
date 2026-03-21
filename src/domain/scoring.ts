@@ -197,7 +197,7 @@ export const smoothPriority = (
   previousSmoothedPriority?: number,
   cyclesSeen = 0
 ): number => {
-  if (previousSmoothedPriority === undefined) {
+  if (previousSmoothedPriority === undefined || !Number.isFinite(previousSmoothedPriority)) {
     return rawPriority;
   }
 
@@ -299,6 +299,7 @@ export interface ScoreableFeature {
   hasExternalApi?: boolean | undefined;
   previousSmoothedPriority?: number | undefined;
   previousTier?: PriorityTier | undefined;
+  cyclesSeen?: number | undefined;
 }
 
 export interface QueueScoringOptions {
@@ -331,6 +332,7 @@ export const scoreQueue = (
       hasExternalApi: feature.hasExternalApi,
       previousSmoothedPriority: feature.previousSmoothedPriority,
       previousTier: feature.previousTier,
+      cyclesSeen: feature.cyclesSeen,
       previousRank: previousIndex.get(feature.id)
     })),
     repoContext

@@ -1,10 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { accumulateCostTotals, createCostEntry, createEmptyCostTotals, estimateCostUsd } from '../../src/domain/costs.js';
 
 describe('costs', () => {
   it('estimates cost from model pricing', () => {
     expect(estimateCostUsd('gpt-5.3-codex', 1_000_000, 100_000)).toBe(3.15);
+  });
+
+  it('returns zero and warns once for unknown model names', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(estimateCostUsd('unknown-model-xyz', 1_000_000, 100_000)).toBe(0);
+    expect(warnSpy).toHaveBeenCalledOnce();
+    // Second call with same model should not warn again
+    estimateCostUsd('unknown-model-xyz', 500_000, 50_000);
+    expect(warnSpy).toHaveBeenCalledOnce();
+    warnSpy.mockRestore();
   });
 
   it('creates and accumulates cost entries', () => {

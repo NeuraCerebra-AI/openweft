@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { assignPriorityTier, classifyFilePath, scoreQueueFeatures, smoothPriority } from '../../src/domain/scoring.js';
+import { assignPriorityTier, classifyFilePath, scoreQueue, scoreQueueFeatures, smoothPriority } from '../../src/domain/scoring.js';
 
 describe('scoring', () => {
   const repoContext = {
@@ -81,5 +81,26 @@ describe('scoring', () => {
     expect(smoothPriority(0.9, 0.1, 0)).toBe(0.9);
     expect(smoothPriority(0.9, 0.1, 1)).toBe(0.9);
     expect(smoothPriority(0.9, 0.1, 2)).toBeCloseTo(0.3);
+  });
+
+  it('treats NaN previousSmoothedPriority as first visit', () => {
+    expect(smoothPriority(0.7, NaN, 5)).toBe(0.7);
+  });
+
+  it('propagates cyclesSeen through scoreQueue so EWMA damping activates', () => {
+    const feature = {
+      id: '001',
+      request: 'test',
+      manifest: { create: ['src/a.ts'], modify: [], delete: [] },
+      previousSmoothedPriority: 0.1,
+      cyclesSeen: 3
+    };
+
+    const withCycles = scoreQueue([feature], repoContext);
+    const withoutCycles = scoreQueue([{ ...feature, cyclesSeen: 0 }], repoContext);
+
+    // With cyclesSeen >= 2, EWMA damping pulls smoothed priority toward previous (0.1)
+    // With cyclesSeen < 2, lambda=1.0 so smoothed = raw (ignores previous)
+    expect(withCycles[0]!.smoothedPriority).toBeLessThan(withoutCycles[0]!.smoothedPriority);
   });
 });

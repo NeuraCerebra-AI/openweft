@@ -517,6 +517,11 @@ export const runDryRunOrchestration = async (
         return;
       }
 
+      if (snapshot.value === 'failed') {
+        reject(new Error(snapshot.context.error ?? 'Dry-run orchestration failed.'));
+        return;
+      }
+
       resolve(snapshot.output as DryRunResult);
     });
 
