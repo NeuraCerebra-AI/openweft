@@ -161,7 +161,7 @@ openweft status
 
 The loop runs until the queue is empty or you tell it to stop.
 
-For the full target design, see [ARCHITECTURE.md](./ARCHITECTURE.md) and [docs/prompt-b-first-migration-plan.md](./docs/prompt-b-first-migration-plan.md). The current runtime still contains some legacy plan-first seams while converging toward that Prompt-B-first architecture.
+For the full target design, see [ARCHITECTURE.md](./ARCHITECTURE.md). The current runtime still contains some legacy plan-first seams while converging toward that Prompt-B-first architecture.
 
 ---
 

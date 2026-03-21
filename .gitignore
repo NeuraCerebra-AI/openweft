@@ -23,6 +23,8 @@ docs/superpowers/
 AGENTS.md
 CLAUDE.md
 AUDIT.md
+docs/backend-hardening-queue.md
+docs/prompt-b-first-migration-plan.md
 
 # Prototype screenshots and design artifacts
 prototype-*.png
