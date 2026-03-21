@@ -52,6 +52,7 @@ export const FeatureCheckpointSchema = z
     priorityScore: z.number().nullable().optional(),
     priorityTier: PriorityTierSchema.nullable().optional(),
     scoringCycles: z.number().int().nonnegative().optional(),
+    mergeCommit: z.string().nullable().optional(),
     lastError: z.string().nullable().optional(),
     updatedAt: z.string().datetime()
   })

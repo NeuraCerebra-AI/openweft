@@ -50,6 +50,15 @@ export const handleKeypress = (
       }
       return 'quit';
     }
+    // Run finished — no confirmation needed, dismiss immediately
+    if (state.completion !== null) {
+      state.dismissCompletion();
+      if (handlers.onQuit) {
+        handlers.onQuit('keyboard');
+        return 'handled';
+      }
+      return 'quit';
+    }
     if (state.executionRequested) {
       state.setQuitConfirmPending(true);
       state.setNotice({ level: 'info', message: 'Press q again to stop after current phase, Esc to cancel' });
@@ -144,6 +153,14 @@ export const handleKeypress = (
           return 'handled';
         }
 
+        case 'h':
+          if (state.completedFeatures.length > 0) {
+            state.setMode('history');
+            state.setHistoryFocusedIndex(0);
+            return 'handled';
+          }
+          return 'unhandled';
+
         case 's':
           if (!state.executionRequested && handlers.onStartRequest) {
             handlers.onStartRequest();
@@ -235,6 +252,54 @@ export const handleKeypress = (
             return 'handled';
           }
           return 'unhandled';
+      }
+
+    case 'history':
+      switch (key) {
+        case 'escape':
+          state.setMode('normal');
+          return 'handled';
+        case 'q':
+          return handleQuitRequest();
+        case 'j':
+        case 'down': {
+          const maxIdx = state.completedFeatures.length - 1;
+          if (state.historyFocusedIndex < maxIdx) {
+            state.setHistoryFocusedIndex(state.historyFocusedIndex + 1);
+          }
+          return 'handled';
+        }
+        case 'k':
+        case 'up': {
+          if (state.historyFocusedIndex > 0) {
+            state.setHistoryFocusedIndex(state.historyFocusedIndex - 1);
+          }
+          return 'handled';
+        }
+        case 'return':
+          if (state.completedFeatures.length > 0) {
+            state.setMode('history-detail');
+          }
+          return 'handled';
+        case '?':
+          state.setShowHelp(true);
+          return 'handled';
+        default:
+          return 'handled';
+      }
+
+    case 'history-detail':
+      switch (key) {
+        case 'escape':
+          state.setMode('history');
+          return 'handled';
+        case 'q':
+          return handleQuitRequest();
+        case '?':
+          state.setShowHelp(true);
+          return 'handled';
+        default:
+          return 'handled';
       }
   }
 };

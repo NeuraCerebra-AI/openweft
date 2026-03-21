@@ -319,7 +319,7 @@ describe('TTY start handler', () => {
     expect(store.getState().completion).toEqual({
       status: 'completed',
       mergedCount: 1,
-      plannedCount: 1
+      plannedCount: 1,
     });
     expect(harness.unmount).not.toHaveBeenCalled();
 

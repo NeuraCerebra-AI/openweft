@@ -166,6 +166,51 @@ describe('UIStore', () => {
     expect(store.getState().completion).toEqual({ status: 'completed', plannedCount: 3, mergedCount: 2 });
   });
 
+  it('initializes completedFeatures as empty', () => {
+    expect(store.getState().completedFeatures).toEqual([]);
+  });
+
+  it('sets completedFeatures', () => {
+    store.getState().setCompletedFeatures([
+      { id: 'feat-001', request: 'Add auth', mergeCommit: 'abc1234' },
+      { id: 'feat-002', request: 'Add logging', mergeCommit: 'def5678' }
+    ]);
+    expect(store.getState().completedFeatures).toHaveLength(2);
+    expect(store.getState().completedFeatures[0]).toEqual({
+      id: 'feat-001', request: 'Add auth', mergeCommit: 'abc1234'
+    });
+  });
+
+  it('replaces completedFeatures on subsequent set', () => {
+    store.getState().setCompletedFeatures([
+      { id: 'feat-001', request: 'Add auth', mergeCommit: null }
+    ]);
+    store.getState().setCompletedFeatures([
+      { id: 'feat-001', request: 'Add auth', mergeCommit: 'abc1234' },
+      { id: 'feat-002', request: 'Add logging', mergeCommit: 'def5678' }
+    ]);
+    expect(store.getState().completedFeatures).toHaveLength(2);
+    expect(store.getState().completedFeatures[0]?.mergeCommit).toBe('abc1234');
+  });
+
+  it('initializes historyFocusedIndex at 0', () => {
+    expect(store.getState().historyFocusedIndex).toBe(0);
+  });
+
+  it('sets historyFocusedIndex', () => {
+    store.getState().setHistoryFocusedIndex(2);
+    expect(store.getState().historyFocusedIndex).toBe(2);
+  });
+
+  it('initializes completionDismissed as false', () => {
+    expect(store.getState().completionDismissed).toBe(false);
+  });
+
+  it('dismissCompletion sets completionDismissed', () => {
+    store.getState().dismissCompletion();
+    expect(store.getState().completionDismissed).toBe(true);
+  });
+
   it('ticks elapsed only for running or approval agents', () => {
     store.getState().addAgent({ id: 'run', name: 'Run', feature: 'f1', status: 'running' });
     store.getState().addAgent({ id: 'approve', name: 'Approve', feature: 'f2', status: 'approval' });

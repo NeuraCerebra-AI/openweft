@@ -28,17 +28,32 @@ export interface AgentState {
   readonly approvalRequest: ApprovalRequest | null;
 }
 
+export interface CompletedFeature {
+  readonly id: string;
+  readonly request: string;
+  readonly mergeCommit: string | null;
+}
+
+export type UIMode = 'normal' | 'approval' | 'input' | 'history' | 'history-detail';
+
 export interface UIStore {
   phase: { current: number; total: number; label?: string } | null;
   totalCost: number;
   totalTokens: number;
   elapsed: number;
   spinnerFrame: number;
-  completion: { status: string; plannedCount: number; mergedCount: number } | null;
+  completion: {
+    status: string;
+    plannedCount: number;
+    mergedCount: number;
+  } | null;
+  completionDismissed: boolean;
+  completedFeatures: readonly CompletedFeature[];
+  historyFocusedIndex: number;
   notice: { level: 'info' | 'error'; message: string } | null;
   agents: AgentState[];
   focusedAgentId: string | null;
-  mode: 'normal' | 'approval' | 'input';
+  mode: UIMode;
   filterText: string;
   filterCursorOffset: number;
   showHelp: boolean;
@@ -51,7 +66,7 @@ export interface UIStore {
   updateAgent: (id: string, patch: Partial<Pick<AgentState, 'status' | 'cost' | 'elapsed' | 'currentTool' | 'approvalRequest' | 'tokens'>>) => void;
   appendOutput: (agentId: string, line: OutputLine) => void;
   setFocusedAgent: (id: string | null) => void;
-  setMode: (mode: UIStore['mode']) => void;
+  setMode: (mode: UIMode) => void;
   setPhase: (phase: { current: number; total: number; label?: string } | null) => void;
   setTotalCost: (cost: number) => void;
   setTotalTokens: (tokens: number) => void;
@@ -59,6 +74,9 @@ export interface UIStore {
   tickAgentElapsed: () => void;
   tickSpinnerFrame: () => void;
   setCompletion: (completion: UIStore['completion']) => void;
+  setCompletedFeatures: (features: readonly CompletedFeature[]) => void;
+  setHistoryFocusedIndex: (index: number) => void;
+  dismissCompletion: () => void;
   setShowHelp: (show: boolean) => void;
   setFilterText: (text: string) => void;
   setFilterCursorOffset: (offset: number) => void;
@@ -81,6 +99,9 @@ export const createUIStore = () =>
     elapsed: 0,
     spinnerFrame: 0,
     completion: null,
+    completionDismissed: false,
+    completedFeatures: [],
+    historyFocusedIndex: 0,
     notice: null,
     agents: [],
     focusedAgentId: null,
@@ -157,6 +178,12 @@ export const createUIStore = () =>
       })),
     tickSpinnerFrame: () => set((state) => ({ spinnerFrame: state.spinnerFrame + 1 })),
     setCompletion: (completion) => set({ completion }),
+    setCompletedFeatures: (features) => set((state) => ({
+      completedFeatures: features,
+      historyFocusedIndex: Math.min(state.historyFocusedIndex, Math.max(0, features.length - 1)),
+    })),
+    setHistoryFocusedIndex: (index) => set({ historyFocusedIndex: index }),
+    dismissCompletion: () => set({ completionDismissed: true }),
     setShowHelp: (show) => set({ showHelp: show }),
     setFilterText: (text) => set({ filterText: text, filterCursorOffset: text.length }),
     setFilterCursorOffset: (offset) =>

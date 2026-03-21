@@ -1,10 +1,11 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 
+import type { UIMode } from './store.js';
 import { useTheme } from './theme.js';
 
 interface HelpOverlayProps {
-  readonly mode: 'normal' | 'approval' | 'input';
+  readonly mode: UIMode;
   readonly executionStarted: boolean;
 }
 
@@ -31,6 +32,21 @@ const getShortcuts = (
         ['Enter', 'Keep filter'],
         ['Esc', 'Clear filter'],
       ];
+    case 'history':
+      return [
+        ['↑/↓', 'Navigate'],
+        ['j/k', 'Navigate'],
+        ['Enter', 'View detail'],
+        ['Esc', 'Back to dashboard'],
+        ['q', 'Quit'],
+        ['?', 'Toggle this help'],
+      ];
+    case 'history-detail':
+      return [
+        ['Esc', 'Back to list'],
+        ['q', 'Quit'],
+        ['?', 'Toggle this help'],
+      ];
     case 'normal':
       return executionStarted
         ? [
@@ -40,6 +56,7 @@ const getShortcuts = (
             ['/', 'Filter agents'],
             ['a', 'Add to queue'],
             ['d', 'Remove queued item'],
+            ['h', 'History'],
             ['q', 'Stop after phase'],
             ['?', 'Toggle this help'],
           ]
@@ -51,6 +68,7 @@ const getShortcuts = (
             ['s', 'Start execution'],
             ['a', 'Add to queue'],
             ['d', 'Remove queued item'],
+            ['h', 'History'],
             ['q', 'Quit'],
             ['?', 'Toggle this help'],
           ];

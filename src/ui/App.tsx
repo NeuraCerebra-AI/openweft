@@ -10,6 +10,8 @@ import { AgentCard } from './AgentCard.js';
 import { HelpOverlay } from './HelpOverlay.js';
 import { EmptyState } from './EmptyState.js';
 import { Footer } from './Footer.js';
+import { HistoryView } from './HistoryView.js';
+import { HistoryDetailView } from './HistoryDetailView.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
 import { filterAgents, handleKeypress } from './hooks/useKeyboard.js';
 import type { UIStore } from './store.js';
@@ -189,11 +191,40 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
     }
   });
 
+  // History views take priority — accessible from dashboard or completion screen
+  if (state.mode === 'history' || state.mode === 'history-detail') {
+    const focusedFeature = state.completedFeatures[state.historyFocusedIndex];
+
+    return (
+      <ThemeContext.Provider value={catppuccinMocha}>
+        <Box flexDirection="column" width="100%" height={rows}>
+          <StatusBar
+            phase={state.phase}
+            activeCount={activeCount}
+            pendingCount={0}
+            totalCount={state.agents.length}
+            totalTokens={state.totalTokens}
+            elapsed={state.elapsed}
+          />
+          {state.showHelp ? (
+            <HelpOverlay mode={state.mode} executionStarted={state.executionRequested} />
+          ) : state.mode === 'history-detail' && focusedFeature ? (
+            <HistoryDetailView feature={focusedFeature} />
+          ) : (
+            <HistoryView features={state.completedFeatures} focusedIndex={state.historyFocusedIndex} />
+          )}
+          <Footer mode={state.mode} executionStarted={state.executionRequested} composing={false} />
+        </Box>
+      </ThemeContext.Provider>
+    );
+  }
+
   if (state.completion !== null) {
     const completionLabel = state.completion.status === 'completed' ? 'Run complete' : 'Run finished';
     const completionColor = state.completion.status === 'completed'
       ? catppuccinMocha.colors.green
       : catppuccinMocha.colors.yellow;
+    const hasHistory = state.completedFeatures.length > 0;
 
     return (
       <ThemeContext.Provider value={catppuccinMocha}>
@@ -216,8 +247,12 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
           >
             <Text bold color={completionColor}>{completionLabel}</Text>
             <Text>{`Planned ${state.completion.plannedCount} · Merged ${state.completion.mergedCount}`}</Text>
-            <Text color={catppuccinMocha.colors.muted}>{`Status: ${state.completion.status}`}</Text>
-            <Text color={catppuccinMocha.colors.muted}>{'Returning to shell...'}</Text>
+            <Text>{''}</Text>
+            {hasHistory ? (
+              <Text color={catppuccinMocha.colors.subtext}>{'Press h for history · q to exit'}</Text>
+            ) : (
+              <Text color={catppuccinMocha.colors.muted}>{'Press q to exit'}</Text>
+            )}
           </Box>
         </Box>
       </ThemeContext.Provider>

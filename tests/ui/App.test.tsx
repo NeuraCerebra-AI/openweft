@@ -85,7 +85,7 @@ describe('App', () => {
     expect(frame).toContain('Run complete');
     expect(frame).toContain('Planned 2');
     expect(frame).toContain('Merged 2');
-    expect(frame).toContain('Returning to shell');
+    expect(frame).toContain('Press q to exit');
   });
 
   it('auto-clears notices after a timeout', async () => {

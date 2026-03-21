@@ -410,4 +410,105 @@ describe('handleKeypress', () => {
     expect(store.getState().quitConfirmPending).toBe(false);
     expect(store.getState().notice).toBeNull();
   });
+
+  it('h opens history when completed features exist', () => {
+    const store = createUIStore();
+    store.getState().setCompletedFeatures([
+      { id: 'f1', request: 'Add auth', mergeCommit: 'abc1234' }
+    ]);
+    const result = handleKeypress(store, 'h');
+    expect(result).toBe('handled');
+    expect(store.getState().mode).toBe('history');
+    expect(store.getState().historyFocusedIndex).toBe(0);
+  });
+
+  it('h is unhandled when no completed features', () => {
+    const store = createUIStore();
+    const result = handleKeypress(store, 'h');
+    expect(result).toBe('unhandled');
+    expect(store.getState().mode).toBe('normal');
+  });
+
+  it('Esc in history mode returns to normal', () => {
+    const store = createUIStore();
+    store.getState().setCompletedFeatures([
+      { id: 'f1', request: 'Add auth', mergeCommit: 'abc1234' }
+    ]);
+    store.getState().setMode('history');
+    const result = handleKeypress(store, 'escape');
+    expect(result).toBe('handled');
+    expect(store.getState().mode).toBe('normal');
+  });
+
+  it('j/k navigate history focused index', () => {
+    const store = createUIStore();
+    store.getState().setCompletedFeatures([
+      { id: 'f1', request: 'Add auth', mergeCommit: 'abc1234' },
+      { id: 'f2', request: 'Add logging', mergeCommit: 'def5678' }
+    ]);
+    store.getState().setMode('history');
+    store.getState().setHistoryFocusedIndex(0);
+    handleKeypress(store, 'j');
+    expect(store.getState().historyFocusedIndex).toBe(1);
+    handleKeypress(store, 'k');
+    expect(store.getState().historyFocusedIndex).toBe(0);
+  });
+
+  it('j does not go past the end of history', () => {
+    const store = createUIStore();
+    store.getState().setCompletedFeatures([
+      { id: 'f1', request: 'Add auth', mergeCommit: 'abc1234' }
+    ]);
+    store.getState().setMode('history');
+    store.getState().setHistoryFocusedIndex(0);
+    handleKeypress(store, 'j');
+    expect(store.getState().historyFocusedIndex).toBe(0);
+  });
+
+  it('k does not go below 0', () => {
+    const store = createUIStore();
+    store.getState().setCompletedFeatures([
+      { id: 'f1', request: 'Add auth', mergeCommit: 'abc1234' }
+    ]);
+    store.getState().setMode('history');
+    store.getState().setHistoryFocusedIndex(0);
+    handleKeypress(store, 'k');
+    expect(store.getState().historyFocusedIndex).toBe(0);
+  });
+
+  it('Enter in history mode opens detail', () => {
+    const store = createUIStore();
+    store.getState().setCompletedFeatures([
+      { id: 'f1', request: 'Add auth', mergeCommit: 'abc1234' }
+    ]);
+    store.getState().setMode('history');
+    const result = handleKeypress(store, 'return');
+    expect(result).toBe('handled');
+    expect(store.getState().mode).toBe('history-detail');
+  });
+
+  it('Esc in history-detail returns to history list', () => {
+    const store = createUIStore();
+    store.getState().setMode('history-detail');
+    const result = handleKeypress(store, 'escape');
+    expect(result).toBe('handled');
+    expect(store.getState().mode).toBe('history');
+  });
+
+  it('q at completion screen dismisses immediately', () => {
+    const store = createUIStore();
+    store.getState().requestExecution();
+    store.getState().setCompletion({ status: 'completed', plannedCount: 1, mergedCount: 1 });
+    const result = handleKeypress(store, 'q');
+    expect(result).toBe('quit');
+    expect(store.getState().completionDismissed).toBe(true);
+    expect(store.getState().quitConfirmPending).toBe(false);
+  });
+
+  it('q in history mode quits', () => {
+    const store = createUIStore();
+    store.getState().setMode('history');
+    const result = handleKeypress(store, 'q');
+    expect(result).toBe('quit');
+  });
 });

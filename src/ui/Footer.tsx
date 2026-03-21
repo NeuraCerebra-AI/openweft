@@ -1,10 +1,11 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 
+import type { UIMode } from './store.js';
 import { useTheme } from './theme.js';
 
 interface FooterProps {
-  readonly mode: 'normal' | 'approval' | 'input';
+  readonly mode: UIMode;
   readonly executionStarted: boolean;
   readonly composing: boolean;
 }
@@ -13,15 +14,18 @@ type Hint = readonly [key: string, label: string];
 
 const getHints = (mode: FooterProps['mode'], executionStarted: boolean, composing: boolean): readonly Hint[] => {
   if (composing) return [['Enter', 'submit'], ['Esc', 'cancel']];
+  if (mode === 'history-detail') return [['Esc', 'back'], ['q', 'quit']];
+  if (mode === 'history') return [['Enter', 'detail'], ['Esc', 'back'], ['q', 'quit']];
   if (mode === 'approval') return [['y', 'approve'], ['n', 'deny'], ['a', 'always'], ['s', 'skip']];
   if (mode === 'input') return [['Enter', 'submit'], ['Esc', 'cancel']];
   // normal
-  if (!executionStarted) return [['s', 'start'], ['a', 'add'], ['d', 'remove'], ['?', 'help']];
-  return [['a', 'add'], ['d', 'remove'], ['q', 'stop run'], ['?', 'help']];
+  if (!executionStarted) return [['s', 'start'], ['a', 'add'], ['d', 'remove'], ['h', 'history'], ['?', 'help']];
+  return [['a', 'add'], ['d', 'remove'], ['h', 'history'], ['q', 'stop run'], ['?', 'help']];
 };
 
 const getModeInfo = (mode: FooterProps['mode'], composing: boolean): { label: string; colorKey: 'blue' | 'yellow' | 'green' } => {
   if (composing) return { label: 'INPUT', colorKey: 'green' };
+  if (mode === 'history' || mode === 'history-detail') return { label: 'HISTORY', colorKey: 'green' };
   if (mode === 'approval') return { label: 'APPROVAL', colorKey: 'yellow' };
   return { label: 'NORMAL', colorKey: 'blue' };
 };

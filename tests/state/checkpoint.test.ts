@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { createEmptyCheckpoint, loadCheckpoint, saveCheckpoint } from '../../src/state/index.js';
+import { createEmptyCheckpoint, FeatureCheckpointSchema, loadCheckpoint, saveCheckpoint } from '../../src/state/index.js';
 
 describe('checkpoint persistence', () => {
   it('saves and loads a checkpoint from the primary file', async () => {
@@ -75,5 +75,46 @@ describe('checkpoint persistence', () => {
     await writeFile(backupFile, '{also not valid json', 'utf8');
 
     await expect(loadCheckpoint(checkpointFile, backupFile)).rejects.toThrow(/checkpoint/i);
+  });
+});
+
+describe('FeatureCheckpointSchema mergeCommit field', () => {
+  const baseFeature = {
+    id: 'feat-001',
+    request: 'Add auth',
+    status: 'completed' as const,
+    attempts: 1,
+    planFile: null,
+    branchName: null,
+    worktreePath: null,
+    sessionId: null,
+    updatedAt: '2026-03-20T10:00:00.000Z'
+  };
+
+  it('accepts a feature with a mergeCommit SHA', () => {
+    const result = FeatureCheckpointSchema.safeParse({
+      ...baseFeature,
+      mergeCommit: 'abc1234def5678'
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.mergeCommit).toBe('abc1234def5678');
+    }
+  });
+
+  it('accepts a feature with mergeCommit set to null', () => {
+    const result = FeatureCheckpointSchema.safeParse({
+      ...baseFeature,
+      mergeCommit: null
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.mergeCommit).toBeNull();
+    }
+  });
+
+  it('accepts a feature without mergeCommit (backward compatible)', () => {
+    const result = FeatureCheckpointSchema.safeParse(baseFeature);
+    expect(result.success).toBe(true);
   });
 });

@@ -2190,6 +2190,7 @@ const executePhases = async (
             mergedCount += 1;
             updateFeatureCheckpoint(checkpoint, featureId, {
               status: 'completed',
+              mergeCommit: retryMerge.mergeCommit,
               lastError: null
             });
             await saveCheckpointSnapshot(context.config, checkpoint);
@@ -2225,6 +2226,7 @@ const executePhases = async (
         mergedCount += 1;
         updateFeatureCheckpoint(checkpoint, featureId, {
           status: 'completed',
+          mergeCommit: merged.mergeCommit,
           lastError: null
         });
         await saveCheckpointSnapshot(context.config, checkpoint);
