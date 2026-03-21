@@ -26,8 +26,7 @@ The supporting implementation plan is also provided below and is available at ${
 Use Prompt B as the main execution brief. Use the plan as the supporting artifact that defines the manifest boundaries and required validation.
 
 Execute the work completely. Follow the brief carefully. Run all tests specified in the plan.
-Do not skip steps. Do not modify the Prompt B file or the plan file. Only modify the codebase files
-listed in the plan's manifest.
+Do not skip steps. Do not modify the Prompt B file. Only update the plan file to keep its ## Ledger truthful about constraints, assumptions, watchpoints, validation, and implementation decisions. Stay within this repository.
 
 === PROMPT B START ===
 ${input.promptBContent}
@@ -50,6 +49,7 @@ export const buildConflictResolutionPrompt = (input: {
   return `You are resolving a merge conflict for an OpenWeft feature.
 The original implementation plan is available at ${input.planFilePath} and is included below for context.
 Use it to preserve the intended feature behavior while reconciling both sides of the merge.
+If you update the plan, only update its ## Ledger to keep it truthful about the work performed.
 
 === PLAN START ===
 ${input.planContent}

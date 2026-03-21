@@ -125,6 +125,12 @@ const readCommandInput = async (argument?: string): Promise<string> => {
 async function detectCodex(): Promise<BackendDetection> {
   try {
     const result = await execa('codex', ['login', 'status'], { reject: false });
+    if (result.failed && result.code === 'ENOENT') {
+      return {
+        installed: false,
+        authenticated: false
+      };
+    }
     return {
       installed: true,
       authenticated: result.exitCode === 0
@@ -140,6 +146,12 @@ async function detectCodex(): Promise<BackendDetection> {
 async function detectClaude(): Promise<BackendDetection> {
   try {
     const result = await execa('claude', ['auth', 'status'], { reject: false });
+    if (result.failed && result.code === 'ENOENT') {
+      return {
+        installed: false,
+        authenticated: false
+      };
+    }
     return {
       installed: true,
       authenticated: result.exitCode === 0
@@ -200,6 +212,64 @@ const sleep = async (ms: number): Promise<void> => {
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+};
+
+const getConfiguredBackendDetection = async (
+  dependencies: Pick<CliDependencies, 'detectCodex' | 'detectClaude'>,
+  backend: ResolvedOpenWeftConfig['backend']
+): Promise<BackendDetection> => {
+  switch (backend) {
+    case 'codex':
+      return dependencies.detectCodex();
+    case 'claude':
+      return dependencies.detectClaude();
+  }
+};
+
+const getDefaultBackendApiKeyEnvVar = (
+  backend: ResolvedOpenWeftConfig['backend']
+): string => {
+  return backend === 'codex' ? 'CODEX_API_KEY' : 'ANTHROPIC_API_KEY';
+};
+
+const getConfiguredBackendLabel = (
+  backend: ResolvedOpenWeftConfig['backend']
+): string => {
+  return backend === 'codex' ? 'Codex CLI' : 'Claude CLI';
+};
+
+const ensureConfiguredBackendReady = async (
+  config: ResolvedOpenWeftConfig,
+  dependencies: Pick<CliDependencies, 'detectCodex' | 'detectClaude' | 'getEnv'>
+): Promise<void> => {
+  const backend = config.backend;
+  const detection = await getConfiguredBackendDetection(dependencies, backend);
+  if (!detection.installed) {
+    throw new Error(
+      `Configured backend "${backend}" is not installed or not available on PATH. Install the ${getConfiguredBackendLabel(backend)} or change the OpenWeft "backend" setting before running "openweft start".`
+    );
+  }
+
+  const authConfig = config.auth[backend];
+  if (authConfig.method === 'subscription') {
+    if (detection.authenticated) {
+      return;
+    }
+
+    throw new Error(
+      `Configured backend "${backend}" is installed but not authenticated for subscription mode. Authenticate the ${getConfiguredBackendLabel(backend)} or switch to api_key auth before running "openweft start".`
+    );
+  }
+
+  const envVar = authConfig.envVar ?? getDefaultBackendApiKeyEnvVar(backend);
+  const envValue = dependencies.getEnv()[envVar];
+  if (typeof envValue === 'string' && envValue.trim().length > 0) {
+    return;
+  }
+
+  throw new Error(
+    `Configured backend "${backend}" requires API key environment variable ${envVar}, but it is not set. Export ${envVar} or update your OpenWeft auth config before running "openweft start".`
+  );
 };
 
 const defaultDependencies: CliDependencies = {
@@ -611,6 +681,16 @@ export const createCommandHandlers = (
               return;
             }
 
+            try {
+              await ensureConfiguredBackendReady(config, resolvedDependencies);
+            } catch (error) {
+              store.getState().setNotice({
+                level: 'error',
+                message: error instanceof Error ? error.message : String(error)
+              });
+              return;
+            }
+
             store.getState().requestExecution();
           },
           onRemoveAgent: async (agentId, store) => {
@@ -810,6 +890,10 @@ export const createCommandHandlers = (
 
       if (options.bg && options.tmux) {
         throw new Error('Cannot combine --bg and --tmux.');
+      }
+
+      if (!options.dryRun) {
+        await ensureConfiguredBackendReady(config, resolvedDependencies);
       }
 
       if (options.bg) {

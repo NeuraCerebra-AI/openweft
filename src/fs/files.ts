@@ -24,6 +24,7 @@ export const ensureRuntimeDirectories = async (paths: RuntimePaths): Promise<voi
     ensureDirectory(paths.featureRequestsDir),
     ensureDirectory(paths.worktreesDir),
     ensureDirectory(paths.shadowPlansDir),
+    ensureDirectory(paths.evolvedPlansDir),
     ensureDirectory(paths.promptBArtifactsDir)
   ]);
 };

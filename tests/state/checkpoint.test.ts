@@ -4,7 +4,13 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { createEmptyCheckpoint, FeatureCheckpointSchema, loadCheckpoint, saveCheckpoint } from '../../src/state/index.js';
+import {
+  CheckpointSchema,
+  createEmptyCheckpoint,
+  FeatureCheckpointSchema,
+  loadCheckpoint,
+  saveCheckpoint
+} from '../../src/state/index.js';
 
 describe('checkpoint persistence', () => {
   it('saves and loads a checkpoint from the primary file', async () => {
@@ -75,6 +81,108 @@ describe('checkpoint persistence', () => {
     await writeFile(backupFile, '{also not valid json', 'utf8');
 
     await expect(loadCheckpoint(checkpointFile, backupFile)).rejects.toThrow(/checkpoint/i);
+  });
+
+  it('accepts persisted pendingMergeSummaries', () => {
+    const checkpoint = {
+      ...createEmptyCheckpoint({
+        orchestratorVersion: '0.1.0',
+        configHash: 'sha256:test',
+        runId: 'run-1',
+        checkpointId: 'chk-1',
+        createdAt: '2026-03-13T08:00:00.000Z'
+      }),
+      pendingMergeSummaries: [
+        {
+          featureId: '001',
+          summary: {
+            merge_commit: 'merge-123',
+            branch: 'openweft-001-add-auth',
+            pre_merge_commit: 'base-123',
+            total_files_changed: 1,
+            total_lines_added: 5,
+            total_lines_removed: 1,
+            files: [
+              {
+                path: 'src/auth.ts',
+                change_type: 'modified' as const,
+                lines_added: 5,
+                lines_removed: 1,
+                old_path: null
+              }
+            ]
+          }
+        }
+      ]
+    };
+
+    const result = CheckpointSchema.safeParse(checkpoint);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.pendingMergeSummaries).toHaveLength(1);
+      expect(result.data.pendingMergeSummaries[0]?.featureId).toBe('001');
+    }
+  });
+
+  it('defaults legacy checkpoints without pendingMergeSummaries to an empty array when loading', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-checkpoint-legacy-'));
+    const checkpointFile = path.join(tempDirectory, 'checkpoint.json');
+    const backupFile = path.join(tempDirectory, 'checkpoint.json.backup');
+    const checkpoint = createEmptyCheckpoint({
+      orchestratorVersion: '0.1.0',
+      configHash: 'sha256:test',
+      runId: 'run-1',
+      checkpointId: 'chk-1',
+      createdAt: '2026-03-13T08:00:00.000Z'
+    });
+    const legacyCheckpoint = JSON.parse(JSON.stringify(checkpoint)) as Record<string, unknown>;
+    delete legacyCheckpoint.pendingMergeSummaries;
+
+    await writeFile(checkpointFile, JSON.stringify(legacyCheckpoint), 'utf8');
+
+    const loaded = await loadCheckpoint(checkpointFile, backupFile);
+
+    expect(loaded.source).toBe('primary');
+    expect(loaded.checkpoint?.pendingMergeSummaries).toEqual([]);
+  });
+
+  it('defaults legacy feature checkpoints without evolvedPlanFile and rerunEligible when loading', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-checkpoint-legacy-feature-'));
+    const checkpointFile = path.join(tempDirectory, 'checkpoint.json');
+    const backupFile = path.join(tempDirectory, 'checkpoint.json.backup');
+    const checkpoint = createEmptyCheckpoint({
+      orchestratorVersion: '0.1.0',
+      configHash: 'sha256:test',
+      runId: 'run-1',
+      checkpointId: 'chk-1',
+      createdAt: '2026-03-13T08:00:00.000Z'
+    });
+    checkpoint.features['001'] = {
+      id: '001',
+      request: 'Add auth',
+      status: 'failed',
+      attempts: 1,
+      planFile: '/tmp/001.plan.md',
+      evolvedPlanFile: null,
+      branchName: 'openweft-001',
+      worktreePath: '/tmp/worktrees/001',
+      sessionId: null,
+      rerunEligible: true,
+      updatedAt: '2026-03-13T08:00:00.000Z'
+    };
+    const legacyCheckpoint = JSON.parse(JSON.stringify(checkpoint)) as {
+      features: Record<string, Record<string, unknown>>;
+    };
+    delete legacyCheckpoint.features['001']?.evolvedPlanFile;
+    delete legacyCheckpoint.features['001']?.rerunEligible;
+
+    await writeFile(checkpointFile, JSON.stringify(legacyCheckpoint), 'utf8');
+
+    const loaded = await loadCheckpoint(checkpointFile, backupFile);
+
+    expect(loaded.source).toBe('primary');
+    expect(loaded.checkpoint?.features['001']?.evolvedPlanFile).toBeNull();
+    expect(loaded.checkpoint?.features['001']?.rerunEligible).toBe(true);
   });
 });
 

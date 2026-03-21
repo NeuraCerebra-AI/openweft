@@ -140,6 +140,7 @@ interface RealRunContext extends RealRunInput {
   plannedCount: number;
   error: string | null;
   recoveredExecutions: Map<string, RecoveredExecutionResult>;
+  resumeReanalysisPhaseIndex: number | null;
 }
 
 interface RecoveredExecutionResult {
@@ -149,6 +150,7 @@ interface RecoveredExecutionResult {
   worktreePath: string;
   sessionId: null;
   baselineCommit: null;
+  evolvedPlanFile: null;
 }
 
 const timestamp = (): string => new Date().toISOString();
@@ -344,6 +346,18 @@ const updateQueueOrdering = (
 
     checkpoint.queue.orderedFeatureIds[index] = score.id;
   }
+};
+
+const isExecutionEligibleFeature = (
+  feature: Pick<FeatureCheckpoint, 'status' | 'rerunEligible'>
+): boolean => {
+  return feature.status === 'planned' || (feature.status === 'failed' && feature.rerunEligible);
+};
+
+const getExecutionEligibleFeatures = (
+  checkpoint: OrchestratorCheckpoint
+): FeatureCheckpoint[] => {
+  return Object.values(checkpoint.features).filter((feature) => isExecutionEligibleFeature(feature));
 };
 
 const getBackendAuth = (
@@ -585,6 +599,7 @@ const loadOrCreateCheckpoint = async (
 ): Promise<{
   checkpoint: OrchestratorCheckpoint;
   recoveredExecutions: Map<string, RecoveredExecutionResult>;
+  resumeReanalysisPhaseIndex: number | null;
 }> => {
   const existing = await loadCheckpoint({
     checkpointFile: input.config.paths.checkpointFile,
@@ -594,7 +609,8 @@ const loadOrCreateCheckpoint = async (
   if (!existing.checkpoint) {
     return {
       checkpoint: createFreshCheckpoint(input.configHash),
-      recoveredExecutions: new Map()
+      recoveredExecutions: new Map(),
+      resumeReanalysisPhaseIndex: null
     };
   }
 
@@ -610,6 +626,8 @@ const loadOrCreateCheckpoint = async (
   const checkpoint = cloneCheckpoint(existing.checkpoint);
   const recoveredExecutions = new Map<string, RecoveredExecutionResult>();
   const baseBranch = (await simpleGit(input.config.repoRoot).revparse(['--abbrev-ref', 'HEAD'])).trim();
+  const resumeReanalysisPhaseIndex =
+    checkpoint.pendingMergeSummaries.length > 0 ? (checkpoint.currentPhase?.index ?? 0) : null;
 
   if (existing.checkpoint.currentState === 'planning') {
     const existingQueueContent = (await readTextFileIfExists(input.config.paths.queueFile)) ?? '';
@@ -628,7 +646,7 @@ const loadOrCreateCheckpoint = async (
   checkpoint.currentState = 'idle';
 
   for (const feature of Object.values(checkpoint.features)) {
-    if (RECOVERABLE_EXECUTION_STATUSES.has(feature.status)) {
+    if (RECOVERABLE_EXECUTION_STATUSES.has(feature.status) || (feature.status === 'failed' && feature.rerunEligible)) {
       let alreadyMerged = false;
       const recovered = await findReusableExecutionCommit({
         repoRoot: input.config.repoRoot,
@@ -636,8 +654,7 @@ const loadOrCreateCheckpoint = async (
         worktreePath: feature.worktreePath,
         branchName: feature.branchName,
         baseBranch,
-        expectedCommitMessage: `openweft: complete feature ${feature.id}`,
-        manifestPaths: getManifestPaths(feature)
+        expectedCommitMessage: `openweft: complete feature ${feature.id}`
       });
 
       if (recovered) {
@@ -645,11 +662,19 @@ const loadOrCreateCheckpoint = async (
           alreadyMerged = true;
           updateFeatureCheckpoint(checkpoint, feature.id, {
             status: 'completed',
+            evolvedPlanFile: null,
             branchName: feature.branchName,
             worktreePath: feature.worktreePath,
             sessionId: null,
             sessionScope: null,
-            lastError: null
+            lastError: null,
+            rerunEligible: false
+          });
+        } else if (feature.status === 'failed') {
+          updateFeatureCheckpoint(checkpoint, feature.id, {
+            sessionId: null,
+            sessionScope: null,
+            rerunEligible: false
           });
         } else {
           recoveredExecutions.set(feature.id, {
@@ -658,7 +683,8 @@ const loadOrCreateCheckpoint = async (
             branchName: recovered.branchName,
             worktreePath: recovered.worktreePath,
             sessionId: null,
-            baselineCommit: null
+            baselineCommit: null,
+            evolvedPlanFile: null
           });
         }
       }
@@ -712,9 +738,48 @@ const loadOrCreateCheckpoint = async (
     await saveCheckpointSnapshot(input.config, checkpoint);
   }
 
+  let repairedEvolvedPlanFiles = false;
+  for (const feature of Object.values(checkpoint.features)) {
+    const canonicalEvolvedPlanFile = buildEvolvedPlanPath(input.config, feature.id);
+    const configuredEvolvedPlanExists = feature.evolvedPlanFile
+      ? await pathExists(feature.evolvedPlanFile)
+      : false;
+    const canonicalEvolvedPlanExists = await pathExists(canonicalEvolvedPlanFile);
+
+    if (configuredEvolvedPlanExists) {
+      if (feature.evolvedPlanFile !== canonicalEvolvedPlanFile) {
+        updateFeatureCheckpoint(checkpoint, feature.id, {
+          evolvedPlanFile: canonicalEvolvedPlanFile
+        });
+        repairedEvolvedPlanFiles = true;
+      }
+      continue;
+    }
+
+    if (canonicalEvolvedPlanExists) {
+      updateFeatureCheckpoint(checkpoint, feature.id, {
+        evolvedPlanFile: canonicalEvolvedPlanFile
+      });
+      repairedEvolvedPlanFiles = true;
+      continue;
+    }
+
+    if (feature.evolvedPlanFile !== null) {
+      updateFeatureCheckpoint(checkpoint, feature.id, {
+        evolvedPlanFile: null
+      });
+      repairedEvolvedPlanFiles = true;
+    }
+  }
+
+  if (repairedEvolvedPlanFiles) {
+    await saveCheckpointSnapshot(input.config, checkpoint);
+  }
+
   return {
     checkpoint,
-    recoveredExecutions
+    recoveredExecutions,
+    resumeReanalysisPhaseIndex
   };
 };
 
@@ -826,20 +891,59 @@ const buildWorktreePath = (config: ResolvedOpenWeftConfig, featureId: string): s
   return path.join(config.paths.worktreesDir, featureId);
 };
 
+const buildWorktreePlanFilePath = (planFile: string, worktreePath: string): string => {
+  return path.join(worktreePath, '.openweft', 'feature-plans', path.basename(planFile));
+};
+
+const buildWorktreePromptBFilePath = (promptBFile: string, worktreePath: string): string => {
+  return path.join(worktreePath, '.openweft', 'prompt-b-briefs', path.basename(promptBFile));
+};
+
+const buildEvolvedPlanPath = (config: ResolvedOpenWeftConfig, featureId: string): string => {
+  return path.join(config.paths.evolvedPlansDir, `${featureId}.md`);
+};
+
 const syncPlanFileToWorktree = async (
   config: ResolvedOpenWeftConfig,
   planFile: string,
   worktreePath: string
 ): Promise<string> => {
-  const targetPlanPath = path.join(
-    worktreePath,
-    '.openweft',
-    'feature-plans',
-    path.basename(planFile)
-  );
+  const targetPlanPath = buildWorktreePlanFilePath(planFile, worktreePath);
   const content = await readTextFileWithRetry(planFile);
   await writeTextFileAtomic(targetPlanPath, content);
   return targetPlanPath;
+};
+
+const stagePlanFileFromWorktree = async (
+  config: ResolvedOpenWeftConfig,
+  featureId: string,
+  worktreePlanFile: string
+): Promise<string | null> => {
+  const content = await readTextFileIfExists(worktreePlanFile);
+  if (content === null) {
+    return null;
+  }
+
+  const evolvedPlanPath = buildEvolvedPlanPath(config, featureId);
+  await writeTextFileAtomic(evolvedPlanPath, content);
+  return evolvedPlanPath;
+};
+
+const promoteStagedPlan = async (
+  config: ResolvedOpenWeftConfig,
+  featureId: string,
+  planFile: string
+): Promise<boolean> => {
+  const evolvedPlanPath = buildEvolvedPlanPath(config, featureId);
+  const content = await readTextFileIfExists(evolvedPlanPath);
+  if (content === null) {
+    return false;
+  }
+
+  await writeTextFileAtomic(planFile, content);
+  await writeShadowPlan(config, featureId, content);
+  await rm(evolvedPlanPath, { force: true });
+  return true;
 };
 
 const syncPromptBFileToWorktree = async (
@@ -847,12 +951,7 @@ const syncPromptBFileToWorktree = async (
   promptBFile: string,
   worktreePath: string
 ): Promise<string> => {
-  const targetPromptBPath = path.join(
-    worktreePath,
-    '.openweft',
-    'prompt-b-briefs',
-    path.basename(promptBFile)
-  );
+  const targetPromptBPath = buildWorktreePromptBFilePath(promptBFile, worktreePath);
   const content = await readTextFileWithRetry(promptBFile);
   await writeTextFileAtomic(targetPromptBPath, content);
   return targetPromptBPath;
@@ -1247,12 +1346,14 @@ const planPendingRequests = async (
         attempts: 0,
         planFile: null,
         promptBFile: promptBFilePath,
+        evolvedPlanFile: null,
         branchName: null,
         worktreePath: null,
         sessionId: null,
         sessionScope: null,
         backend: context.adapter.backend,
         manifest: null,
+        rerunEligible: false,
         priorityScore: null,
         priorityTier: null,
         scoringCycles: 0,
@@ -1324,12 +1425,14 @@ const planPendingRequests = async (
       attempts: 0,
       planFile: planFilePath,
       promptBFile: promptBFilePath,
+      evolvedPlanFile: null,
       branchName: null,
       worktreePath: null,
       sessionId: repairedPlan.sessionId,
       sessionScope: repairedPlan.sessionId ? 'repo' : null,
       backend: context.adapter.backend,
       manifest: repairedPlan.manifest,
+      rerunEligible: true,
       priorityScore: null,
       priorityTier: null,
       scoringCycles: 0,
@@ -1376,9 +1479,7 @@ const scoreAndPhaseCheckpoint = async (
   phases: ReturnType<typeof buildExecutionPhases>;
 }> => {
   const checkpoint = cloneCheckpoint(context.checkpoint);
-  const executableFeatures = Object.values(checkpoint.features).filter((feature) =>
-    feature.status === 'planned' || feature.status === 'failed'
-  );
+  const executableFeatures = getExecutionEligibleFeatures(checkpoint);
 
   if (executableFeatures.length === 0) {
     checkpoint.queue = {
@@ -1500,6 +1601,285 @@ const buildMergedPathSet = (
   return paths;
 };
 
+const appendMergePhaseOrderAudit = async (
+  context: RealRunContext,
+  phaseIndex: number,
+  successfulFeatureIds: string[],
+  scoreById: Map<string, FeatureScoreBreakdown>
+): Promise<void> => {
+  if (successfulFeatureIds.length === 0) {
+    return;
+  }
+
+  await appendAudit(context.config, {
+    level: 'info',
+    event: 'merge.phase.order',
+    message: `Recorded merge order for phase ${phaseIndex}.`,
+    data: {
+      phaseIndex,
+      orderedFeatures: successfulFeatureIds.map((featureId) => ({
+        featureId,
+        smoothedPriority: scoreById.get(featureId)?.smoothedPriority ?? 0
+      }))
+    }
+  });
+};
+
+const appendMergeFeatureResultAudit = async (
+  context: RealRunContext,
+  input: {
+    phaseIndex: number;
+    feature: FeatureCheckpoint;
+    result: 'merged' | 'merged-after-conflict-resolution' | 'failed';
+    failureStage?:
+      | 'merge-into-current'
+      | 'merge-into-worktree'
+      | 'conflict-resolution-approval'
+      | 'conflict-resolution-turn'
+      | 'post-resolution-retry';
+    conflictFiles?: string[];
+    editSummary?: EditSummary;
+    error?: string | null;
+  }
+): Promise<void> => {
+  const featureLabel = getFeatureLabel(input.feature);
+  const message =
+    input.result === 'merged'
+      ? `Feature ${featureLabel} merged without conflicts.`
+      : input.result === 'merged-after-conflict-resolution'
+        ? `Feature ${featureLabel} merged after conflict resolution.`
+        : `Feature ${featureLabel} failed during merge processing.`;
+
+  await appendAudit(context.config, {
+    level: input.result === 'failed' ? 'warn' : 'info',
+    event: 'merge.feature.result',
+    message,
+    data: {
+      phaseIndex: input.phaseIndex,
+      featureId: input.feature.id,
+      branchName: input.feature.branchName,
+      priorityScore: input.feature.priorityScore ?? null,
+      result: input.result,
+      failureStage: input.failureStage ?? null,
+      conflictFiles: input.conflictFiles ?? [],
+      error: input.error ?? null,
+      editSummary: input.editSummary ?? null
+    }
+  });
+};
+
+const appendReanalysisDecisionAudit = async (
+  context: RealRunContext,
+  input: {
+    phaseIndex: number;
+    feature: FeatureCheckpoint;
+    decision:
+      | 'skipped-no-plan-file'
+      | 'skipped-no-overlap'
+      | 'adjustment-attempted'
+      | 'adjustment-failed';
+    overlapPaths?: string[];
+    planChanged?: boolean | null;
+    error?: string | null;
+  }
+): Promise<void> => {
+  const featureLabel = getFeatureLabel(input.feature);
+  const message =
+    input.decision === 'skipped-no-plan-file'
+      ? `Skipped re-analysis for feature ${featureLabel} because no plan file is available.`
+      : input.decision === 'skipped-no-overlap'
+        ? `Skipped re-analysis for feature ${featureLabel} because no merged paths overlapped its manifest.`
+        : input.decision === 'adjustment-attempted'
+          ? `Ran re-analysis for feature ${featureLabel}.`
+          : `Re-analysis failed for feature ${featureLabel}.`;
+
+  await appendAudit(context.config, {
+    level: input.decision === 'adjustment-failed' ? 'warn' : 'info',
+    event: 'reanalysis.feature.decision',
+    message,
+    data: {
+      phaseIndex: input.phaseIndex,
+      featureId: input.feature.id,
+      decision: input.decision,
+      overlapPaths: input.overlapPaths ?? [],
+      planChanged: input.planChanged ?? null,
+      error: input.error ?? null
+    }
+  });
+};
+
+const runPendingReanalysis = async (
+  context: RealRunContext,
+  checkpoint: OrchestratorCheckpoint,
+  phaseIndex: number,
+  mergeSummaries: Array<{ featureId: string; summary: EditSummary }>
+): Promise<'continued' | 'stopped'> => {
+  const remaining = getExecutionEligibleFeatures(checkpoint);
+
+  if (remaining.length > 0 && mergeSummaries.length > 0) {
+    const template = await readTextFileWithRetry(context.config.paths.planAdjustment);
+    const mergedPathSet = buildMergedPathSet(mergeSummaries);
+    const aggregatedMergeSummaryJson = JSON.stringify(
+      mergeSummaries.map((mergedSummary) => mergedSummary.summary),
+      null,
+      2
+    );
+
+    for (const feature of remaining) {
+      if (!feature.planFile) {
+        await appendReanalysisDecisionAudit(context, {
+          phaseIndex,
+          feature,
+          decision: 'skipped-no-plan-file'
+        });
+        continue;
+      }
+
+      const overlapPaths = getManifestPaths(feature)
+        .map((manifestPath) => normalizeRepoRelativePath(manifestPath))
+        .filter((manifestPath, index, manifestPaths) =>
+          mergedPathSet.has(manifestPath) && manifestPaths.indexOf(manifestPath) === index
+        );
+      if (overlapPaths.length === 0) {
+        await appendReanalysisDecisionAudit(context, {
+          phaseIndex,
+          feature,
+          decision: 'skipped-no-overlap'
+        });
+        continue;
+      }
+
+      const planFile = feature.planFile;
+      const currentPlan = await readTextFileWithRetry(planFile);
+      await writeShadowPlan(context.config, feature.id, currentPlan);
+
+      const prompt = buildPlanAdjustmentPrompt({
+        template,
+        planFilePath: planFile,
+        planContent: currentPlan,
+        codeEditSummaryJson: aggregatedMergeSummaryJson
+      });
+      let adjustment: AdapterTurnResult;
+      try {
+        adjustment = await runTurnAndRecord(
+          context,
+          checkpoint,
+          buildAdjustmentRequest(
+            context,
+            feature.id,
+            prompt,
+            resolveReusableSessionId(feature, 'repo')
+          )
+        );
+      } catch (error) {
+        if (error instanceof TurnApprovalError) {
+          if (context.stopController?.isRequested) {
+            checkpoint.status = 'stopped';
+            checkpoint.currentState = 'stopped';
+            checkpoint.currentPhase = null;
+            await saveCheckpointSnapshot(context.config, checkpoint);
+            return 'stopped';
+          }
+          updateFeatureCheckpoint(checkpoint, feature.id, {
+            lastError: error.message
+          });
+          await appendReanalysisDecisionAudit(context, {
+            phaseIndex,
+            feature,
+            decision: 'adjustment-failed',
+            overlapPaths,
+            error: error.message
+          });
+          await announceProgress(
+            context,
+            `Plan adjustment for ${getFeatureLabel(feature)} failed: ${error.message}`
+          );
+          continue;
+        }
+        throw error;
+      }
+
+      if (!adjustment.ok) {
+        updateFeatureCheckpoint(checkpoint, feature.id, {
+          lastError: adjustment.error
+        });
+        await appendReanalysisDecisionAudit(context, {
+          phaseIndex,
+          feature,
+          decision: 'adjustment-failed',
+          overlapPaths,
+          error: adjustment.error ?? null
+        });
+        await announceProgress(
+          context,
+          `Plan adjustment for ${getFeatureLabel(feature)} failed${adjustment.error ? `: ${adjustment.error}` : '.'}`
+        );
+        continue;
+      }
+
+      if (context.adapter.backend === 'mock') {
+        updateFeatureCheckpoint(checkpoint, feature.id, {
+          sessionId: adjustment.sessionId,
+          sessionScope: adjustment.sessionId ? 'repo' : null
+        });
+        await appendReanalysisDecisionAudit(context, {
+          phaseIndex,
+          feature,
+          decision: 'adjustment-attempted',
+          overlapPaths
+        });
+        continue;
+      }
+
+      try {
+        const adjustedPlan = adjustment.finalMessage;
+        const shadowPlan = await maybeReadShadowPlan(context.config, feature.id);
+        assertLedgerSection(adjustedPlan);
+        const parsed = parseManifestDocument(adjustedPlan, {
+          ...(shadowPlan
+            ? {
+                lastKnownGood: parseManifestDocument(shadowPlan).manifest
+              }
+            : {})
+        });
+        const normalizedPlan = updateManifestInMarkdown(adjustedPlan, parsed.manifest);
+        const planChanged = normalizedPlan !== currentPlan;
+        await writeTextFileAtomic(planFile, normalizedPlan);
+        await writeShadowPlan(context.config, feature.id, normalizedPlan);
+        updateFeatureCheckpoint(checkpoint, feature.id, {
+          manifest: parsed.manifest,
+          sessionId: adjustment.sessionId,
+          sessionScope: adjustment.sessionId ? 'repo' : null,
+          lastError: null
+        });
+        await appendReanalysisDecisionAudit(context, {
+          phaseIndex,
+          feature,
+          decision: 'adjustment-attempted',
+          overlapPaths,
+          planChanged
+        });
+      } catch (error) {
+        await appendReanalysisDecisionAudit(context, {
+          phaseIndex,
+          feature,
+          decision: 'adjustment-failed',
+          overlapPaths,
+          error: error instanceof Error ? error.message : String(error)
+        });
+        throw error;
+      }
+    }
+  }
+
+  if (mergeSummaries.length > 0) {
+    checkpoint.pendingMergeSummaries = [];
+    await saveCheckpointSnapshot(context.config, checkpoint);
+  }
+
+  return 'continued';
+};
+
 const runFeatureExecutionAttempt = async (
   context: RealRunContext,
   checkpoint: OrchestratorCheckpoint,
@@ -1512,6 +1892,7 @@ const runFeatureExecutionAttempt = async (
   worktreePath: string | null;
   sessionId: string | null;
   baselineCommit: string | null;
+  evolvedPlanFile: string | null;
   error?: string;
 }> => {
   const worktreeState = await createOrResetFeatureWorktree(context, feature, baseBranch);
@@ -1530,6 +1911,7 @@ const runFeatureExecutionAttempt = async (
       worktreePath: worktreeState.worktreePath,
       sessionId: null,
       baselineCommit: worktreeState.baselineCommit,
+      evolvedPlanFile: null,
       error: 'Prompt B artifact is missing.'
     };
   }
@@ -1542,6 +1924,7 @@ const runFeatureExecutionAttempt = async (
       worktreePath: worktreeState.worktreePath,
       sessionId: null,
       baselineCommit: worktreeState.baselineCommit,
+      evolvedPlanFile: null,
       error: 'Feature plan file is missing.'
     };
   }
@@ -1590,6 +1973,7 @@ const runFeatureExecutionAttempt = async (
           worktreePath: worktreeState.worktreePath,
           sessionId,
           baselineCommit: worktreeState.baselineCommit,
+          evolvedPlanFile: null,
           error: error.message
         };
       }
@@ -1611,14 +1995,14 @@ const runFeatureExecutionAttempt = async (
           worktreePath: worktreeState.worktreePath,
           sessionId,
           baselineCommit: worktreeState.baselineCommit,
+          evolvedPlanFile: null,
           error: 'Agent completed without producing any workspace changes.'
         };
       }
 
       const commit = await commitAllChanges(
         worktreeState.worktreePath,
-        `openweft: complete feature ${feature.id}`,
-        getManifestPaths(feature)
+        `openweft: complete feature ${feature.id}`
       );
 
       if (!commit) {
@@ -1629,9 +2013,16 @@ const runFeatureExecutionAttempt = async (
           worktreePath: worktreeState.worktreePath,
           sessionId,
           baselineCommit: worktreeState.baselineCommit,
+          evolvedPlanFile: null,
           error: 'Agent produced changes, but OpenWeft could not create a feature commit.'
         };
       }
+
+      const evolvedPlanFile = await stagePlanFileFromWorktree(
+        context.config,
+        feature.id,
+        worktreePlanFile
+      );
 
       return {
         featureId: feature.id,
@@ -1639,7 +2030,8 @@ const runFeatureExecutionAttempt = async (
         branchName: worktreeState.branchName,
         worktreePath: worktreeState.worktreePath,
         sessionId,
-        baselineCommit: worktreeState.baselineCommit
+        baselineCommit: worktreeState.baselineCommit,
+        evolvedPlanFile
       };
     }
 
@@ -1651,6 +2043,7 @@ const runFeatureExecutionAttempt = async (
         worktreePath: worktreeState.worktreePath,
         sessionId: result.sessionId,
         baselineCommit: worktreeState.baselineCommit,
+        evolvedPlanFile: null,
         error: result.error
       };
     }
@@ -1662,7 +2055,8 @@ const runFeatureExecutionAttempt = async (
         branchName: worktreeState.branchName,
         worktreePath: worktreeState.worktreePath,
         sessionId: result.sessionId,
-        baselineCommit: worktreeState.baselineCommit
+        baselineCommit: worktreeState.baselineCommit,
+        evolvedPlanFile: null
       };
     }
 
@@ -1703,12 +2097,13 @@ const runFeatureExecutionAttempt = async (
           return {
             featureId: feature.id,
             status: context.stopController?.isRequested ? 'aborted' : 'failed',
-            branchName: worktreeState.branchName,
-            worktreePath: worktreeState.worktreePath,
-            sessionId,
-            baselineCommit: worktreeState.baselineCommit,
-            error: error.message
-          };
+          branchName: worktreeState.branchName,
+          worktreePath: worktreeState.worktreePath,
+          sessionId,
+          baselineCommit: worktreeState.baselineCommit,
+          evolvedPlanFile: null,
+          error: error.message
+        };
         }
         throw error;
       }
@@ -1717,8 +2112,7 @@ const runFeatureExecutionAttempt = async (
         sessionId = retryResult.sessionId;
         const commit = await commitAllChanges(
           worktreeState.worktreePath,
-          `openweft: complete feature ${feature.id}`,
-          getManifestPaths(feature)
+          `openweft: complete feature ${feature.id}`
         );
 
         if (!commit) {
@@ -1729,9 +2123,16 @@ const runFeatureExecutionAttempt = async (
             worktreePath: worktreeState.worktreePath,
             sessionId,
             baselineCommit: worktreeState.baselineCommit,
+            evolvedPlanFile: null,
             error: 'Agent retry completed without a committable result.'
           };
         }
+
+        const evolvedPlanFile = await stagePlanFileFromWorktree(
+          context.config,
+          feature.id,
+          worktreePlanFile
+        );
 
         return {
           featureId: feature.id,
@@ -1739,7 +2140,8 @@ const runFeatureExecutionAttempt = async (
           branchName: worktreeState.branchName,
           worktreePath: worktreeState.worktreePath,
           sessionId,
-          baselineCommit: worktreeState.baselineCommit
+          baselineCommit: worktreeState.baselineCommit,
+          evolvedPlanFile
         };
       }
 
@@ -1750,6 +2152,7 @@ const runFeatureExecutionAttempt = async (
         worktreePath: worktreeState.worktreePath,
         sessionId: retryResult.sessionId,
         baselineCommit: worktreeState.baselineCommit,
+        evolvedPlanFile: null,
         error: retryResult.error
       };
     }
@@ -1761,6 +2164,7 @@ const runFeatureExecutionAttempt = async (
       worktreePath: worktreeState.worktreePath,
       sessionId: result.sessionId,
       baselineCommit: worktreeState.baselineCommit,
+      evolvedPlanFile: null,
       error: result.error
     };
   }
@@ -1787,6 +2191,7 @@ const createUnexpectedExecutionFailure = (
       worktreePath: feature.worktreePath ?? buildWorktreePath(config, feature.id),
       sessionId: null,
       baselineCommit: null,
+      evolvedPlanFile: null,
       error: classified.reason
     }
   };
@@ -2020,7 +2425,11 @@ const executePhases = async (
           worktreePath: result.worktreePath,
           sessionId: result.sessionId,
           sessionScope: result.sessionId ? 'worktree' : null,
-          lastError: result.status === 'aborted' ? null : (result.error ?? null)
+          lastError: result.status === 'aborted' ? null : (result.error ?? null),
+          evolvedPlanFile: result.evolvedPlanFile,
+          rerunEligible: result.status === 'completed' || result.status === 'aborted'
+            ? false
+            : true
         });
 
         if (result.status !== 'completed' && result.status !== 'aborted' && feature) {
@@ -2030,6 +2439,8 @@ const executePhases = async (
           );
         }
       }
+
+      await saveCheckpointSnapshot(context.config, checkpoint);
 
       if (context.stopController?.isRequested) {
         checkpoint.status = 'stopped';
@@ -2081,6 +2492,10 @@ const executePhases = async (
         });
 
       const mergeSummaries: Array<{ featureId: string; summary: EditSummary }> = [];
+      if (successfulFeatureIds.length > 0) {
+        checkpoint.pendingMergeSummaries = [];
+        await appendMergePhaseOrderAudit(context, phase.index, successfulFeatureIds, scoreById);
+      }
 
       for (const featureId of successfulFeatureIds) {
         const feature = checkpoint.features[featureId];
@@ -2090,12 +2505,22 @@ const executePhases = async (
 
         const merged = await mergeBranchIntoCurrent(context.config.repoRoot, feature.branchName);
         if (merged.status === 'conflict') {
+          const initialConflictFiles = merged.conflicts.map((conflict) => conflict.file);
           if (feature.worktreePath) {
             const mergeIntoWorktree = await mergeBranchIntoWorktree(feature.worktreePath, baseBranch);
             if (mergeIntoWorktree.status === 'conflict') {
+              const conflictFiles = mergeIntoWorktree.conflicts.map((conflict) => conflict.file);
               updateFeatureCheckpoint(checkpoint, featureId, {
                 status: 'failed',
-                lastError: mergeIntoWorktree.conflicts.map((conflict) => conflict.file).join(', ')
+                lastError: conflictFiles.join(', '),
+                rerunEligible: false
+              });
+              await appendMergeFeatureResultAudit(context, {
+                phaseIndex: phase.index,
+                feature,
+                result: 'failed',
+                failureStage: 'merge-into-worktree',
+                conflictFiles
               });
               await announceProgress(
                 context,
@@ -2106,10 +2531,18 @@ const executePhases = async (
 
             let conflictResolution: AdapterTurnResult;
             try {
+              const worktreePlanFile = feature.planFile
+                ? buildWorktreePlanFilePath(feature.planFile, feature.worktreePath)
+                : null;
+              const worktreePlanContent = worktreePlanFile
+                ? await readTextFileIfExists(worktreePlanFile)
+                : null;
               const conflictResolutionPrompt = buildConflictResolutionPrompt({
                 instruction: 'The latest changes from main have been merged into your branch. Resolve all conflict markers, preserve both sides, then commit.',
-                planFilePath: feature.planFile,
-                planContent: feature.planFile ? await readTextFileWithRetry(feature.planFile) : null
+                planFilePath: worktreePlanContent ? worktreePlanFile : feature.planFile,
+                planContent:
+                  worktreePlanContent ??
+                  (feature.planFile ? await readTextFileWithRetry(feature.planFile) : null)
               });
               conflictResolution = await runTurnAndRecord(
                 context,
@@ -2136,7 +2569,16 @@ const executePhases = async (
                 }
                 updateFeatureCheckpoint(checkpoint, featureId, {
                   status: 'failed',
-                  lastError: error.message
+                  lastError: error.message,
+                  rerunEligible: false
+                });
+                await appendMergeFeatureResultAudit(context, {
+                  phaseIndex: phase.index,
+                  feature,
+                  result: 'failed',
+                  failureStage: 'conflict-resolution-approval',
+                  conflictFiles: initialConflictFiles,
+                  error: error.message
                 });
                 await announceProgress(
                   context,
@@ -2152,7 +2594,16 @@ const executePhases = async (
                 status: 'failed',
                 sessionId: conflictResolution.sessionId,
                 sessionScope: conflictResolution.sessionId ? 'worktree' : null,
-                lastError: conflictResolution.error
+                lastError: conflictResolution.error,
+                rerunEligible: false
+              });
+              await appendMergeFeatureResultAudit(context, {
+                phaseIndex: phase.index,
+                feature,
+                result: 'failed',
+                failureStage: 'conflict-resolution-turn',
+                conflictFiles: initialConflictFiles,
+                error: conflictResolution.error ?? null
               });
               await announceProgress(
                 context,
@@ -2170,12 +2621,28 @@ const executePhases = async (
               feature.worktreePath,
               `openweft: resolve merge conflict for feature ${featureId}`
             );
+            if (feature.planFile) {
+              await stagePlanFileFromWorktree(
+                context.config,
+                featureId,
+                buildWorktreePlanFilePath(feature.planFile, feature.worktreePath)
+              );
+            }
 
             const retryMerge = await mergeBranchIntoCurrent(context.config.repoRoot, feature.branchName);
             if (retryMerge.status !== 'merged') {
+              const conflictFiles = retryMerge.conflicts.map((conflict) => conflict.file);
               updateFeatureCheckpoint(checkpoint, featureId, {
                 status: 'failed',
-                lastError: retryMerge.conflicts.map((conflict) => conflict.file).join(', ')
+                lastError: conflictFiles.join(', '),
+                rerunEligible: false
+              });
+              await appendMergeFeatureResultAudit(context, {
+                phaseIndex: phase.index,
+                feature,
+                result: 'failed',
+                failureStage: 'post-resolution-retry',
+                conflictFiles
               });
               await announceProgress(
                 context,
@@ -2184,17 +2651,34 @@ const executePhases = async (
               continue;
             }
 
-            mergeSummaries.push({
+            const pendingMergeSummary = {
               featureId,
               summary: retryMerge.editSummary
-            });
+            };
+            mergeSummaries.push(pendingMergeSummary);
+            checkpoint.pendingMergeSummaries = [
+              ...checkpoint.pendingMergeSummaries,
+              pendingMergeSummary
+            ];
             mergedCount += 1;
+            if (feature.planFile) {
+              await promoteStagedPlan(context.config, featureId, feature.planFile);
+            }
             updateFeatureCheckpoint(checkpoint, featureId, {
               status: 'completed',
               mergeCommit: retryMerge.mergeCommit,
-              lastError: null
+              lastError: null,
+              evolvedPlanFile: null,
+              rerunEligible: false
             });
             await saveCheckpointSnapshot(context.config, checkpoint);
+            await appendMergeFeatureResultAudit(context, {
+              phaseIndex: phase.index,
+              feature,
+              result: 'merged-after-conflict-resolution',
+              conflictFiles: initialConflictFiles,
+              editSummary: retryMerge.editSummary
+            });
             await announceProgress(context, `Feature ${getFeatureLabel(feature)} complete.`);
             await removeWorktree({
               repoRoot: context.config.repoRoot,
@@ -2211,7 +2695,15 @@ const executePhases = async (
 
           updateFeatureCheckpoint(checkpoint, featureId, {
             status: 'failed',
-            lastError: merged.conflicts.map((conflict) => conflict.file).join(', ')
+            lastError: initialConflictFiles.join(', '),
+            rerunEligible: false
+          });
+          await appendMergeFeatureResultAudit(context, {
+            phaseIndex: phase.index,
+            feature,
+            result: 'failed',
+            failureStage: 'merge-into-current',
+            conflictFiles: initialConflictFiles
           });
           await announceProgress(
             context,
@@ -2220,17 +2712,33 @@ const executePhases = async (
           continue;
         }
 
-        mergeSummaries.push({
+        const pendingMergeSummary = {
           featureId,
           summary: merged.editSummary
-        });
+        };
+        mergeSummaries.push(pendingMergeSummary);
+        checkpoint.pendingMergeSummaries = [
+          ...checkpoint.pendingMergeSummaries,
+          pendingMergeSummary
+        ];
         mergedCount += 1;
+        if (feature.planFile) {
+          await promoteStagedPlan(context.config, featureId, feature.planFile);
+        }
         updateFeatureCheckpoint(checkpoint, featureId, {
           status: 'completed',
           mergeCommit: merged.mergeCommit,
-          lastError: null
+          lastError: null,
+          evolvedPlanFile: null,
+          rerunEligible: false
         });
         await saveCheckpointSnapshot(context.config, checkpoint);
+        await appendMergeFeatureResultAudit(context, {
+          phaseIndex: phase.index,
+          feature,
+          result: 'merged',
+          editSummary: merged.editSummary
+        });
         await announceProgress(context, `Feature ${getFeatureLabel(feature)} complete.`);
 
         if (feature.worktreePath) {
@@ -2255,113 +2763,11 @@ const executePhases = async (
       });
       await announceProgress(context, `Phase ${phase.index} complete. Re-planning remaining work.`);
 
-      const remaining = Object.values(checkpoint.features).filter((feature) =>
-        feature.status === 'planned' || feature.status === 'failed'
-      );
-      if (remaining.length > 0 && mergeSummaries.length > 0) {
-        const template = await readTextFileWithRetry(context.config.paths.planAdjustment);
-        const mergedPathSet = buildMergedPathSet(mergeSummaries);
-        const aggregatedMergeSummaryJson = JSON.stringify(
-          mergeSummaries.map((mergedSummary) => mergedSummary.summary),
-          null,
-          2
-        );
-        for (const feature of remaining) {
-          if (!feature.planFile) {
-            continue;
-          }
-          const hasOverlap = getManifestPaths(feature)
-            .map((manifestPath) => normalizeRepoRelativePath(manifestPath))
-            .some((manifestPath) => mergedPathSet.has(manifestPath));
-          if (!hasOverlap) {
-            continue;
-          }
-
-          const planFile = feature.planFile;
-          const currentPlan = await readTextFileWithRetry(planFile);
-          await writeShadowPlan(context.config, feature.id, currentPlan);
-
-          const prompt = buildPlanAdjustmentPrompt({
-            template,
-            planFilePath: planFile,
-            planContent: currentPlan,
-            codeEditSummaryJson: aggregatedMergeSummaryJson
-          });
-          let adjustment: AdapterTurnResult;
-          try {
-            adjustment = await runTurnAndRecord(
-              context,
-              checkpoint,
-              buildAdjustmentRequest(
-                context,
-                feature.id,
-                prompt,
-                resolveReusableSessionId(feature, 'repo')
-              )
-            );
-          } catch (error) {
-            if (error instanceof TurnApprovalError) {
-              if (context.stopController?.isRequested) {
-                checkpoint.status = 'stopped';
-                checkpoint.currentState = 'stopped';
-                checkpoint.currentPhase = null;
-                await saveCheckpointSnapshot(context.config, checkpoint);
-                return {
-                  checkpoint,
-                  mergedCount
-                };
-              }
-              updateFeatureCheckpoint(checkpoint, feature.id, {
-                lastError: error.message
-              });
-              await announceProgress(
-                context,
-                `Plan adjustment for ${getFeatureLabel(feature)} failed: ${error.message}`
-              );
-              continue;
-            }
-            throw error;
-          }
-
-          if (!adjustment.ok) {
-            updateFeatureCheckpoint(checkpoint, feature.id, {
-              lastError: adjustment.error
-            });
-            await announceProgress(
-              context,
-              `Plan adjustment for ${getFeatureLabel(feature)} failed${adjustment.error ? `: ${adjustment.error}` : '.'}`
-            );
-            continue;
-          }
-
-          if (context.adapter.backend === 'mock') {
-            updateFeatureCheckpoint(checkpoint, feature.id, {
-              sessionId: adjustment.sessionId,
-              sessionScope: adjustment.sessionId ? 'repo' : null
-            });
-            continue;
-          }
-
-          const adjustedPlan = adjustment.finalMessage;
-          const shadowPlan = await maybeReadShadowPlan(context.config, feature.id);
-          assertLedgerSection(adjustedPlan);
-          const parsed = parseManifestDocument(adjustedPlan, {
-            ...(shadowPlan
-              ? {
-                  lastKnownGood: parseManifestDocument(shadowPlan).manifest
-                }
-              : {})
-          });
-          const normalizedPlan = updateManifestInMarkdown(adjustedPlan, parsed.manifest);
-          await writeTextFileAtomic(planFile, normalizedPlan);
-          await writeShadowPlan(context.config, feature.id, normalizedPlan);
-          updateFeatureCheckpoint(checkpoint, feature.id, {
-            manifest: parsed.manifest,
-            sessionId: adjustment.sessionId,
-            sessionScope: adjustment.sessionId ? 'repo' : null,
-            lastError: null
-          });
-        }
+      if ((await runPendingReanalysis(context, checkpoint, phase.index, mergeSummaries)) === 'stopped') {
+        return {
+          checkpoint,
+          mergedCount
+        };
       }
 
       if (shouldPauseForBudget(context.config, checkpoint)) {
@@ -2415,14 +2821,15 @@ const executePhases = async (
 const runRealWorkflow = async (
   input: RealRunInput
 ): Promise<OrchestratorOutput> => {
-  const { checkpoint, recoveredExecutions } = await loadOrCreateCheckpoint(input);
+  const { checkpoint, recoveredExecutions, resumeReanalysisPhaseIndex } = await loadOrCreateCheckpoint(input);
   let context: RealRunContext = {
     ...input,
     checkpoint,
     mergedCount: 0,
     plannedCount: 0,
     error: null,
-    recoveredExecutions
+    recoveredExecutions,
+    resumeReanalysisPhaseIndex
   };
 
   while (true) {
@@ -2446,6 +2853,38 @@ const runRealWorkflow = async (
       await saveCheckpointSnapshot(context.config, context.checkpoint);
     }
 
+    if (context.checkpoint.pendingMergeSummaries.length > 0) {
+      context.checkpoint.currentState = 're-analysis';
+      await announceProgress(
+        context,
+        `Resuming deferred re-analysis${context.resumeReanalysisPhaseIndex !== null ? ` from phase ${context.resumeReanalysisPhaseIndex}` : ''}.`
+      );
+      const replayStatus = await runPendingReanalysis(
+        context,
+        context.checkpoint,
+        context.resumeReanalysisPhaseIndex ?? 0,
+        context.checkpoint.pendingMergeSummaries
+      );
+      context = {
+        ...context,
+        resumeReanalysisPhaseIndex: null
+      };
+
+      if (
+        replayStatus === 'stopped' ||
+        context.checkpoint.status === 'failed' ||
+        context.checkpoint.status === 'paused' ||
+        context.checkpoint.status === 'stopped'
+      ) {
+        await saveCheckpointSnapshot(context.config, context.checkpoint);
+        return {
+          checkpoint: context.checkpoint,
+          mergedCount: context.mergedCount,
+          plannedCount: context.plannedCount
+        };
+      }
+    }
+
     const { checkpoint: scoredCheckpoint, scores, phases } = await scoreAndPhaseCheckpoint(context);
     context = {
       ...context,
@@ -2453,11 +2892,19 @@ const runRealWorkflow = async (
     };
 
     if (scores.length === 0) {
-      context.checkpoint.status = 'completed';
+      const unresolvedFailedFeatures = Object.values(context.checkpoint.features).filter(
+        (feature) => feature.status === 'failed'
+      );
+      context.checkpoint.status = unresolvedFailedFeatures.length > 0 ? 'failed' : 'completed';
       context.checkpoint.currentState = 'idle';
       context.checkpoint.currentPhase = null;
       await saveCheckpointSnapshot(context.config, context.checkpoint);
-      await announceProgress(context, 'Queue empty. OpenWeft has finished all queued work.');
+      await announceProgress(
+        context,
+        unresolvedFailedFeatures.length > 0
+          ? 'OpenWeft stopped with unresolved failed features requiring manual attention.'
+          : 'Queue empty. OpenWeft has finished all queued work.'
+      );
       return {
         checkpoint: context.checkpoint,
         mergedCount: context.mergedCount,

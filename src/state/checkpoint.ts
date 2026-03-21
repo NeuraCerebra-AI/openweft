@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { z } from 'zod';
 
 import { CheckpointCostTotalsSchema, createEmptyCostTotals } from '../domain/costs.js';
+import { EditSummarySchema } from '../domain/editSummary.js';
 import { BackendSchema, ManifestSchema, PriorityTierSchema } from '../domain/primitives.js';
 import { writeJsonFileAtomic } from '../fs/files.js';
 
@@ -43,12 +44,14 @@ export const FeatureCheckpointSchema = z
     attempts: z.number().int().nonnegative(),
     planFile: z.string().nullable(),
     promptBFile: z.string().nullable().optional(),
+    evolvedPlanFile: z.string().nullable().optional().default(null),
     branchName: z.string().nullable(),
     worktreePath: z.string().nullable(),
     sessionId: z.string().nullable(),
     sessionScope: z.enum(['repo', 'worktree']).nullable().optional(),
     backend: BackendSchema.nullable().optional(),
     manifest: ManifestSchema.nullable().optional(),
+    rerunEligible: z.boolean().optional().default(true),
     priorityScore: z.number().nullable().optional(),
     priorityTier: PriorityTierSchema.nullable().optional(),
     scoringCycles: z.number().int().nonnegative().optional(),
@@ -59,6 +62,15 @@ export const FeatureCheckpointSchema = z
   .strict();
 
 export type FeatureCheckpoint = z.infer<typeof FeatureCheckpointSchema>;
+
+export const PendingMergeSummarySchema = z
+  .object({
+    featureId: z.string(),
+    summary: EditSummarySchema
+  })
+  .strict();
+
+export type PendingMergeSummary = z.infer<typeof PendingMergeSummarySchema>;
 
 export const CheckpointSchema = z
   .object({
@@ -94,6 +106,7 @@ export const CheckpointSchema = z
         })
         .strict()
     ),
+    pendingMergeSummaries: z.array(PendingMergeSummarySchema).optional().default([]),
     cost: CheckpointCostTotalsSchema
   })
   .strict();
@@ -182,6 +195,7 @@ export const createEmptyCheckpoint = (input: {
     },
     features: {},
     pendingRequests: [],
+    pendingMergeSummaries: [],
     cost: createEmptyCostTotals()
   };
 };

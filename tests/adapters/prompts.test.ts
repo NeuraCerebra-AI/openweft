@@ -44,7 +44,8 @@ describe('adapter prompt helpers', () => {
     expect(prompt).toContain('/repo/feature_requests/001_plan.md');
     expect(prompt).toContain('=== PLAN START ===');
     expect(prompt).toContain('# Plan\nDo it');
-    expect(prompt).toContain('Do not modify the Prompt B file or the plan file');
+    expect(prompt).toContain('Do not modify the Prompt B file.');
+    expect(prompt).toContain('Only update the plan file to keep its ## Ledger truthful');
   });
 
   it('builds a conflict-resolution prompt with plan context when available', () => {

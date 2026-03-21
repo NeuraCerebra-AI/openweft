@@ -164,7 +164,6 @@ export const findReusableExecutionCommit = async (input: {
   branchName: string | null;
   baseBranch: string;
   expectedCommitMessage: string;
-  manifestPaths: readonly string[];
 }): Promise<ReusableExecutionCommit | null> => {
   try {
     if (!input.worktreePath || !input.branchName) {
@@ -205,11 +204,6 @@ export const findReusableExecutionCommit = async (input: {
       .map((entry) => normalizePathForComparison(entry.trim()))
       .filter(Boolean);
     if (changedPaths.length === 0) {
-      return null;
-    }
-
-    const manifestPathSet = new Set(input.manifestPaths.map((manifestPath) => normalizePathForComparison(manifestPath)));
-    if (changedPaths.some((changedPath) => !manifestPathSet.has(changedPath))) {
       return null;
     }
 
@@ -520,7 +514,7 @@ export const commitAllChanges = async (
   if (normalizedPaths.length > 0) {
     await git.add(normalizedPaths);
   } else {
-    await git.add(['-u']);
+    await git.add(['-A']);
   }
 
   const stagedPaths = (await git.diff(['--cached', '--name-only']))

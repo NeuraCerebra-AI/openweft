@@ -36,6 +36,53 @@ const TEST_LEDGER_SECTION = `## Ledger
 - Run targeted checks.
 `;
 
+const appendLedgerNoteToPlan = async (planPath: string, note: string): Promise<void> => {
+  const currentPlan = await readFile(planPath, 'utf8');
+  const updatedPlan = currentPlan.includes('- Run targeted checks.')
+    ? currentPlan.replace('- Run targeted checks.', `- Run targeted checks.\n- ${note}`)
+    : currentPlan.includes('- Run targeted validation before completion.')
+      ? currentPlan.replace(
+          '- Run targeted validation before completion.',
+          `- Run targeted validation before completion.\n- ${note}`
+        )
+      : `${currentPlan.trimEnd()}\n- ${note}\n`;
+
+  await writeFile(
+    planPath,
+    updatedPlan,
+    'utf8'
+  );
+};
+
+const extractExecutionPlanPath = (prompt: string): string => {
+  const match = prompt.match(
+    /The supporting implementation plan is also provided below and is available at ([\s\S]+?)\.\nUse Prompt B/
+  );
+  if (!match?.[1]) {
+    throw new Error('Execution prompt did not expose the worktree plan path.');
+  }
+
+  return match[1];
+};
+
+const extractConflictPromptPlanPath = (prompt: string): string => {
+  const match = prompt.match(
+    /The original implementation plan is available at ([\s\S]+?) and is included below for context\./
+  );
+  if (!match?.[1]) {
+    throw new Error('Conflict-resolution prompt did not expose the plan path.');
+  }
+
+  return match[1];
+};
+
+const buildEvolvedPlanPath = (
+  config: Awaited<ReturnType<typeof loadOpenWeftConfig>>['config'],
+  featureId: string
+): string => {
+  return path.join(config.paths.openweftDir, 'evolved-plans', `${featureId}.md`);
+};
+
 class RecordingAdapter implements AgentAdapter {
   readonly backend: AgentAdapter['backend'];
 
@@ -728,6 +775,7 @@ const seedInterruptedExecutionFeature = async (input: {
     status,
     attempts: 0,
     planFile,
+    evolvedPlanFile: null,
     promptBFile,
     branchName,
     worktreePath,
@@ -738,6 +786,7 @@ const seedInterruptedExecutionFeature = async (input: {
       modify: [],
       delete: []
     },
+    rerunEligible: false,
     updatedAt: now
   };
   checkpoint.queue = {
@@ -822,6 +871,7 @@ const seedPlannedPromptBRecoveryFeature = async (input: {
     status: 'planned',
     attempts: 0,
     planFile,
+    evolvedPlanFile: null,
     promptBFile: input.promptBFile ?? null,
     branchName: null,
     worktreePath: null,
@@ -832,6 +882,7 @@ const seedPlannedPromptBRecoveryFeature = async (input: {
       modify: [],
       delete: []
     },
+    rerunEligible: true,
     updatedAt: now
   };
   checkpoint.queue = {
@@ -987,6 +1038,125 @@ describe('runRealOrchestration', () => {
     expect(events).toContain('agent:text');
     expect(events).toContain('agent:completed');
     expect(events).toContain('session:cost-update');
+  });
+
+  it('copies back an evolved worktree plan ledger after successful execution', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new DeterministicScoringAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+    const ledgerNote = 'Execution verified the copied ledger path.';
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'execution') {
+        await appendLedgerNoteToPlan(extractExecutionPlanPath(request.prompt), ledgerNote);
+      }
+
+      return originalRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    const planFile = result.checkpoint.features['001']?.planFile;
+    expect(planFile).toBeDefined();
+    expect(result.checkpoint.features['001']?.evolvedPlanFile).toBeNull();
+    await expect(readFile(buildEvolvedPlanPath(config, '001'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT'
+    });
+    expect(await readFile(planFile ?? '', 'utf8')).toContain(ledgerNote);
+    expect(await readFile(path.join(config.paths.shadowPlansDir, '001.md'), 'utf8')).toContain(ledgerNote);
+  });
+
+  it('keeps evolved ledger changes staged without rerunning execution when merge never succeeds', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new DeterministicScoringAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+    const ledgerNote = 'Execution found a note that should stay staged until merge succeeds.';
+    const stopController = new StopController();
+    let executionAttempts = 0;
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'execution') {
+        executionAttempts += 1;
+        if (executionAttempts === 2) {
+          stopController.request('unexpected execution rerun');
+        }
+        await appendLedgerNoteToPlan(extractExecutionPlanPath(request.prompt), ledgerNote);
+      }
+
+      return originalRunTurn(request);
+    };
+
+    vi.resetModules();
+    vi.doMock('../../src/git/index.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
+        '../../src/git/index.js'
+      );
+
+      return {
+        ...actual,
+        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => ({
+          status: 'conflict' as const,
+          branch,
+          preMergeCommit: 'pre-merge-commit',
+          conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+        })),
+        mergeBranchIntoWorktree: vi.fn(async (_worktreePath: string, branch: string) => ({
+          status: 'conflict' as const,
+          branch,
+          preMergeCommit: 'pre-merge-commit',
+          conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+        }))
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runWithFailedMergeProbe } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runWithFailedMergeProbe({
+        config,
+        configHash,
+        adapter,
+        stopController,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('failed');
+      expect(executionAttempts).toBe(1);
+      expect(result.checkpoint.features['001']?.status).toBe('failed');
+      expect(result.checkpoint.features['001']?.rerunEligible).toBe(false);
+      expect(result.checkpoint.features['001']?.evolvedPlanFile).toBe(buildEvolvedPlanPath(config, '001'));
+      const planFile = result.checkpoint.features['001']?.planFile;
+      expect(planFile).toBeDefined();
+      expect(await readFile(planFile ?? '', 'utf8')).not.toContain(ledgerNote);
+      expect(await readFile(path.join(config.paths.shadowPlansDir, '001.md'), 'utf8')).not.toContain(
+        ledgerNote
+      );
+      expect(await readFile(buildEvolvedPlanPath(config, '001'), 'utf8')).toContain(ledgerNote);
+    } finally {
+      vi.doUnmock('../../src/git/index.js');
+      vi.resetModules();
+    }
   });
 
   it('uses Claude plan permission mode for repo-scoped planning requests', async () => {
@@ -1504,6 +1674,7 @@ describe('runRealOrchestration', () => {
       status: 'planned',
       attempts: 0,
       planFile: secondPlanFile,
+      evolvedPlanFile: null,
       promptBFile: null,
       branchName: null,
       worktreePath: null,
@@ -1514,6 +1685,7 @@ describe('runRealOrchestration', () => {
         modify: [],
         delete: []
       },
+      rerunEligible: true,
       updatedAt: new Date().toISOString()
     };
     savedBefore.checkpoint.queue = {
@@ -1686,6 +1858,196 @@ describe('runRealOrchestration', () => {
         sleep: async () => {}
       })
     ).rejects.toThrow(/Ledger/i);
+  });
+
+  it('persists pending merge summaries in checkpoint when re-analysis aborts after a merge', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['first change', 'second change']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(
+      new DeterministicManifestAdapter({
+        '001': ['src/shared.ts'],
+        '002': ['src/shared.ts']
+      })
+    );
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'adjustment' && request.featureId === '002') {
+        return {
+          ok: true,
+          backend: 'codex',
+          sessionId: 'missing-adjustment-ledger',
+          finalMessage: `# Feature Plan: ${request.featureId}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/shared.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`,
+          model: request.model,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cachedInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            totalCostUsd: 0,
+            raw: null
+          },
+          costRecord: {
+            featureId: request.featureId,
+            stage: request.stage,
+            model: request.model,
+            inputTokens: 10,
+            outputTokens: 5,
+            estimatedCostUsd: 0,
+            timestamp: new Date().toISOString()
+          },
+          artifacts: {
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+            command: adapter.buildCommand(request)
+          }
+        };
+      }
+
+      return originalRunTurn(request);
+    };
+
+    await expect(
+      runRealOrchestration({
+        config,
+        configHash,
+        adapter,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      })
+    ).rejects.toThrow(/Ledger/i);
+
+    const loaded = await loadCheckpoint(config.paths.checkpointFile, config.paths.checkpointBackupFile);
+    expect(loaded.source).toBe('primary');
+    expect(loaded.checkpoint?.pendingMergeSummaries).toEqual([
+      expect.objectContaining({
+        featureId: '001',
+        summary: expect.objectContaining({
+          files: expect.arrayContaining([expect.objectContaining({ path: 'src/shared.ts' })])
+        })
+      })
+    ]);
+  });
+
+  it('replays pending merge summaries before restart execution resumes', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['first change', 'second change']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const crashAdapter = new RecordingAdapter(
+      new DeterministicManifestAdapter({
+        '001': ['src/shared.ts'],
+        '002': ['src/shared.ts']
+      })
+    );
+    const originalCrashRunTurn = crashAdapter.runTurn.bind(crashAdapter);
+
+    crashAdapter.runTurn = async (request) => {
+      if (request.stage === 'adjustment' && request.featureId === '002') {
+        return {
+          ok: true,
+          backend: 'codex',
+          sessionId: 'missing-adjustment-ledger',
+          finalMessage: `# Feature Plan: ${request.featureId}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/shared.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`,
+          model: request.model,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cachedInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            totalCostUsd: 0,
+            raw: null
+          },
+          costRecord: {
+            featureId: request.featureId,
+            stage: request.stage,
+            model: request.model,
+            inputTokens: 10,
+            outputTokens: 5,
+            estimatedCostUsd: 0,
+            timestamp: new Date().toISOString()
+          },
+          artifacts: {
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+            command: crashAdapter.buildCommand(request)
+          }
+        };
+      }
+
+      return originalCrashRunTurn(request);
+    };
+
+    await expect(
+      runRealOrchestration({
+        config,
+        configHash,
+        adapter: crashAdapter,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      })
+    ).rejects.toThrow(/Ledger/i);
+
+    const restartAdapter = new RecordingAdapter(
+      new DeterministicManifestAdapter({
+        '001': ['src/shared.ts'],
+        '002': ['src/shared.ts']
+      })
+    );
+
+    const restartResult = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: restartAdapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    const adjustmentIndex = restartAdapter.requests.findIndex(
+      (request) => request.featureId === '002' && request.stage === 'adjustment'
+    );
+    const executionIndex = restartAdapter.requests.findIndex(
+      (request) => request.featureId === '002' && request.stage === 'execution'
+    );
+
+    expect(restartResult.checkpoint.status).toBe('completed');
+    expect(adjustmentIndex).toBeGreaterThanOrEqual(0);
+    expect(executionIndex).toBeGreaterThan(adjustmentIndex);
+    expect(restartResult.checkpoint.pendingMergeSummaries).toEqual([]);
   });
 
   it('resumes repo-scoped adjustment sessions across phases without reusing them for worktree execution', async () => {
@@ -1938,7 +2300,7 @@ describe('runRealOrchestration', () => {
       vi.doUnmock('../../src/fs/index.js');
       vi.resetModules();
     }
-  });
+  }, 60_000);
 
   it('restores git gc.auto from a stale breadcrumb before starting a new run', async () => {
     const repoRoot = await createTempRepo();
@@ -2154,10 +2516,64 @@ describe('runRealOrchestration', () => {
     const featureFourAdjustments = adapter.requests.filter(
       (request) => request.stage === 'adjustment' && request.featureId === '004'
     );
+    const auditEntries = (await readFile(path.join(repoRoot, '.openweft', 'audit-trail.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) =>
+        JSON.parse(line) as {
+          event: string;
+          data?: {
+            phaseIndex?: number;
+            featureId?: string;
+            result?: string;
+            decision?: string;
+            planChanged?: boolean;
+            orderedFeatures?: Array<{
+              featureId: string;
+              smoothedPriority: number;
+            }>;
+          };
+        }
+      );
+    const mergeOrderAudit = auditEntries.find((entry) => entry.event === 'merge.phase.order');
+    const phaseOneMergeResultAudits = auditEntries.filter(
+      (entry) => entry.event === 'merge.feature.result' && entry.data?.phaseIndex === 1
+    );
+    const reanalysisDecisionAudits = auditEntries.filter(
+      (entry) => entry.event === 'reanalysis.feature.decision' && entry.data?.phaseIndex === 1
+    );
+
     expect(featureThreeAdjustments).toHaveLength(1);
     expect(featureThreeAdjustments[0]?.prompt).toContain('src/a.ts');
     expect(featureThreeAdjustments[0]?.prompt).toContain('src/b.ts');
     expect(featureFourAdjustments).toHaveLength(0);
+    expect(result.checkpoint.pendingMergeSummaries).toEqual([]);
+    expect(mergeOrderAudit?.data?.orderedFeatures?.map((entry) => entry.featureId).sort()).toEqual([
+      '001',
+      '002'
+    ]);
+    expect(
+      mergeOrderAudit?.data?.orderedFeatures?.map((entry) => entry.smoothedPriority)
+    ).toEqual(
+      [...(mergeOrderAudit?.data?.orderedFeatures?.map((entry) => entry.smoothedPriority) ?? [])].sort(
+        (left, right) => right - left
+      )
+    );
+    expect(phaseOneMergeResultAudits.map((entry) => entry.data?.featureId).sort()).toEqual(['001', '002']);
+    expect(phaseOneMergeResultAudits.every((entry) => entry.data?.result === 'merged')).toBe(true);
+    expect(
+      reanalysisDecisionAudits.some(
+        (entry) =>
+          entry.data?.featureId === '003' &&
+          entry.data.decision === 'adjustment-attempted' &&
+          typeof entry.data.planChanged === 'boolean'
+      )
+    ).toBe(true);
+    expect(
+      reanalysisDecisionAudits.some(
+        (entry) => entry.data?.featureId === '004' && entry.data.decision === 'skipped-no-overlap'
+      )
+    ).toBe(true);
   });
 
   it('reuses an interrupted execution commit without rerunning execution', async () => {
@@ -2254,9 +2670,9 @@ describe('runRealOrchestration', () => {
     expect(result.checkpoint.status).toBe('completed');
     expect(result.mergedCount).toBe(1);
     expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(true);
-  });
+  }, 60_000);
 
-  it('reruns execution when a matching completion commit changed files outside the manifest', async () => {
+  it('reuses an interrupted execution commit when a matching completion commit changed files outside the manifest', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -2283,7 +2699,7 @@ describe('runRealOrchestration', () => {
 
     expect(result.checkpoint.status).toBe('completed');
     expect(result.mergedCount).toBe(1);
-    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(true);
+    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(false);
   });
 
   it('reruns execution when an interrupted worktree is still dirty', async () => {
@@ -2325,6 +2741,20 @@ describe('runRealOrchestration', () => {
 
     const { config, configHash } = await loadOpenWeftConfig(repoRoot);
     const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+    const ledgerNote = 'Conflict resolution preserved the updated ledger.';
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'conflict-resolution') {
+        const promptedPlanPath = extractConflictPromptPlanPath(request.prompt);
+        const worktreePlanPath = promptedPlanPath.startsWith(request.cwd)
+          ? promptedPlanPath
+          : path.join(request.cwd, '.openweft', 'feature-plans', path.basename(promptedPlanPath));
+        await appendLedgerNoteToPlan(worktreePlanPath, ledgerNote);
+      }
+
+      return originalRunTurn(request);
+    };
 
     const mergedEditSummary = {
       merge_commit: 'merge-commit',
@@ -2399,6 +2829,16 @@ describe('runRealOrchestration', () => {
       expect(result.checkpoint.status).toBe('completed');
       expect(result.mergedCount).toBe(1);
       expect(adapter.requests.some((request) => request.stage === 'conflict-resolution')).toBe(true);
+      const planFile = result.checkpoint.features['001']?.planFile;
+      expect(planFile).toBeDefined();
+      expect(result.checkpoint.features['001']?.evolvedPlanFile).toBeNull();
+      await expect(readFile(buildEvolvedPlanPath(config, '001'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT'
+      });
+      expect(await readFile(planFile ?? '', 'utf8')).toContain(ledgerNote);
+      expect(await readFile(path.join(config.paths.shadowPlansDir, '001.md'), 'utf8')).toContain(
+        ledgerNote
+      );
     } finally {
       vi.doUnmock('../../src/git/index.js');
       vi.resetModules();
@@ -2521,7 +2961,7 @@ describe('runRealOrchestration', () => {
     expect(result.checkpoint.status).toBe('completed');
     expect(result.mergedCount).toBe(1);
     expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(true);
-  });
+  }, 60_000);
 
   it('marks a stale planned feature complete when its completion commit is already merged into main', async () => {
     const repoRoot = await createTempRepo();

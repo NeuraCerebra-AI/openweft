@@ -62,6 +62,11 @@ const createTtyHarness = async (input: {
   repoRoot: string;
   runRealOrchestration: (input: Record<string, unknown>) => Promise<StartResult>;
   sleep?: (ms: number) => Promise<void>;
+  handlerOverrides?: {
+    detectCodex?: () => Promise<{ installed: boolean; authenticated: boolean }>;
+    detectClaude?: () => Promise<{ installed: boolean; authenticated: boolean }>;
+    getEnv?: () => NodeJS.ProcessEnv;
+  };
   mockFsIndex?: (
     actualFs: typeof import('../../src/fs/index.js')
   ) => Partial<typeof import('../../src/fs/index.js')>;
@@ -120,7 +125,8 @@ const createTtyHarness = async (input: {
     handlers: createCommandHandlers({
       getCwd: () => input.repoRoot,
       writeLine: () => {},
-      sleep: input.sleep ?? (async () => {})
+      sleep: input.sleep ?? (async () => {}),
+      ...(input.handlerOverrides ?? {})
     }),
     getAppProps: () => appProps,
     getStore: () => (appProps?.store as StoreApi<UIStore> | undefined) ?? null,
@@ -1047,6 +1053,57 @@ describe('TTY start handler', () => {
     expect(queueContentAtStart).toContain('# openweft queue format: v1');
     expect(parseQueueFile(queueContentAtStart ?? '').pending.map((entry) => entry.request)).toEqual(['beta']);
 
+    await launchPromise;
+  });
+
+  it('keeps the ready-state dashboard open and shows an error when the configured backend is not ready', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-launch-backend-preflight-'));
+    let runCount = 0;
+
+    await writeLaunchProjectFiles(repoRoot, {
+      queueContent: 'alpha\n'
+    });
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async () => {
+        runCount += 1;
+        return {
+          checkpoint: { status: 'completed' },
+          mergedCount: 0,
+          plannedCount: 0
+        };
+      },
+      handlerOverrides: {
+        detectCodex: async () => ({
+          installed: false,
+          authenticated: false
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        })
+      }
+    });
+
+    const launchPromise = harness.handlers.launch();
+    await waitFor(() => harness.getAppProps() !== null && harness.getStore() !== null);
+
+    const props = harness.getAppProps();
+    const store = harness.getStore();
+    if (!props || !store) {
+      throw new Error('Expected App props and store to be captured.');
+    }
+
+    (props.onStartRequest as () => void)();
+    await waitFor(() => store.getState().notice !== null);
+
+    expect(runCount).toBe(0);
+    expect(store.getState().executionRequested).toBe(false);
+    expect(store.getState().notice?.level).toBe('error');
+    expect(store.getState().notice?.message).toMatch(/backend "codex".*not installed/i);
+
+    (props.onQuitRequest as () => void)();
     await launchPromise;
   });
 

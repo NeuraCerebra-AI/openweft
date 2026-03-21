@@ -405,6 +405,136 @@ describe('command handlers', () => {
     await expect(readFile(path.join(repoRoot, 'feature_requests', 'queue.txt'), 'utf8')).rejects.toThrow();
   });
 
+  it('fails start before orchestration when the configured backend CLI is missing', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-start-missing-backend-'));
+    const originalIsTTY = process.stdout.isTTY;
+
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: false,
+      configurable: true
+    });
+
+    try {
+      const initProgram = buildProgram(
+        createCommandHandlers({
+          getCwd: () => repoRoot,
+          writeLine: () => {},
+          detectGitRepo: async () => true,
+          detectCodex: async () => ({
+            installed: true,
+            authenticated: true
+          }),
+          detectClaude: async () => ({
+            installed: true,
+            authenticated: true
+          })
+        })
+      );
+
+      await initProgram.parseAsync(['init'], { from: 'user' });
+
+      const startProgram = buildProgram(
+        createCommandHandlers({
+          getCwd: () => repoRoot,
+          writeLine: () => {},
+          detectCodex: async () => ({
+            installed: false,
+            authenticated: false
+          }),
+          detectClaude: async () => ({
+            installed: true,
+            authenticated: true
+          })
+        })
+      );
+
+      await expect(startProgram.parseAsync(['start'], { from: 'user' })).rejects.toThrow(
+        /backend "codex".*not installed/i
+      );
+      await expect(readFile(path.join(repoRoot, '.openweft', 'checkpoint.json'), 'utf8')).rejects.toThrow();
+    } finally {
+      Object.defineProperty(process.stdout, 'isTTY', {
+        value: originalIsTTY,
+        configurable: true
+      });
+    }
+  });
+
+  it('fails api_key auth mode before tmux launch when the required env var is missing', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-start-api-key-'));
+    let tmuxInput: TmuxSpawnInput | null = null;
+
+    const initProgram = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: () => {},
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        })
+      })
+    );
+
+    await initProgram.parseAsync(['init'], { from: 'user' });
+
+    await writeFile(
+      path.join(repoRoot, '.openweftrc.json'),
+      `${JSON.stringify(
+        {
+          backend: 'codex',
+          auth: {
+            codex: {
+              method: 'api_key',
+              envVar: 'OPENWEFT_TEST_CODEX_KEY'
+            },
+            claude: {
+              method: 'subscription'
+            }
+          }
+        },
+        null,
+        2
+      )}\n`,
+      'utf8'
+    );
+
+    const startProgram = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: () => {},
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: false
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectTmux: async () => true,
+        getProcessArgv: () => ['node', '/tmp/openweft.js', 'start', '--tmux'],
+        getExecPath: () => '/usr/local/bin/node',
+        getEnv: () => ({}),
+        spawnTmuxSession: async (input) => {
+          tmuxInput = input;
+          return {
+            sessionName: input.sessionName ?? 'openweft-test',
+            slotLogFiles: []
+          };
+        }
+      })
+    );
+
+    await expect(startProgram.parseAsync(['start', '--tmux'], { from: 'user' })).rejects.toThrow(
+      /OPENWEFT_TEST_CODEX_KEY/
+    );
+    expect(tmuxInput).toBeNull();
+  });
+
   it('refuses status before OpenWeft has been initialized', async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-status-no-config-'));
     const program = buildProgram(

@@ -15,6 +15,7 @@ export interface RuntimePaths {
   auditLogFile: string;
   worktreesDir: string;
   shadowPlansDir: string;
+  evolvedPlansDir: string;
   promptBArtifactsDir: string;
 }
 
@@ -53,6 +54,7 @@ export const buildRuntimePaths = (input: {
     auditLogFile: path.join(openweftDir, 'audit-trail.jsonl'),
     worktreesDir: path.join(openweftDir, 'worktrees'),
     shadowPlansDir: path.join(openweftDir, 'shadow-plans'),
+    evolvedPlansDir: path.join(openweftDir, 'evolved-plans'),
     promptBArtifactsDir: path.join(featureRequestsDir, 'briefs')
   };
 };

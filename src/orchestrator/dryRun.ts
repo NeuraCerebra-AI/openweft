@@ -244,6 +244,7 @@ const planPendingRequests = async (
       status: 'planned',
       attempts: 0,
       planFile: planFilePath,
+      evolvedPlanFile: null,
       promptBFile: promptBFilePath,
       branchName: null,
       worktreePath: null,
@@ -253,6 +254,7 @@ const planPendingRequests = async (
       manifest: parsedPlan.manifest,
       priorityScore: 1,
       priorityTier: 'medium',
+      rerunEligible: true,
       updatedAt: timestamp()
     };
     workingQueue = parseQueueFile(updatedQueueContent);

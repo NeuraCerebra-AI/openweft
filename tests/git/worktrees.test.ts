@@ -22,6 +22,7 @@ import {
   restoreAutoGc,
   setAutoGc
 } from '../../src/git/index.js';
+import { findReusableExecutionCommit } from '../../src/git/worktrees.js';
 
 const createTempRepo = async (baseBranch = 'main'): Promise<string> => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-git-'));
@@ -251,6 +252,41 @@ describe('git worktree infrastructure', () => {
     await expect(mergeBranchIntoCurrent(repoRoot, 'missing-branch')).rejects.toThrow();
   });
 
+  it('reuses a clean OpenWeft completion commit even when it changed files outside the manifest', async () => {
+    const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
+    const worktreePath = path.join(worktreesDir, '001');
+    const branchName = 'openweft-001-reuse';
+
+    await mkdir(worktreesDir, { recursive: true });
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName
+    });
+
+    await mkdir(path.join(worktreePath, 'src'), { recursive: true });
+    await writeFile(path.join(worktreePath, 'src', 'target.ts'), 'export const target = 1;\n', 'utf8');
+    await writeFile(path.join(worktreePath, 'src', 'extra.ts'), 'export const extra = 1;\n', 'utf8');
+    const worktreeGit = simpleGit(worktreePath);
+    await worktreeGit.add(['src/target.ts', 'src/extra.ts']);
+    await worktreeGit.commit('openweft: complete feature 001');
+
+    const reusable = await findReusableExecutionCommit({
+      repoRoot,
+      worktreesDir,
+      worktreePath,
+      branchName,
+      baseBranch: 'main',
+      expectedCommitMessage: 'openweft: complete feature 001'
+    });
+
+    expect(reusable).toEqual({
+      kind: 'reusable',
+      branchName,
+      worktreePath
+    });
+  });
+
   it('aborts merge state before returning a conflict from mergeBranchIntoCurrent', async () => {
     const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-conflict-state');
 
@@ -397,7 +433,7 @@ describe('git worktree infrastructure', () => {
     expect(await hasChangesSince(worktreePath, created.head)).toBe(true);
   });
 
-  it('does not commit unrelated untracked files by default', async () => {
+  it('stages all changes including new untracked files when no paths are specified', async () => {
     const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-untracked');
     await createWorktree({
       repoRoot,
@@ -406,11 +442,11 @@ describe('git worktree infrastructure', () => {
     });
 
     await writeFile(path.join(worktreePath, 'scratch.txt'), 'temp\n', 'utf8');
-    const commit = await commitAllChanges(worktreePath, 'ignore scratch artifact');
+    const commit = await commitAllChanges(worktreePath, 'include all worker output');
 
-    expect(commit).toBeNull();
+    expect(commit).not.toBeNull();
     const status = await simpleGit(worktreePath).status();
-    expect(status.not_added).toContain('scratch.txt');
+    expect(status.not_added).not.toContain('scratch.txt');
   });
 
   it('can stage manifest-listed new files without picking up other untracked files', async () => {
