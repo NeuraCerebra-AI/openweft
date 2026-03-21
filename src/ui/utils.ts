@@ -16,9 +16,9 @@ export interface StatusIconResult {
 export const getStatusIcon = (status: AgentStatus, spinnerFrame = 0): StatusIconResult => {
   switch (status) {
     case 'running': return { icon: SPINNER_FRAMES[spinnerFrame % SPINNER_FRAMES.length] ?? SPINNER_FRAMES[0], colorKey: 'blue' };
-    case 'completed': return { icon: '✓', colorKey: 'green' };
-    case 'failed': return { icon: '✗', colorKey: 'red' };
-    case 'queued': return { icon: '○', colorKey: 'muted' };
-    case 'approval': return { icon: '⚠', colorKey: 'yellow' };
+    case 'completed': return { icon: '✔', colorKey: 'green' };
+    case 'failed': return { icon: '✘', colorKey: 'red' };
+    case 'queued': return { icon: '◌', colorKey: 'muted' };
+    case 'approval': return { icon: '⚑', colorKey: 'yellow' };
   }
 };

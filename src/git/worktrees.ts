@@ -667,6 +667,12 @@ export const mergeBranchIntoWorktree = async (
       throw error;
     }
 
+    try {
+      await git.raw(['merge', '--abort']);
+    } catch {
+      // best-effort; ignore failure
+    }
+
     return {
       status: 'conflict',
       branch,

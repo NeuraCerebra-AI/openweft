@@ -482,7 +482,8 @@ export const getNextFeatureIdFromQueue = (existingNames: Iterable<string>, queue
   }
 
   for (const processed of parseQueueFile(queueContent).processed) {
-    highest = Math.max(highest, Number.parseInt(processed.featureId, 10));
+    const n = Number.parseInt(processed.featureId, 10);
+    if (!Number.isNaN(n)) highest = Math.max(highest, n);
   }
 
   return highest + 1;

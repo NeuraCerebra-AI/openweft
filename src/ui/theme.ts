@@ -1,5 +1,14 @@
 import { createContext, useContext } from 'react';
 
+export interface StatusGutterColors {
+  readonly running: string;
+  readonly completed: string;
+  readonly failed: string;
+  readonly queued: string;
+  readonly approval: string;
+  readonly focused: string;
+}
+
 export interface ThemeColors {
   readonly bg: string;
   readonly bgDeep: string;
@@ -19,6 +28,11 @@ export interface ThemeColors {
   readonly red: string;
   readonly yellow: string;
   readonly muted: string;
+  // Semantic aliases
+  readonly metricTokens: string;
+  readonly metricCost: string;
+  readonly metricFiles: string;
+  readonly statusGutter: StatusGutterColors;
 }
 
 export interface ThemeBorders {
@@ -52,6 +66,18 @@ export const catppuccinMocha: Theme = {
     red: '#f38ba8',
     yellow: '#f9e2af',
     muted: '#585b70',
+    // Semantic aliases
+    metricTokens: '#fab387',  // = peach
+    metricCost: '#f9e2af',    // = yellow
+    metricFiles: '#a6e3a1',   // = green
+    statusGutter: {
+      running: '#a6e3a1',     // = green
+      completed: '#585b70',   // = surface2/muted
+      failed: '#f38ba8',      // = red
+      queued: '#94e2d5',      // = teal
+      approval: '#f9e2af',    // = yellow
+      focused: '#89b4fa',     // = blue
+    },
   },
   borders: {
     panel: 'single',

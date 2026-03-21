@@ -396,8 +396,8 @@ export const createCommandHandlers = (
               }
             }
           : {}),
-        ...(input.onRemoveAgent ? { onRemoveAgent: (agentId: string) => { void input.onRemoveAgent!(agentId, uiStore); } } : {}),
-        ...(input.onAddRequest ? { onAddRequest: (request: string) => { void input.onAddRequest!(request, uiStore); } } : {}),
+        ...(input.onRemoveAgent ? { onRemoveAgent: (agentId: string) => { void (async () => { try { await input.onRemoveAgent!(agentId, uiStore); } catch { uiStore.getState().setNotice({ level: 'error', message: 'Failed to write to queue file' }); } })(); } } : {}),
+        ...(input.onAddRequest ? { onAddRequest: (request: string) => { void (async () => { try { await input.onAddRequest!(request, uiStore); } catch { uiStore.getState().setNotice({ level: 'error', message: 'Failed to write to queue file' }); } })(); } } : {}),
       }),
       { exitOnCtrlC: false }
     );
@@ -431,12 +431,35 @@ export const createCommandHandlers = (
         onEvent,
       });
 
+      const completedFeatures = Object.values(result.checkpoint.features ?? {})
+        .filter((f) => f.status === 'completed')
+        .map((f) => ({
+          id: f.id,
+          request: f.title ?? f.request,
+          mergeCommit: f.mergeCommit ?? null
+        }));
+
+      uiStore.getState().setCompletedFeatures(completedFeatures);
       uiStore.getState().setCompletion({
         status: result.checkpoint.status,
         plannedCount: result.plannedCount,
         mergedCount: result.mergedCount,
       });
-      await resolvedDependencies.sleep(1500);
+
+      // Wait for user to dismiss the completion screen (or timeout after 60s)
+      let unsub: (() => void) | undefined;
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          unsub = uiStore.subscribe((state) => {
+            if (state.completionDismissed) {
+              unsub?.();
+              resolve();
+            }
+          });
+        }),
+        resolvedDependencies.sleep(60000)
+      ]);
+      unsub?.();
     } finally {
       process.off('SIGINT', signalHandler);
       process.off('SIGTERM', signalHandler);
@@ -534,6 +557,17 @@ export const createCommandHandlers = (
           prePopulate: (store) => {
             // Checkpoint features (not removable)
             if (checkpointResult.checkpoint) {
+              const completed = Object.values(checkpointResult.checkpoint.features)
+                .filter((f) => f.status === 'completed')
+                .map((f) => ({
+                  id: f.id,
+                  request: f.title ?? f.request,
+                  mergeCommit: f.mergeCommit ?? null
+                }));
+              if (completed.length > 0) {
+                store.getState().setCompletedFeatures(completed);
+              }
+
               for (const feature of Object.values(checkpointResult.checkpoint.features)) {
                 if (!isActionableCheckpointFeature(feature)) {
                   continue;
@@ -913,9 +947,7 @@ export const createCommandHandlers = (
       process.on('SIGTERM', signalHandler);
 
       try {
-        if (tmuxMonitor) {
-          await writeTextFileAtomic(config.paths.pidFile, `${process.pid}\n`);
-        }
+        await writeTextFileAtomic(config.paths.pidFile, `${process.pid}\n`);
 
         if (options.dryRun) {
           const result = await runDryRunOrchestration({
@@ -954,9 +986,7 @@ export const createCommandHandlers = (
         process.off('SIGINT', signalHandler);
         process.off('SIGTERM', signalHandler);
 
-        if (process.env.OPENWEFT_BACKGROUND_CHILD === '1' || tmuxMonitor) {
-          await cleanupBackgroundPidIfOwned(config.paths.pidFile);
-        }
+        await cleanupBackgroundPidIfOwned(config.paths.pidFile);
       }
     },
     status: async () => {
@@ -1081,8 +1111,14 @@ export const createCommandHandlers = (
         }
       }
 
+      try {
+        resolvedDependencies.sendSignal(background.pid, 'SIGKILL');
+      } catch {
+        // process may have already exited
+      }
+      await rm(config.paths.pidFile, { force: true });
       resolvedDependencies.writeLine(
-        'Stop was requested, but the background process is still winding down. Check `openweft status` again shortly.'
+        `Background process ${background.pid} did not exit after SIGTERM; sent SIGKILL and removed PID file.`
       );
     }
   };

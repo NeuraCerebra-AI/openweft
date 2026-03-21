@@ -21,21 +21,21 @@ describe('getStatusIcon', () => {
 
   it('returns checkmark for completed', () => {
     const result = getStatusIcon('completed');
-    expect(result.icon).toBe('✓');
+    expect(result.icon).toBe('✔');
   });
 
   it('returns cross for failed', () => {
     const result = getStatusIcon('failed');
-    expect(result.icon).toBe('✗');
+    expect(result.icon).toBe('✘');
   });
 
   it('returns circle for queued', () => {
     const result = getStatusIcon('queued');
-    expect(result.icon).toBe('○');
+    expect(result.icon).toBe('◌');
   });
 
   it('returns warning for approval', () => {
     const result = getStatusIcon('approval');
-    expect(result.icon).toBe('⚠');
+    expect(result.icon).toBe('⚑');
   });
 });

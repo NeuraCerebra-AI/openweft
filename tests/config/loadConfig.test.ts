@@ -94,4 +94,21 @@ describe('loadOpenWeftConfig', () => {
 
     await expect(loadOpenWeftConfig(tempDirectory)).rejects.toThrow(/backend/);
   });
+
+  it('rejects unsupported audio config fields', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-audio-'));
+    await writeFile(
+      path.join(tempDirectory, '.openweftrc.json'),
+      JSON.stringify({
+        ...getDefaultConfig(),
+        audio: {
+          enabled: true,
+          station: 'groovesalad'
+        }
+      }),
+      'utf8'
+    );
+
+    await expect(loadOpenWeftConfig(tempDirectory)).rejects.toThrow(/audio/);
+  });
 });
