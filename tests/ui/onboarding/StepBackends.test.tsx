@@ -28,6 +28,7 @@ const bothAuthedProps = {
   codexStatus: bothAuthedStatus,
   claudeStatus: bothAuthedStatus,
   onAdvance: vi.fn(),
+  onBack: vi.fn(),
   onExit: vi.fn(),
   onRedetectBackends: makeRedetect(bothAuthedStatus, bothAuthedStatus),
 };
@@ -36,6 +37,7 @@ const codexOnlyProps = {
   codexStatus: bothAuthedStatus,
   claudeStatus: neitherAuthedStatus,
   onAdvance: vi.fn(),
+  onBack: vi.fn(),
   onExit: vi.fn(),
   onRedetectBackends: makeRedetect(bothAuthedStatus, neitherAuthedStatus),
 };
@@ -44,6 +46,7 @@ const claudeOnlyProps = {
   codexStatus: neitherAuthedStatus,
   claudeStatus: bothAuthedStatus,
   onAdvance: vi.fn(),
+  onBack: vi.fn(),
   onExit: vi.fn(),
   onRedetectBackends: makeRedetect(neitherAuthedStatus, bothAuthedStatus),
 };
@@ -52,6 +55,7 @@ const neitherAuthedProps = {
   codexStatus: neitherAuthedStatus,
   claudeStatus: neitherAuthedStatus,
   onAdvance: vi.fn(),
+  onBack: vi.fn(),
   onExit: vi.fn(),
   onRedetectBackends: makeRedetect(neitherAuthedStatus, neitherAuthedStatus),
 };
@@ -60,6 +64,7 @@ const neitherInstalledProps = {
   codexStatus: notInstalledStatus,
   claudeStatus: notInstalledStatus,
   onAdvance: vi.fn(),
+  onBack: vi.fn(),
   onExit: vi.fn(),
   onRedetectBackends: makeRedetect(notInstalledStatus, notInstalledStatus),
 };
@@ -123,6 +128,7 @@ describe('StepBackends', () => {
         codexStatus: bothAuthedStatus,
         claudeStatus: bothAuthedStatus,
         onAdvance,
+        onBack: vi.fn(),
         onExit: vi.fn(),
         onRedetectBackends: makeRedetect(bothAuthedStatus, bothAuthedStatus),
       };
@@ -130,7 +136,15 @@ describe('StepBackends', () => {
       await waitForMount();
       stdin.write('\r'); // confirm first option (Codex)
       await waitForUpdate();
-      expect(onAdvance).toHaveBeenCalledWith('codex');
+      stdin.write('\r'); // confirm default codex model
+      await waitForUpdate();
+      stdin.write('\r'); // confirm default codex effort
+      await waitForUpdate();
+      expect(onAdvance).toHaveBeenCalledWith({
+        backend: 'codex',
+        model: 'gpt-5.3-codex',
+        effort: 'medium'
+      });
     });
 
     it('calls onAdvance with "claude" when Claude is selected via Enter', async () => {
@@ -139,6 +153,7 @@ describe('StepBackends', () => {
         codexStatus: bothAuthedStatus,
         claudeStatus: bothAuthedStatus,
         onAdvance,
+        onBack: vi.fn(),
         onExit: vi.fn(),
         onRedetectBackends: makeRedetect(bothAuthedStatus, bothAuthedStatus),
       };
@@ -148,7 +163,15 @@ describe('StepBackends', () => {
       await waitForUpdate();
       stdin.write('\r'); // confirm
       await waitForUpdate();
-      expect(onAdvance).toHaveBeenCalledWith('claude');
+      stdin.write('\r'); // confirm default claude model
+      await waitForUpdate();
+      stdin.write('\r'); // confirm default claude effort
+      await waitForUpdate();
+      expect(onAdvance).toHaveBeenCalledWith({
+        backend: 'claude',
+        model: 'claude-sonnet-4-6',
+        effort: 'medium'
+      });
     });
 
     it('calls onExit when Esc is pressed in select mode', async () => {
@@ -157,6 +180,7 @@ describe('StepBackends', () => {
         codexStatus: bothAuthedStatus,
         claudeStatus: bothAuthedStatus,
         onAdvance: vi.fn(),
+        onBack: vi.fn(),
         onExit,
         onRedetectBackends: makeRedetect(bothAuthedStatus, bothAuthedStatus),
       };
@@ -234,6 +258,7 @@ describe('StepBackends', () => {
         codexStatus: bothAuthedStatus,
         claudeStatus: neitherAuthedStatus,
         onAdvance,
+        onBack: vi.fn(),
         onExit: vi.fn(),
         onRedetectBackends: makeRedetect(bothAuthedStatus, neitherAuthedStatus),
       };
@@ -241,7 +266,15 @@ describe('StepBackends', () => {
       await waitForMount();
       stdin.write('\r');
       await waitForUpdate();
-      expect(onAdvance).toHaveBeenCalledWith('codex');
+      stdin.write('\r');
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+      expect(onAdvance).toHaveBeenCalledWith({
+        backend: 'codex',
+        model: 'gpt-5.3-codex',
+        effort: 'medium'
+      });
     });
 
     it('calls onAdvance with "claude" when Enter is pressed and claude is auto-selected', async () => {
@@ -250,6 +283,7 @@ describe('StepBackends', () => {
         codexStatus: neitherAuthedStatus,
         claudeStatus: bothAuthedStatus,
         onAdvance,
+        onBack: vi.fn(),
         onExit: vi.fn(),
         onRedetectBackends: makeRedetect(neitherAuthedStatus, bothAuthedStatus),
       };
@@ -257,7 +291,15 @@ describe('StepBackends', () => {
       await waitForMount();
       stdin.write('\r');
       await waitForUpdate();
-      expect(onAdvance).toHaveBeenCalledWith('claude');
+      stdin.write('\r');
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+      expect(onAdvance).toHaveBeenCalledWith({
+        backend: 'claude',
+        model: 'claude-sonnet-4-6',
+        effort: 'medium'
+      });
     });
 
     it('shows ! yellow indicator for installed-but-not-authed backend', async () => {
@@ -280,6 +322,7 @@ describe('StepBackends', () => {
         codexStatus: bothAuthedStatus,
         claudeStatus: neitherAuthedStatus,
         onAdvance: vi.fn(),
+        onBack: vi.fn(),
         onExit,
         onRedetectBackends: makeRedetect(bothAuthedStatus, neitherAuthedStatus),
       };
@@ -355,6 +398,7 @@ describe('StepBackends', () => {
         codexStatus: neitherAuthedStatus,
         claudeStatus: neitherAuthedStatus,
         onAdvance: vi.fn(),
+        onBack: vi.fn(),
         onExit,
         onRedetectBackends: makeRedetect(neitherAuthedStatus, neitherAuthedStatus),
       };
@@ -445,6 +489,7 @@ describe('StepBackends', () => {
         codexStatus: bothAuthedStatus,
         claudeStatus: bothAuthedStatus,
         onAdvance: vi.fn(),
+        onBack: vi.fn(),
         onExit: vi.fn(),
         onRedetectBackends,
       };
@@ -460,6 +505,7 @@ describe('StepBackends', () => {
         codexStatus: neitherAuthedStatus,
         claudeStatus: neitherAuthedStatus,
         onAdvance: vi.fn(),
+        onBack: vi.fn(),
         onExit: vi.fn(),
         onRedetectBackends,
       };
@@ -487,6 +533,7 @@ describe('StepBackends', () => {
         codexStatus: neitherAuthedStatus,
         claudeStatus: neitherAuthedStatus,
         onAdvance: vi.fn(),
+        onBack: vi.fn(),
         onExit: vi.fn(),
         onRedetectBackends,
       };

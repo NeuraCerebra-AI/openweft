@@ -17,6 +17,8 @@ import {
 } from '../../cli/handlers.js';
 import type { OnboardingState, WizardCallbacks, WizardDependencies } from './types.js';
 
+const SUPERPOWERS_REPO_URL = 'https://github.com/obra/superpowers';
+
 /**
  * Run the interactive onboarding wizard.
  *
@@ -57,7 +59,7 @@ export async function runOnboardingWizard(
       await deps.createInitialCommit();
     },
 
-    onRunInit: async (backend) => {
+    onRunInit: async (selection) => {
       const cwd = deps.getCwd();
       const runtimePaths = buildDefaultRuntimePaths(cwd);
 
@@ -71,7 +73,18 @@ export async function runOnboardingWizard(
       // Write config
       const configPath = path.join(cwd, '.openweftrc.json');
       const defaultConfig = getDefaultConfig();
-      const config = { ...defaultConfig, backend };
+      const config = {
+        ...defaultConfig,
+        backend: selection.backend,
+        models: {
+          ...defaultConfig.models,
+          [selection.backend]: selection.model
+        },
+        effort: {
+          ...defaultConfig.effort,
+          [selection.backend]: selection.effort
+        }
+      };
       await writeTextFileAtomic(configPath, JSON.stringify(config, null, 2) + '\n');
 
       // Handle .gitignore
@@ -101,6 +114,10 @@ export async function runOnboardingWizard(
       ]);
       return { codex: redetectedCodex, claude: redetectedClaude };
     },
+
+    onOpenSuperpowersRepo: async () => {
+      await deps.openExternalUrl(SUPERPOWERS_REPO_URL);
+    },
   };
 
   // -------------------------------------------------------------------------
@@ -120,6 +137,8 @@ export async function runOnboardingWizard(
     codexStatus: codex,
     claudeStatus: claude,
     selectedBackend: null,
+    selectedModel: null,
+    selectedEffort: null,
     gitInitError: null,
     initialized: false,
     initError: null,

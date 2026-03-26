@@ -100,6 +100,18 @@ describe('StepLaunch', () => {
     });
   });
 
+  describe('(b.1) keeps launch screen focused on launching', () => {
+    it('does not render Superpowers advisory copy on the launch screen', () => {
+      const { lastFrame } = renderWithTheme(<StepLaunch {...defaultProps} />);
+      const frame = lastFrame() ?? '';
+
+      expect(frame).not.toContain('Superpowers');
+      expect(frame).not.toContain('Optional');
+      expect(frame).not.toContain('Jesse Vincent');
+      expect(frame).not.toContain('Open GitHub repo in browser');
+    });
+  });
+
   describe('(c) "Start now" fires launch decision', () => {
     it('renders "Start now" option with queued count', () => {
       const { lastFrame } = renderWithTheme(<StepLaunch {...defaultProps} queuedCount={3} />);

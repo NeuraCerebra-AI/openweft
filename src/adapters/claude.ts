@@ -1,5 +1,6 @@
 import type { AgentAdapter, AdapterCommandSpec, AdapterTurnRequest, AdapterUsage, CommandRunner } from './types.js';
 
+import { CLAUDE_EFFORT_OPTIONS } from '../config/options.js';
 import {
   createAdapterFailure,
   createAdapterSuccess,
@@ -70,6 +71,13 @@ export const parseClaudeJsonOutput = (
 };
 
 export const buildClaudeCommand = (request: AdapterTurnRequest): AdapterCommandSpec => {
+  if (
+    request.effortLevel !== undefined &&
+    !CLAUDE_EFFORT_OPTIONS.includes(request.effortLevel as typeof CLAUDE_EFFORT_OPTIONS[number])
+  ) {
+    throw new Error(`Unsupported Claude effort level: ${request.effortLevel}`);
+  }
+
   // All headless modes skip permissions; only 'default' defers to Claude's own prompting
   const shouldSkipPermissions = request.claudePermissionMode !== 'default';
   const args = [
@@ -78,6 +86,9 @@ export const buildClaudeCommand = (request: AdapterTurnRequest): AdapterCommandS
     'json',
     '--model',
     request.model,
+    ...(request.effortLevel && request.effortLevel !== 'medium'
+      ? ['--effort', request.effortLevel]
+      : []),
     ...(shouldSkipPermissions ? ['--dangerously-skip-permissions'] : []),
   ];
 

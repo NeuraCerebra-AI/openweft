@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 
@@ -15,6 +15,8 @@ const makeState = (overrides?: Partial<OnboardingState>): OnboardingState => ({
   codexStatus: { installed: true, authenticated: true },
   claudeStatus: { installed: true, authenticated: true },
   selectedBackend: null,
+  selectedModel: null,
+  selectedEffort: null,
   gitInitError: null,
   initialized: false,
   initError: null,
@@ -27,6 +29,7 @@ const makeCallbacks = (): WizardCallbacks => ({
   onGitInit: vi.fn().mockResolvedValue(undefined),
   onRunInit: vi.fn().mockResolvedValue(undefined),
   onQueueRequest: vi.fn().mockResolvedValue(undefined),
+  onOpenSuperpowersRepo: vi.fn().mockResolvedValue(undefined),
   onRedetectBackends: vi.fn().mockResolvedValue({
     codex: { installed: true, authenticated: true },
     claude: { installed: true, authenticated: true },
@@ -35,6 +38,11 @@ const makeCallbacks = (): WizardCallbacks => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  delete process.env.OPENWEFT_DEMO_MODE;
+});
+
+afterEach(() => {
+  delete process.env.OPENWEFT_DEMO_MODE;
 });
 
 describe('OnboardingApp', () => {
@@ -104,15 +112,30 @@ describe('OnboardingApp', () => {
       expect(frame).toContain('backends');
     });
 
-    it('initialState with currentStep=3 renders StepInit (after selecting backend)', async () => {
+    it('initialState with currentStep=3 renders the optional Superpowers slide', async () => {
       const onComplete = vi.fn();
-      const callbacks = makeCallbacks();
-      // onRunInit never resolves in this test (we just want to see the init step)
-      callbacks.onRunInit = vi.fn(() => new Promise<void>(() => {}));
 
       const { lastFrame } = render(
         <OnboardingApp
           initialState={makeState({ currentStep: 3, selectedBackend: 'codex' })}
+          callbacks={makeCallbacks()}
+          onComplete={onComplete}
+        />
+      );
+
+      await waitForMount();
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('Optional: Superpowers');
+    });
+
+    it('initialState with currentStep=4 renders StepInit (after the optional slide)', async () => {
+      const onComplete = vi.fn();
+      const callbacks = makeCallbacks();
+      callbacks.onRunInit = vi.fn(() => new Promise<void>(() => {}));
+
+      const { lastFrame } = render(
+        <OnboardingApp
+          initialState={makeState({ currentStep: 4, selectedBackend: 'codex' })}
           callbacks={callbacks}
           onComplete={onComplete}
         />
@@ -120,7 +143,6 @@ describe('OnboardingApp', () => {
 
       await waitForMount();
       const frame = lastFrame() ?? '';
-      // StepInit shows "init" in the subtitle
       expect(frame).toContain('init');
     });
   });
@@ -189,7 +211,7 @@ describe('OnboardingApp', () => {
   });
 
   describe('(f) ProgressBar shows correct step', () => {
-    it('shows "1 / 6" on step 1', () => {
+    it('shows "1 / 7" on step 1', () => {
       const onComplete = vi.fn();
       const { lastFrame } = render(
         <OnboardingApp
@@ -199,10 +221,10 @@ describe('OnboardingApp', () => {
         />
       );
       const frame = lastFrame() ?? '';
-      expect(frame).toContain('1 / 6');
+      expect(frame).toContain('1 / 7');
     });
 
-    it('shows "2 / 6" on step 2', async () => {
+    it('shows "2 / 7" on step 2', async () => {
       const onComplete = vi.fn();
       const { lastFrame } = render(
         <OnboardingApp
@@ -213,7 +235,7 @@ describe('OnboardingApp', () => {
       );
       await waitForMount();
       const frame = lastFrame() ?? '';
-      expect(frame).toContain('2 / 6');
+      expect(frame).toContain('2 / 7');
     });
   });
 
@@ -249,13 +271,11 @@ describe('OnboardingApp', () => {
 
     it('shows "Environment" and "Backend: codex" in completed summary on step 3', async () => {
       const onComplete = vi.fn();
-      const callbacks = makeCallbacks();
-      callbacks.onRunInit = vi.fn(() => new Promise<void>(() => {}));
 
       const { lastFrame } = render(
         <OnboardingApp
           initialState={makeState({ currentStep: 3, selectedBackend: 'codex' })}
-          callbacks={callbacks}
+          callbacks={makeCallbacks()}
           onComplete={onComplete}
         />
       );
@@ -294,6 +314,79 @@ describe('OnboardingApp', () => {
       const frame = lastFrame() ?? '';
       // StepBackends in select mode shows back key
       expect(frame).toContain('← back');
+    });
+  });
+
+  describe('(i) demo mode stabilizes typing steps', () => {
+    it('keeps completed setup labels visible on the optional slide before typing starts', async () => {
+      process.env.OPENWEFT_DEMO_MODE = '1';
+
+      const onComplete = vi.fn();
+      const { lastFrame } = render(
+        <OnboardingApp
+          initialState={makeState({
+            currentStep: 4,
+            selectedBackend: 'claude',
+            selectedModel: 'claude-sonnet-4-6',
+            selectedEffort: 'high',
+            initialized: true,
+          })}
+          callbacks={makeCallbacks()}
+          onComplete={onComplete}
+        />
+      );
+
+      await waitForMount();
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('✓ Environment');
+      expect(frame).toContain('Backend: claude · claude-sonnet-4-6 · high');
+    });
+
+    it('hides completed setup labels entirely on step 5', async () => {
+      process.env.OPENWEFT_DEMO_MODE = '1';
+
+      const onComplete = vi.fn();
+      const { lastFrame } = render(
+        <OnboardingApp
+          initialState={makeState({
+            currentStep: 5,
+            selectedBackend: 'claude',
+            selectedModel: 'claude-sonnet-4-6',
+            selectedEffort: 'high',
+            initialized: true,
+          })}
+          callbacks={makeCallbacks()}
+          onComplete={onComplete}
+        />
+      );
+
+      await waitForMount();
+      const frame = lastFrame() ?? '';
+      expect(frame).not.toContain('Done:');
+      expect(frame).not.toContain('✓ Environment');
+      expect(frame).not.toContain('Backend: claude · claude-sonnet-4-6 · high');
+    });
+
+    it('keeps the original bottom completed summary outside demo mode', async () => {
+      const onComplete = vi.fn();
+      const { lastFrame } = render(
+        <OnboardingApp
+          initialState={makeState({
+            currentStep: 5,
+            selectedBackend: 'claude',
+            selectedModel: 'claude-sonnet-4-6',
+            selectedEffort: 'high',
+            initialized: true,
+          })}
+          callbacks={makeCallbacks()}
+          onComplete={onComplete}
+        />
+      );
+
+      await waitForMount();
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('✓ Environment');
+      expect(frame).not.toContain('Done:');
     });
   });
 });

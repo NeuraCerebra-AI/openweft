@@ -1,6 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Box, Text, useInput } from 'ink';
 
+import {
+  getDefaultEffortForBackend,
+  getDefaultModelForBackend,
+  getEffortOptionsForBackend,
+  getModelOptionsForBackend,
+  type BackendEffortLevel
+} from '../../config/options.js';
 import { useTheme } from '../theme.js';
 import { SelectInput } from './SelectInput.js';
 import { WizardFooter } from './WizardFooter.js';
@@ -10,7 +17,12 @@ import type { BackendDetection } from './types.js';
 export interface StepBackendsProps {
   readonly codexStatus: BackendDetection;
   readonly claudeStatus: BackendDetection;
-  readonly onAdvance: (selectedBackend: 'codex' | 'claude') => void;
+  readonly onAdvance: (selection: {
+    backend: 'codex' | 'claude';
+    model: string;
+    effort: BackendEffortLevel;
+  }) => void;
+  readonly onBack: () => void;
   readonly onExit: () => void;
   readonly onRedetectBackends: () => Promise<{ codex: BackendDetection; claude: BackendDetection }>;
 }
@@ -21,6 +33,7 @@ const BACKEND_OPTIONS = [
 ] as const;
 
 type BackendOptionValue = 'codex' | 'claude';
+type SelectionPhase = 'backend' | 'model' | 'effort';
 
 // Determine the display icon and its meaning for a BackendDetection
 function getStatusIcon(status: BackendDetection): {
@@ -62,6 +75,7 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
   codexStatus,
   claudeStatus,
   onAdvance,
+  onBack,
   onExit,
   onRedetectBackends,
 }) => {
@@ -71,6 +85,9 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
   const [localCodex, setLocalCodex] = useState<BackendDetection>(codexStatus);
   const [localClaude, setLocalClaude] = useState<BackendDetection>(claudeStatus);
   const [isRedetecting, setIsRedetecting] = useState(false);
+  const [selectionPhase, setSelectionPhase] = useState<SelectionPhase>('backend');
+  const [draftBackend, setDraftBackend] = useState<BackendOptionValue | null>(null);
+  const [draftModel, setDraftModel] = useState<string | null>(null);
 
   const redetectBackends = async (): Promise<void> => {
     if (isRedetecting) {
@@ -97,6 +114,30 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
   const viewMode = deriveViewMode(localCodex, localClaude);
   const autoSelected = deriveAutoSelected(localCodex, localClaude);
 
+  const beginSelection = (backend: BackendOptionValue): void => {
+    setDraftBackend(backend);
+    setDraftModel(getDefaultModelForBackend(backend));
+    setSelectionPhase('model');
+  };
+
+  const selectedBackend = draftBackend ?? autoSelected;
+  const selectedModel =
+    selectedBackend === null
+      ? null
+      : draftModel ?? getDefaultModelForBackend(selectedBackend);
+
+  const completeSelection = (effort: BackendEffortLevel): void => {
+    if (selectedBackend === null || selectedModel === null) {
+      return;
+    }
+
+    onAdvance({
+      backend: selectedBackend,
+      model: selectedModel,
+      effort
+    });
+  };
+
   // Handle Esc (quit) in error states and auto-select mode
   // In select mode, Esc is handled here too; Enter in auto-select mode handled below
   useInput((_input, key) => {
@@ -110,8 +151,29 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
       return;
     }
 
-    if (viewMode === 'auto-select' && key.return && autoSelected !== null) {
-      onAdvance(autoSelected);
+    if (key.leftArrow) {
+      if (viewMode === 'error-no-auth' || viewMode === 'error-not-installed') {
+        return;
+      }
+
+      if (selectionPhase === 'backend') {
+        onBack();
+        return;
+      }
+
+      if (selectionPhase === 'model') {
+        setSelectionPhase('backend');
+        setDraftBackend(null);
+        setDraftModel(null);
+        return;
+      }
+
+      setSelectionPhase('model');
+      return;
+    }
+
+    if (viewMode === 'auto-select' && selectionPhase === 'backend' && key.return && autoSelected !== null) {
+      beginSelection(autoSelected);
     }
   });
 
@@ -147,6 +209,9 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
 
   // Determine footer keys
   const footerKeys = (() => {
+    if (selectionPhase === 'model' || selectionPhase === 'effort') {
+      return ['select', 'confirm', 'retry', 'back', 'quit'] as const;
+    }
     if (viewMode === 'select') {
       return ['select', 'confirm', 'retry', 'back', 'quit'] as const;
     }
@@ -173,21 +238,22 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
       )}
 
       {/* Content area based on view mode */}
-      {viewMode === 'select' && (
+      {viewMode === 'select' && selectionPhase === 'backend' && (
         <Box flexDirection="column" gap={1}>
           <Text color={colors.text}>{'Choose your default backend'}</Text>
           <SelectInput<BackendOptionValue>
             options={BACKEND_OPTIONS}
             onSelect={(value) => {
-              onAdvance(value);
+              beginSelection(value);
             }}
           />
         </Box>
       )}
 
-      {viewMode === 'auto-select' && autoSelected !== null && (
+      {viewMode === 'auto-select' && autoSelected !== null && selectionPhase === 'backend' && (
         <Box flexDirection="column" gap={0}>
           <Text color={colors.green}>{`Using ${autoSelected} as your default backend.`}</Text>
+          <Text color={colors.subtext}>{'Press Enter to choose a model and effort level.'}</Text>
           {localCodex.installed && !localCodex.authenticated && (
             <Text color={colors.subtext}>
               {'codex is installed but needs auth: run '}
@@ -200,6 +266,41 @@ export const StepBackends: React.FC<StepBackendsProps> = ({
               <Text color={colors.yellow}>{'claude auth login'}</Text>
             </Text>
           )}
+        </Box>
+      )}
+
+      {selectedBackend !== null && selectedModel !== null && selectionPhase === 'model' && (
+        <Box flexDirection="column" gap={1}>
+          <Text color={colors.text}>{`Choose the default ${selectedBackend} model`}</Text>
+          <SelectInput<string>
+            options={getModelOptionsForBackend(selectedBackend, selectedModel).map((model) => ({
+              label: model,
+              value: model
+            }))}
+            onSelect={(value) => {
+              setDraftModel(value);
+              setSelectionPhase('effort');
+            }}
+          />
+        </Box>
+      )}
+
+      {selectedBackend !== null && selectedModel !== null && selectionPhase === 'effort' && (
+        <Box flexDirection="column" gap={1}>
+          <Text color={colors.text}>{`Choose the default ${selectedBackend} effort`}</Text>
+          <Text color={colors.subtext}>{`Model: ${selectedModel}`}</Text>
+          <SelectInput<BackendEffortLevel>
+            options={getEffortOptionsForBackend(selectedBackend).map((effort) => ({
+              label: effort,
+              value: effort
+            }))}
+            initialIndex={getEffortOptionsForBackend(selectedBackend).indexOf(
+              getDefaultEffortForBackend(selectedBackend)
+            )}
+            onSelect={(value) => {
+              completeSelection(value);
+            }}
+          />
         </Box>
       )}
 

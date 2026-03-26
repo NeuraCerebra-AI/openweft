@@ -1,5 +1,7 @@
 import { createStore } from 'zustand/vanilla';
 
+import type { BackendEffortLevel } from '../config/options.js';
+import type { UserBackend } from '../domain/primitives.js';
 import type { ApprovalRequest } from './events.js';
 
 const MAX_OUTPUT_LINES = 5000;
@@ -34,7 +36,20 @@ export interface CompletedFeature {
   readonly mergeCommit: string | null;
 }
 
-export type UIMode = 'normal' | 'approval' | 'input' | 'history' | 'history-detail';
+export interface ModelSelectionState {
+  readonly backend: UserBackend;
+  readonly model: string;
+  readonly effort: BackendEffortLevel;
+  readonly editable: boolean;
+}
+
+export interface ModelMenuState {
+  readonly model: string;
+  readonly effort: BackendEffortLevel;
+  readonly focus: 'model' | 'effort' | 'save' | 'cancel';
+}
+
+export type UIMode = 'normal' | 'approval' | 'input' | 'history' | 'history-detail' | 'model-menu';
 
 export interface UIStore {
   phase: { current: number; total: number; label?: string } | null;
@@ -51,6 +66,8 @@ export interface UIStore {
   completedFeatures: readonly CompletedFeature[];
   historyFocusedIndex: number;
   notice: { level: 'info' | 'error'; message: string } | null;
+  modelSelection: ModelSelectionState | null;
+  modelMenu: ModelMenuState | null;
   agents: AgentState[];
   focusedAgentId: string | null;
   mode: UIMode;
@@ -81,6 +98,10 @@ export interface UIStore {
   setFilterText: (text: string) => void;
   setFilterCursorOffset: (offset: number) => void;
   setNotice: (notice: UIStore['notice']) => void;
+  setModelSelection: (selection: UIStore['modelSelection']) => void;
+  setModelMenu: (menu: UIStore['modelMenu']) => void;
+  openModelMenu: () => void;
+  closeModelMenu: () => void;
   requestExecution: () => void;
   setQuitConfirmPending: (pending: boolean) => void;
   setAddInputText: (text: string | null) => void;
@@ -103,6 +124,8 @@ export const createUIStore = () =>
     completedFeatures: [],
     historyFocusedIndex: 0,
     notice: null,
+    modelSelection: null,
+    modelMenu: null,
     agents: [],
     focusedAgentId: null,
     mode: 'normal',
@@ -189,6 +212,20 @@ export const createUIStore = () =>
     setFilterCursorOffset: (offset) =>
       set((state) => ({ filterCursorOffset: Math.max(0, Math.min(offset, state.filterText.length)) })),
     setNotice: (notice) => set({ notice }),
+    setModelSelection: (selection) => set({ modelSelection: selection }),
+    setModelMenu: (menu) => set({ modelMenu: menu }),
+    openModelMenu: () =>
+      set((state) => ({
+        modelMenu:
+          state.modelSelection === null
+            ? null
+            : {
+                model: state.modelSelection.model,
+                effort: state.modelSelection.effort,
+                focus: 'model'
+              }
+      })),
+    closeModelMenu: () => set({ modelMenu: null }),
     requestExecution: () => set({ executionRequested: true }),
     setQuitConfirmPending: (pending) => set({ quitConfirmPending: pending }),
     setAddInputText: (text) => set({ addInputText: text, addInputCursorOffset: text?.length ?? 0 }),
@@ -216,7 +253,7 @@ export const createUIStore = () =>
           ...placeholder,
           id: agent.id,
           name: agent.name,
-          feature: agent.feature,
+          feature: placeholder.feature.trim().length > 0 ? placeholder.feature : agent.feature,
           status: 'running',
           removable: false,
           currentTool: null,

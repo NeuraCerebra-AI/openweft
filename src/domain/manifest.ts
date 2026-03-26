@@ -81,6 +81,16 @@ export const extractManifestBlock = (markdown: string): ManifestBlock | null => 
 };
 
 export const extractLedgerSubheadings = (markdown: string): string[] => {
+  const ledgerSections = collectLedgerSections(markdown);
+  const richestSection = ledgerSections.reduce<string[]>(
+    (best, section) => (section.length > best.length ? section : best),
+    []
+  );
+
+  return richestSection;
+};
+
+const collectLedgerSections = (markdown: string): string[][] => {
   const tree = unified().use(remarkParse).parse(markdown);
   let currentLedgerSection: string[] | null = null;
   const ledgerSections: string[][] = [];
@@ -111,18 +121,16 @@ export const extractLedgerSubheadings = (markdown: string): string[] => {
     ledgerSections.push(currentLedgerSection);
   }
 
-  const matchingSection = ledgerSections.find((section) =>
-    REQUIRED_LEDGER_SUBHEADINGS.every((heading) => section.includes(heading))
-  );
-
-  return matchingSection ?? [];
+  return ledgerSections;
 };
 
 export const assertLedgerSection = (markdown: string): void => {
-  const subheadings = extractLedgerSubheadings(markdown);
-  if (subheadings.length === 0) {
+  const ledgerSections = collectLedgerSections(markdown);
+  if (ledgerSections.length === 0) {
     throw new Error('No ledger section found under a "## Ledger" heading.');
   }
+
+  const subheadings = extractLedgerSubheadings(markdown);
 
   const missing = REQUIRED_LEDGER_SUBHEADINGS.filter((heading) => !subheadings.includes(heading));
   if (missing.length > 0) {

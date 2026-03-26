@@ -41,6 +41,14 @@ export interface StagedMergeSuccess {
   editSummary: EditSummary;
 }
 
+export interface PreservedMergeConflict {
+  status: 'conflicted';
+  branch: string;
+  preMergeCommit: string;
+  mergeHeadCommit: string;
+  conflicts: MergeConflictDetail[];
+}
+
 export interface MergeConflict {
   status: 'conflict';
   branch: string;
@@ -49,7 +57,7 @@ export interface MergeConflict {
 }
 
 export type MergeBranchResult = MergeSuccess | MergeConflict;
-export type MergeBranchIntoWorktreeResult = StagedMergeSuccess | MergeConflict;
+export type MergeBranchIntoWorktreeResult = StagedMergeSuccess | PreservedMergeConflict | MergeConflict;
 
 export interface WorktreeStatusSummary {
   ahead: number;
@@ -673,21 +681,18 @@ export const mergeBranchIntoWorktree = async (
     if (conflicts.length === 0) {
       throw error;
     }
-
-    try {
-      await git.raw(['merge', '--abort']);
-    } catch {
-      // best-effort; ignore failure
-    }
-
-    if (await isMergeInProgress(worktreePath)) {
-      throw new Error(`Failed to clean up merge state in ${worktreePath} after conflict on branch ${branch}.`);
+    const mergeHeadCommit = (await git.revparse(['MERGE_HEAD']).catch(() => '')).trim();
+    if (!mergeHeadCommit) {
+      throw new Error(
+        `Failed to preserve merge state in ${worktreePath} after conflict on branch ${branch}.`
+      );
     }
 
     return {
-      status: 'conflict',
+      status: 'conflicted',
       branch,
       preMergeCommit,
+      mergeHeadCommit,
       conflicts
     };
   }

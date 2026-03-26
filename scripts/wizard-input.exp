@@ -1,0 +1,313 @@
+#!/usr/bin/expect -f
+# Wizard + Dashboard keyboard automation for README recording.
+# Driven by scripts/record-demo.sh — not meant to be run standalone.
+#
+# Uses `expect` patterns to wait for actual wizard output before
+# sending keys. Much more reliable than sleep-based timing.
+#
+# The recording shows the full realistic flow:
+#   1. Welcome (environment checks)
+#   2. Backend selection -> model -> effort (selects "high")
+#   3. Optional Superpowers slide (default skip)
+#   4. Initialization
+#   5. Feature input (type first request, character by character)
+#   6. Add more (add a second request, typed out)
+#   7. Launch (exit to run later)
+#   8. Second invocation: dashboard in ready state
+#   9. Start execution from the dashboard and hold on the running scene
+
+set timeout 30
+
+# Define escape sequences
+set DOWN "\x1b\[B"
+
+proc env_or_default {name default} {
+    if {[info exists ::env($name)] && $::env($name) ne ""} {
+        return $::env($name)
+    }
+    return $default
+}
+
+set PACE_SCALE [expr {double([env_or_default "OPENWEFT_RECORD_PACE_SCALE" "1.0"])}]
+set env(BASH_SILENCE_DEPRECATION_WARNING) 1
+
+proc pause {milliseconds} {
+    global PACE_SCALE
+    set scaled [expr {int(round($milliseconds * $PACE_SCALE))}]
+    if {$scaled > 0} {
+        after $scaled
+    }
+}
+
+# Typewriter effect — sends each character with a short delay
+proc typewrite {text {delay 25}} {
+    foreach char [split $text ""] {
+        send -- $char
+        pause $delay
+    }
+}
+
+proc typewrite_visible {text {delay 55}} {
+    set rendered ""
+    foreach char [split $text ""] {
+        append rendered $char
+        send -- $char
+        expect {
+            -exact $rendered {}
+            timeout {
+                puts "TIMEOUT: Typed text did not render incrementally"
+                exit 1
+            }
+        }
+        pause $delay
+    }
+}
+
+log_user 0
+spawn bash --norc --noprofile
+
+# Wait for shell prompt
+expect "\\$"
+send -- "stty cols 100 rows 24 -echo\r"
+expect "\\$"
+pause 300
+
+# ── First invocation: onboarding wizard ──
+
+# Type the command with human-like pacing, but keep the shell prompt out of the cast.
+typewrite "openweft" 60
+pause 500
+send -- "\r"
+log_user 1
+
+# Step 1: Welcome — environment checks pass, press Enter
+# Wait for the "Enter continue" footer which means checks passed
+expect {
+    "Enter continue · Esc quit" {
+        pause 1500
+        send -- "\r"
+    }
+    timeout {
+        puts "TIMEOUT: Wizard welcome did not render"
+        exit 1
+    }
+}
+
+# Step 2: Backends — select backend, model, and effort
+# Wait for backend selection or auto-select
+expect {
+    "↑↓ select · Enter confirm · R retry · ← back · Esc quit" {
+        # Both backends detected — SelectInput shown
+        # Default is first option (Codex), arrow down to Claude
+        pause 1200
+        send -- $DOWN
+    }
+    "Enter continue · R retry · ← back · Esc quit" {
+        # Only one backend detected — auto-selected
+        pause 1200
+        send -- "\r"
+    }
+    timeout {
+        puts "TIMEOUT: Backend selection did not render"
+        exit 1
+    }
+}
+
+expect {
+    -re {\n[^\n]*›[^\n]*Claude} {
+        pause 900
+        send -- "\r"
+    }
+    timeout {
+        puts "TIMEOUT: Claude backend selection did not become visible"
+        exit 1
+    }
+}
+
+# Model selection — wait for model chooser
+# Options for Claude: claude-sonnet-4-6, claude-haiku-4-5, claude-opus-4-6
+# Default (index 0) is claude-sonnet-4-6 — keep it
+expect {
+    "Choose the default claude model" {
+        pause 1000
+        send -- "\r"
+    }
+    timeout {
+        puts "TIMEOUT: Model selection did not render"
+        exit 1
+    }
+}
+
+# Effort selection — wait for effort chooser
+# Options for Claude: low, medium, high, max
+# Default is "medium" (index 1). Arrow down 1x to "high".
+expect {
+    "Choose the default claude effort" {
+        pause 1000
+        send -- $DOWN
+        pause 400
+        send -- "\r"
+    }
+    timeout {
+        puts "TIMEOUT: Effort selection did not render"
+        exit 1
+    }
+}
+
+# Step 3: Optional Superpowers slide — default is Skip
+expect {
+    "Optional: Superpowers" {
+        pause 1800
+        send -- "\r"
+    }
+    timeout {
+        puts "TIMEOUT: Optional Superpowers slide did not render"
+        exit 1
+    }
+}
+
+# Step 4: Init — auto-runs, wait for it to complete
+expect {
+    "Enter continue · ← back · Esc quit" {
+        pause 1500
+        send -- "\r"
+    }
+    timeout {
+        puts "TIMEOUT: Init step did not complete"
+        exit 1
+    }
+}
+
+# Step 5: Feature Input — type the first feature request
+# Wait for the input-mode footer so we know the TextInputField is active.
+expect {
+    "Enter submit · ← back · Esc quit" {
+        pause 1200
+        typewrite_visible "add dark mode with system preference detection" 60
+        pause 500
+        send -- "\r"
+    }
+    timeout {
+        puts "TIMEOUT: Feature input did not render"
+        exit 1
+    }
+}
+
+# Step 6: Add More — shows queued items + SelectInput
+# Options: "Continue to launch" (index 0, default), "Add another request" (index 1)
+# Arrow down to "Add another request", press Enter
+expect {
+    "↑↓ select · Enter confirm · ← back · Esc quit" {
+        pause 1000
+        send -- $DOWN
+        pause 400
+        send -- "\r"
+    }
+    timeout {
+        puts "TIMEOUT: Add more step did not render"
+        exit 1
+    }
+}
+
+# Text input appears (mode switches from 'select' to 'input')
+# Wait for the submit/cancel footer which confirms input mode is active
+expect {
+    "Enter submit · Esc cancel" {
+        pause 1000
+        typewrite_visible "refactor auth middleware for oauth2 support" 60
+        pause 500
+        send -- "\r"
+    }
+    timeout {
+        puts "TIMEOUT: Add more text input did not appear"
+        exit 1
+    }
+}
+
+# Back at "Add more" select mode — "Continue to launch" is default (index 0)
+# Just press Enter
+expect {
+    "↑↓ select · Enter confirm · ← back · Esc quit" {
+        pause 1200
+        send -- "\r"
+    }
+    timeout {
+        puts "TIMEOUT: Add more select did not reappear after second feature"
+        exit 1
+    }
+}
+
+# Step 7: Launch — "Ready to start" with two options:
+#   "Start now — ..." (index 0, default)
+#   "Exit — run openweft later to start" (index 1)
+# Arrow down to "Exit", press Enter
+expect {
+    "Exit — run openweft later to start" {
+        log_user 0
+        pause 2000
+        send -- $DOWN
+        pause 500
+        send -- "\r"
+    }
+    timeout {
+        puts "TIMEOUT: Launch step did not render"
+        exit 1
+    }
+}
+
+# ── Second invocation: dashboard in ready state ──
+
+log_user 0
+
+# Wait for shell prompt after wizard exits
+expect {
+    "\\$" {
+        pause 1000
+    }
+    timeout {
+        pause 1000
+    }
+}
+
+typewrite "openweft" 60
+pause 500
+send -- "\r"
+log_user 1
+
+# Dashboard renders with queued features in ready state.
+# Keep reading until the footer arrives; the second request can paint before
+# the footer, and if Expect stops too early the cast misses that final chunk.
+expect {
+    "refactor auth middleware for oauth2 support" {
+    }
+    timeout {
+        puts "TIMEOUT: Ready-state dashboard did not render"
+        exit 1
+    }
+}
+
+expect {
+    "help" {
+        pause 2500
+        send -- "s"
+    }
+    timeout {
+        puts "TIMEOUT: Ready-state dashboard footer did not render"
+        exit 1
+    }
+}
+
+# Wait for the real dashboard to enter a running state before ending the cast.
+expect {
+    "active 1" {
+        pause 4000
+    }
+    timeout {
+        puts "TIMEOUT: Running dashboard did not start"
+        exit 1
+    }
+}
+
+# End the recording on the running state without emitting extra quit frames.
+log_user 0
+exit 0

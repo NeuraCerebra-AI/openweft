@@ -36,6 +36,8 @@ export const createConfigHash = (config: OpenWeftConfig | ResolvedOpenWeftConfig
     featureRequestsDir: config.featureRequestsDir,
     queueFile: config.queueFile,
     models: config.models,
+    effort: config.effort,
+    approval: config.approval,
     concurrency: config.concurrency,
     rateLimits: config.rateLimits,
     budget: config.budget
@@ -94,6 +96,11 @@ const mergeConfigWithDefaults = (rawConfig: unknown): OpenWeftConfig => {
       ...DEFAULT_OPENWEFT_CONFIG.models,
       ...input.models
     },
+    effort: {
+      ...DEFAULT_OPENWEFT_CONFIG.effort,
+      ...input.effort
+    },
+    approval: input.approval ?? DEFAULT_OPENWEFT_CONFIG.approval,
     concurrency: {
       ...DEFAULT_OPENWEFT_CONFIG.concurrency,
       ...input.concurrency

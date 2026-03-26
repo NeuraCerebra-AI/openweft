@@ -3,6 +3,7 @@ import { Box, Text, useInput, useApp } from 'ink';
 import { useStore } from 'zustand/react';
 import type { StoreApi } from 'zustand/vanilla';
 
+import type { BackendEffortLevel } from '../config/options.js';
 import { ThemeContext, catppuccinMocha } from './theme.js';
 import { StatusBar } from './StatusBar.js';
 import { MeterBar } from './MeterBar.js';
@@ -12,6 +13,7 @@ import { EmptyState } from './EmptyState.js';
 import { Footer } from './Footer.js';
 import { HistoryView } from './HistoryView.js';
 import { HistoryDetailView } from './HistoryDetailView.js';
+import { ModelMenu } from './ModelMenu.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
 import { filterAgents, handleKeypress } from './hooks/useKeyboard.js';
 import type { UIStore } from './store.js';
@@ -30,11 +32,20 @@ interface AppProps {
   readonly onStartRequest?: () => void;
   readonly onRemoveAgent?: (agentId: string) => void;
   readonly onAddRequest?: (request: string) => void;
+  readonly onSaveModelSelection?: (selection: { model: string; effort: BackendEffortLevel }) => void;
 }
 
 const NOTICE_AUTO_CLEAR_MS = 5000;
 
-export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecision, onStartRequest, onRemoveAgent, onAddRequest }) => {
+export const App: React.FC<AppProps> = ({
+  store,
+  onQuitRequest,
+  onApprovalDecision,
+  onStartRequest,
+  onRemoveAgent,
+  onAddRequest,
+  onSaveModelSelection
+}) => {
   const state = useStore(store);
   const { exit } = useApp();
   const { rows } = useTerminalSize();
@@ -51,6 +62,14 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
   const activeCount = state.agents.filter((a) => a.status === 'running' || a.status === 'approval').length;
   const pendingCount = state.agents.filter((a) => a.status === 'queued').length;
   const completedCount = state.agents.filter((a) => a.status === 'completed').length;
+  const statusModelSelection = state.modelSelection === null
+    ? null
+    : {
+        backend: state.modelSelection.backend,
+        model: state.modelSelection.model,
+        effort: state.modelSelection.effort
+      };
+  const canEditModelSelection = state.modelSelection?.editable === true && !state.executionRequested;
 
   const startTimeRef = useRef<number | null>(null);
 
@@ -185,6 +204,7 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
       ...(onApprovalDecision ? { onApprovalDecision } : {}),
       ...(onStartRequest ? { onStartRequest } : {}),
       ...(onRemoveAgent ? { onRemoveAgent } : {}),
+      ...(onSaveModelSelection ? { onSaveModelSelection } : {}),
     }, { meta: key.meta, ctrl: key.ctrl });
     if (result === 'quit') {
       exit();
@@ -205,15 +225,25 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
             totalCount={state.agents.length}
             totalTokens={state.totalTokens}
             elapsed={state.elapsed}
+            modelSelection={statusModelSelection}
           />
           {state.showHelp ? (
-            <HelpOverlay mode={state.mode} executionStarted={state.executionRequested} />
+            <HelpOverlay
+              mode={state.mode}
+              executionStarted={state.executionRequested}
+              canEditModelSelection={canEditModelSelection}
+            />
           ) : state.mode === 'history-detail' && focusedFeature ? (
             <HistoryDetailView feature={focusedFeature} />
           ) : (
             <HistoryView features={state.completedFeatures} focusedIndex={state.historyFocusedIndex} />
           )}
-          <Footer mode={state.mode} executionStarted={state.executionRequested} composing={false} />
+          <Footer
+            mode={state.mode}
+            executionStarted={state.executionRequested}
+            composing={false}
+            canEditModelSelection={canEditModelSelection}
+          />
         </Box>
       </ThemeContext.Provider>
     );
@@ -236,6 +266,7 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
             totalCount={state.agents.length}
             totalTokens={state.totalTokens}
             elapsed={state.elapsed}
+            modelSelection={statusModelSelection}
           />
           <Box
             flexDirection="column"
@@ -269,6 +300,7 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
           totalCount={state.agents.length}
           totalTokens={state.totalTokens}
           elapsed={state.elapsed}
+          modelSelection={statusModelSelection}
         />
         {state.notice ? (
           <Box>
@@ -278,7 +310,16 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
           </Box>
         ) : null}
         {state.showHelp ? (
-          <HelpOverlay mode={state.mode} executionStarted={state.executionRequested} />
+          <HelpOverlay
+            mode={state.mode}
+            executionStarted={state.executionRequested}
+            canEditModelSelection={canEditModelSelection}
+          />
+        ) : state.mode === 'model-menu' && state.modelSelection !== null && state.modelMenu !== null ? (
+          <ModelMenu
+            backend={state.modelSelection.backend}
+            menu={state.modelMenu}
+          />
         ) : (
           <Box flexDirection="column" flexGrow={1}>
             <MeterBar
@@ -332,7 +373,12 @@ export const App: React.FC<AppProps> = ({ store, onQuitRequest, onApprovalDecisi
             </Box>
           </Box>
         )}
-        <Footer mode={state.mode} executionStarted={state.executionRequested} composing={state.addInputText !== null} />
+        <Footer
+          mode={state.mode}
+          executionStarted={state.executionRequested}
+          composing={state.addInputText !== null}
+          canEditModelSelection={canEditModelSelection}
+        />
       </Box>
     </ThemeContext.Provider>
   );

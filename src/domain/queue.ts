@@ -98,6 +98,8 @@ type QueueRecordV1 =
     };
 
 const isV1QueueHeader = (raw: string): boolean => raw.trim() === V1_QUEUE_HEADER;
+const looksLikeStructuredV1QueueRecord = (trimmed: string): boolean =>
+  trimmed.startsWith('{') || trimmed.startsWith('[');
 
 const isQueueRecordV1 = (value: unknown): value is QueueRecordV1 => {
   if (typeof value !== 'object' || value === null) {
@@ -182,6 +184,17 @@ const parseV1QueueLine = (raw: string, lineIndex: number): QueueLine => {
       kind: 'comment',
       raw,
       lineIndex,
+      recordFormat: 'v1'
+    };
+  }
+
+  if (!looksLikeStructuredV1QueueRecord(trimmed)) {
+    return {
+      kind: 'pending',
+      raw,
+      lineIndex,
+      request: parseSerializedQueueRequest(trimmed),
+      queueId: null,
       recordFormat: 'v1'
     };
   }

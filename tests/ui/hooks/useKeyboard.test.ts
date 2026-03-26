@@ -156,6 +156,45 @@ describe('handleKeypress', () => {
     expect(starts).toEqual([true]);
   });
 
+  it('opens the model menu on m in ready state when editing is supported', () => {
+    const store = createUIStore();
+    store.getState().setModelSelection({
+      backend: 'codex',
+      model: 'gpt-5.3-codex',
+      effort: 'medium',
+      editable: true
+    });
+
+    const result = handleKeypress(store, 'm');
+
+    expect(result).toBe('handled');
+    expect(store.getState().mode).toBe('model-menu');
+    expect(store.getState().modelMenu).toEqual({
+      model: 'gpt-5.3-codex',
+      effort: 'medium',
+      focus: 'model'
+    });
+  });
+
+  it('shows a notice on m in ready state when editing is unsupported', () => {
+    const store = createUIStore();
+    store.getState().setModelSelection({
+      backend: 'codex',
+      model: 'gpt-5.3-codex',
+      effort: 'medium',
+      editable: false
+    });
+
+    const result = handleKeypress(store, 'm');
+
+    expect(result).toBe('handled');
+    expect(store.getState().mode).toBe('normal');
+    expect(store.getState().notice).toEqual({
+      level: 'info',
+      message: 'Model editing is only supported for dedicated JSON config files.'
+    });
+  });
+
   it('ignores s in normal mode when execution already requested', () => {
     const store = createUIStore();
     store.getState().requestExecution();
@@ -165,6 +204,23 @@ describe('handleKeypress', () => {
     });
     expect(result).toBe('unhandled');
     expect(starts).toEqual([]);
+  });
+
+  it('ignores m after execution has already started', () => {
+    const store = createUIStore();
+    store.getState().setModelSelection({
+      backend: 'codex',
+      model: 'gpt-5.3-codex',
+      effort: 'medium',
+      editable: true
+    });
+    store.getState().requestExecution();
+
+    const result = handleKeypress(store, 'm');
+
+    expect(result).toBe('unhandled');
+    expect(store.getState().mode).toBe('normal');
+    expect(store.getState().modelMenu).toBeNull();
   });
 
   it('s still means skip in approval mode', () => {
@@ -256,6 +312,49 @@ describe('handleKeypress', () => {
     const result = handleKeypress(store, 'a');
     expect(result).toBe('handled');
     expect(store.getState().addInputText).toBe('');
+  });
+
+  it('navigates and saves from the model menu', () => {
+    const store = createUIStore();
+    const saved: Array<{ model: string; effort: string }> = [];
+    store.getState().setModelSelection({
+      backend: 'codex',
+      model: 'gpt-5.3-codex',
+      effort: 'medium',
+      editable: true
+    });
+
+    handleKeypress(store, 'm');
+    handleKeypress(store, 'right');
+    handleKeypress(store, 'down');
+    handleKeypress(store, 'right');
+    handleKeypress(store, 'down');
+
+    const result = handleKeypress(store, 'return', {
+      onSaveModelSelection: (selection) => {
+        saved.push(selection);
+      }
+    });
+
+    expect(result).toBe('handled');
+    expect(saved).toEqual([{ model: 'gpt-5.4', effort: 'high' }]);
+  });
+
+  it('esc closes the model menu without saving', () => {
+    const store = createUIStore();
+    store.getState().setModelSelection({
+      backend: 'codex',
+      model: 'gpt-5.3-codex',
+      effort: 'medium',
+      editable: true
+    });
+
+    handleKeypress(store, 'm');
+    const result = handleKeypress(store, 'escape');
+
+    expect(result).toBe('handled');
+    expect(store.getState().mode).toBe('normal');
+    expect(store.getState().modelMenu).toBeNull();
   });
 
   it('a enters add mode during execution', () => {

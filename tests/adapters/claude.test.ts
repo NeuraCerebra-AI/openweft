@@ -41,6 +41,7 @@ describe('claude adapter', () => {
     ]);
     expect(command.input).toBe('Reply with OK.');
     expect(command.idleTimeoutMs).toBe(90 * 60 * 1000);
+    expect(command.args).not.toContain('--effort');
   });
 
   it('builds a resume command that preserves the session id', () => {
@@ -66,6 +67,66 @@ describe('claude adapter', () => {
       '/tmp/extra'
     ]);
     expect(command.idleTimeoutMs).toBe(90 * 60 * 1000);
+  });
+
+  it('rejects effort levels that Claude does not support', () => {
+    expect(() => buildClaudeCommand({
+      ...baseRequest(),
+      effortLevel: 'xhigh'
+    } as AdapterTurnRequest & { effortLevel: 'xhigh' })).toThrow(
+      'Unsupported Claude effort level: xhigh'
+    );
+  });
+
+  it('adds an effort flag for non-medium new sessions', () => {
+    const command = buildClaudeCommand({
+      ...baseRequest(),
+      effortLevel: 'high'
+    } as AdapterTurnRequest & { effortLevel: 'high' });
+
+    expect(command.args).toEqual([
+      '-p',
+      '--output-format',
+      'json',
+      '--model',
+      'claude-sonnet-4-6',
+      '--effort',
+      'high',
+      '--dangerously-skip-permissions',
+      '--no-session-persistence',
+      '--max-budget-usd',
+      '1.5',
+      '--add-dir',
+      '/tmp/shared',
+      '/tmp/extra'
+    ]);
+  });
+
+  it('adds an effort flag for non-medium resumed sessions', () => {
+    const command = buildClaudeCommand({
+      ...baseRequest(),
+      sessionId: 'session-456',
+      persistSession: true,
+      effortLevel: 'max'
+    } as AdapterTurnRequest & { effortLevel: 'max' });
+
+    expect(command.args).toEqual([
+      '-p',
+      '--output-format',
+      'json',
+      '--model',
+      'claude-sonnet-4-6',
+      '--effort',
+      'max',
+      '--dangerously-skip-permissions',
+      '--resume',
+      'session-456',
+      '--max-budget-usd',
+      '1.5',
+      '--add-dir',
+      '/tmp/shared',
+      '/tmp/extra'
+    ]);
   });
 
   it('uses a shorter idle timeout for planning stages', () => {

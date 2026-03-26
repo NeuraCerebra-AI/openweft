@@ -277,6 +277,30 @@ describe('paste handling', () => {
       expect(frame).toContain('hello ');
       expect(frame).not.toContain('world');
     });
+
+    it('deletes the previous word on alt-backspace sequences some terminals send', async () => {
+      const { stdin, lastFrame } = render(<InteractiveWrapper initialValue="hello world" />);
+      await waitForMount();
+
+      stdin.write('\u001B\b');
+      await waitForUpdate();
+
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('hello ');
+      expect(frame).not.toContain('world');
+    });
+
+    it('deletes the previous word on CSI alt-delete sequences some terminals send', async () => {
+      const { stdin, lastFrame } = render(<InteractiveWrapper initialValue="hello world" />);
+      await waitForMount();
+
+      stdin.write('\u001B[3;3~');
+      await waitForUpdate();
+
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('hello ');
+      expect(frame).not.toContain('world');
+    });
   });
 
   describe('(a) inline paste (below threshold)', () => {

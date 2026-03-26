@@ -2,64 +2,52 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs/banner-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="./docs/banner-light.svg">
     <img alt="OpenWeft" src="./docs/banner-dark.svg" width="100%">
   </picture>
 </p>
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="./docs/hero-dark.svg">
-    <source media="(prefers-color-scheme: light)" srcset="./docs/hero-light.svg">
+    <img alt="OpenWeft setup wizard" src="./docs/wizard-dark.svg" width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
     <img alt="OpenWeft terminal demo" src="./docs/hero-dark.svg" width="100%">
   </picture>
 </p>
 
-**If you're running multiple AI coding agents by hand — creating worktrees, pasting prompts into tmux panes, checking each one, merging, realizing one broke another's assumptions, re-planning, and pasting updated context back into the survivors — you are the bottleneck in your own pipeline.**
+**AI agents don't fail because they're bad at coding. They fail because no one told them what the other agents are editing.**
 
-OpenWeft removes you from the loop.
+OpenWeft sits on top of [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex CLI](https://github.com/openai/codex). You give it a list of stuff to get done. It detects which ones would touch the same code, runs the safe ones in parallel, merges the results, and re-plans the rest.
 
-OpenWeft is for people who already have a list of things they want to add, fix, or refactor, but do not want to spend their day babysitting Codex or Claude Code across multiple terminals, worktrees, and merge decisions.
+**You write a list. You walk away. You come back to commits.**
+
+**Good fit:** You have a backlog of features, some of them touch overlapping files, and you want to batch them through Claude Code or Codex without manually coordinating worktrees, merges, and re-plans.
+
+**Not the right tool:** One quick edit (just run Claude Code directly), interactive pair-programming, repos that can't use git worktrees, or anyone expecting a polished 1.0.
 
 <p align="center">
-  <!-- Enable after first public npm publish:
   <a href="https://www.npmjs.com/package/openweft"><img src="https://img.shields.io/npm/v/openweft?style=for-the-badge&color=cb3837" alt="npm"></a>
-  -->
-  <!-- Enable after the public repo/workflow badge resolves:
   <a href="https://github.com/NeuraCerebra-AI/openweft/actions"><img src="https://img.shields.io/github/actions/workflow/status/NeuraCerebra-AI/openweft/ci.yml?branch=main&style=for-the-badge" alt="CI"></a>
-  -->
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT"></a>
 </p>
-
-It's a CLI that takes a batch of feature requests, turns each one into a strict plan, figures out which ones conflict, runs the safe ones in parallel across isolated worktrees, merges in priority order, re-plans everything that's left against the updated codebase, and keeps going until the queue is empty.
-
-You write a list. You walk away. You come back to commits.
 
 ```bash
 npm install -g openweft
 openweft                              # first run launches the setup wizard
 ```
 
-First run in a terminal launches an interactive setup wizard — it detects your installed backends, initializes the project, and lets you type your first feature request. One flow, no manual config. For returning users, `openweft` opens the dashboard with your queue visible — press `s` to start execution when you're ready.
+First run launches an interactive setup wizard — it detects your installed backends, initializes the project, and lets you type your first feature request. One flow, no manual config. For returning users, `openweft` opens the dashboard — press `s` to start execution.
 
 ---
 
 ## Install
 
-### npm (recommended)
-
 ```bash
 npm install -g openweft
 ```
-
-### From GitHub
-
-```bash
-npm install -g github:NeuraCerebra-AI/openweft
-```
-
-Builds on install. No `dist/` in the repo.
 
 ### From source
 
@@ -68,28 +56,27 @@ git clone https://github.com/NeuraCerebra-AI/openweft.git
 cd openweft
 npm install
 npm link
-npm run openweft -- --help
-```
-
-If you want it to behave like `codex` or `claude` so you can just type `openweft` in any new terminal, `npm link` is the source-repo workflow:
-
-```bash
-git clone https://github.com/NeuraCerebra-AI/openweft.git
-cd openweft
-npm install
-npm link
-
-# now available by name
 openweft --help
 ```
 
-If you do not want to link it globally, you can still run it directly from source:
+<details>
+<summary>Other install methods</summary>
+
+**Direct from GitHub:**
+
+```bash
+npm install -g github:NeuraCerebra-AI/openweft
+```
+
+Builds on install. No `dist/` in the repo.
+
+**Run from source without global install:**
 
 ```bash
 npm run openweft -- --help
 ```
 
-To run OpenWeft from source against another repo without installing it globally:
+**Run against another repo without installing globally:**
 
 ```bash
 # terminal 1
@@ -102,6 +89,8 @@ node /path/to/openweft/node_modules/tsx/dist/cli.mjs /path/to/openweft/src/bin/o
 node /path/to/openweft/node_modules/tsx/dist/cli.mjs /path/to/openweft/src/bin/openweft.ts add "your feature request"
 node /path/to/openweft/node_modules/tsx/dist/cli.mjs /path/to/openweft/src/bin/openweft.ts start
 ```
+
+</details>
 
 ## Requirements
 
@@ -129,7 +118,7 @@ openweft add "add audit log export"
 # Or just write a list
 $EDITOR feature_requests/queue.txt
 
-# Let it rip in a real TTY for the interactive dashboard
+# Let it rip
 openweft
 
 # Or detach it
@@ -139,133 +128,137 @@ openweft start --bg
 openweft status
 ```
 
-## In one minute
-
-1. Run `openweft`
-2. Complete the setup wizard
-3. Add one or more coding requests
-4. Start execution
-5. OpenWeft plans, phases, runs, merges, and re-checks what remains
-6. You come back to commits, logs, and a durable checkpoint if anything was interrupted
-
 ---
 
 ## How it works
 
-1. OpenWeft reads pending requests from `feature_requests/queue.txt`.
-2. Prompt A compiles each request into Prompt B, a powerful worker brief rather than a tiny helper prompt, and OpenWeft persists that Prompt B artifact for inspection and recovery.
-3. OpenWeft launches Prompt-B workers inside isolated git worktrees that OpenWeft owns and controls.
-4. Each worker investigates the assigned codebase, edits code, validates its work, and maintains its execution ledger inside that assigned workspace.
-5. OpenWeft compares the real outcomes, including actual diffs and touched files, decides what is compatible, and merges the safe results in order.
-6. After merges land, OpenWeft re-evaluates what remains against the new repository state and keeps going until the queue is empty.
+**You queue a request.** OpenWeft reads it from `feature_requests/queue.txt`.
 
-The loop runs until the queue is empty or you tell it to stop.
+**OpenWeft writes the agent's instructions for you.** Each request gets compiled into a detailed worker brief — not a one-line prompt, but a full operating document that tells the agent to investigate the codebase first, brainstorm 5 approaches, score them by risk, build a structured execution plan, test incrementally, and verify downstream impact before moving on.
 
-For the full target design, see [ARCHITECTURE.md](./ARCHITECTURE.md). The current runtime still contains some legacy plan-first seams while converging toward that Prompt-B-first architecture.
+**Each feature gets its own isolated workspace.** OpenWeft creates a separate git worktree per feature. Agents can't step on each other because they're working in different copies of the repo.
+
+**Safe features run in parallel. Conflicting ones wait.** OpenWeft analyzes which features would touch the same files. Non-overlapping work runs simultaneously. Everything else gets queued for the next batch.
+
+**Results merge in priority order.** When agents finish, OpenWeft merges their work back using `--no-ff` commits. If there's a conflict, it merges main into the worktree and lets the agent resolve it.
+
+**Every step is recorded.** Each agent writes a Living Plan Ledger — a structured markdown file that captures what was investigated, what changed (with before/after code), what was deferred and why. When it's done, you can read exactly what happened. Not a log dump — a narrative.
+
+**Then the cycle repeats.** After merges land, the codebase has changed. OpenWeft re-evaluates whatever remains against the new state, re-scores, re-phases, and runs the next batch. This continues until the queue is empty.
+
+For the full architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ---
 
-## What you see
+## What agents actually do (the default prompts)
 
-```
-$ openweft status
+Most orchestrators send the agent a sentence and hope for the best. OpenWeft ships production-grade prompt templates that turn every request into a rigorous execution workflow:
 
-Status: completed
-Machine State: idle
-Background: not running
-Pending Queue: 0
-Processed Queue Entries: 1
-Features: 1 total (1 completed)
-Cost: $0.246549 (129221 input / 1458 output tokens)
-Executing: none
-Planned: none
-Failed: none
-Completed:
-  [001] Add a multiply function to index.js (high 0.693)
-```
+| What | Why it matters |
+|---|---|
+| **5-approach brainstorming** | The agent evaluates 5 high-level approaches by blast radius, reversibility, and complexity — then 5 implementation strategies within the winner. Not first-idea execution. |
+| **Living Plan Ledger** | A structured execution record — step ID, dependencies, risk level, rollback notes, validation criteria, status, before/after code — written to `project_ledgers/` as a readable markdown file. Survives context loss. If the session restarts, the ledger is the source of truth. When a feature finishes, you can open the ledger and see exactly what the agent investigated, changed, and chose not to change. |
+| **Downstream Impact Reviews** | Before completing a major step, the agent launches 1–2 verification agents to check whether the edits broke assumptions in later steps. The plan updates before moving on. |
+| **4-phase debugging protocol** | Bug-fix requests trigger error sequence analysis → root cause hypothesis scoring → fix strategy with rollback planning → iterative implementation to 95%+ confidence. |
+| **Context grounding** | The agent investigates the codebase before planning — file paths, line numbers, code snippets, live documentation via Context7 — so reasoning starts from reality, not assumptions. |
+
+`openweft init` creates both prompt files with these defaults. They're production-grade out of the box — customization is possible but not necessary.
 
 ---
 
 ## Commands
 
 ```
-openweft                       first run: interactive wizard · returning: opens dashboard, press s to start
-openweft init                  set up config, directories, starter prompts
+openweft                       setup wizard (first run) · dashboard (returning)
+openweft init                  set up config, directories, prompt files
 openweft add "feature"         queue a request (also accepts stdin)
-openweft start                 run the queue in the foreground; in a real TTY this opens the interactive dashboard
-openweft start --bg            detached, PID tracked, logs to .openweft/output.log
-openweft start --stream        stream raw backend output to your terminal
-openweft start --tmux          spawn a tmux session; falls back if tmux is missing
-openweft start --dry-run       full pipeline against the mock adapter, no cost
+openweft start                 run the queue with interactive dashboard
+openweft start --bg            detach — PID tracked, logs to .openweft/output.log
+openweft start --stream        stream raw agent output to your terminal
+openweft start --tmux          launch in a tmux session
+openweft start --dry-run       full pipeline with mock adapter, zero cost
 openweft status                queue state, tokens, cost, feature breakdown
-openweft stop                  finish the current phase, then stop
+openweft stop                  finish current phase, then stop
+```
+
+```
+$ openweft status
+
+Status: completed · Features: 1 total (1 completed)
+Cost: $0.246549 (129221 input / 1458 output tokens)
+Completed:
+  [001] Add a multiply function to index.js (high 0.693)
 ```
 
 ---
 
-## Prompt files
+## Under the hood
 
-OpenWeft needs two user-maintained prompt files. `openweft init` creates starter versions of both.
+OpenWeft uses a two-stage prompt system internally called **Prompt A** and **Prompt B**. Prompt A is a meta-prompt — it takes your raw request and compiles it into Prompt B, which is the actual detailed worker brief the agent executes. You never touch Prompt B directly. The default Prompt A is production-grade — it ships with 5-approach brainstorming, living plan ledgers, downstream impact reviews, and a 4-phase debugging protocol baked in. It works out of the box. You *can* customize it, but you probably won't need to.
 
-- `prompts/prompt-a.md` — must contain `{{USER_REQUEST}}`
-- `prompts/plan-adjustment.md` — must contain `{{CODE_EDIT_SUMMARY}}`
-
-Prompt A is a compiler for Prompt B. Prompt B is the worker brief that tells the downstream agent how to investigate, execute carefully, maintain its ledger, validate its work, and stay inside the OpenWeft-assigned workspace. OpenWeft owns worktree creation, queue control, compatibility decisions, and merges.
-
-Generated Prompt B artifacts are persisted under `feature_requests/briefs/` so they are durable, inspectable, and tied to feature IDs.
-
-The important boundary is:
-
-- Prompt A shapes the worker
-- Prompt B performs the work
-- OpenWeft owns topology and reconciliation
-
-If you are tuning prompts, optimize for stronger Prompt-B workers, not for making Prompt A look short or elegant.
-
-**Minimal Prompt A:**
-
-```md
-You are preparing a planning prompt for a coding agent.
-
-User request:
-{{USER_REQUEST}}
-
-Return a Prompt B that tells the next agent to produce a compact Markdown feature plan with:
-- a short request summary
-- 3-5 implementation steps
-- a `## Ledger` section covering constraints, assumptions, watchpoints, and validation
-- a `## Manifest` section containing a strict JSON manifest code block with `create`, `modify`, and `delete` arrays
-- targeted validation steps
-- explicit instructions to use the current assigned repository/worktree only and not create additional git worktrees, clones, sibling checkouts, or ad hoc branches unless explicitly instructed by the orchestrator
-
-Prefer the smallest safe change set.
+```
+  Your request
+      │
+      ▼
+  Prompt A ──► Prompt B (the agent's actual operating instructions)
+      │
+      ▼
+  Score + Phase
+  successLikelihood / blastRadius^0.6
+  EWMA dampening · hysteresis · tier buckets
+  manifest overlap ──► conflict-safe groups
+      │
+      ▼
+  Execute in parallel
+  one worktree per feature · one agent per feature
+  staggered launch · Promise.allSettled barrier
+      │
+      ▼
+  Merge + Re-plan
+  priority-order merge (--no-ff)
+  conflict? merge main into worktree, agent resolves
+  diff summaries ──► plan adjustment for remaining features
+  re-score ──► re-phase ──► next batch
+      │
+      ▼
+  Queue empty ──► done
 ```
 
-**Minimal Plan Adjustment:**
+**The scoring is the secret sauce.** Features that touch high-fan-in files — shared configs, route registries, index barrels — get scored lower and phased into their own execution group. This is how OpenWeft decides "which ones would touch the same code." It's file-level manifest analysis with coupling weights, not a heuristic guess.
 
-```md
-Review these merged edits:
-{{CODE_EDIT_SUMMARY}}
+**The lifecycle is a state machine.** XState v5. Plan → score → phase → execute → merge → re-plan is a deterministic loop, not a chain of promises hoping nothing goes wrong between steps.
 
-Investigate whether they interfere with the referenced feature plan.
-Use the `## Ledger` section to preserve or update constraints, assumptions, watchpoints, and validation.
-If they do, return the updated full plan markdown, including the `## Ledger` and `## Manifest` sections.
-If they do not, return the original plan unchanged.
-Do not modify source files during this adjustment step.
-```
+**Three backends, one interface.** Codex CLI, Claude Code, and a deterministic mock share the same `AgentAdapter` contract. The mock powers `--dry-run` and the full test suite — validate the entire pipeline without spending a cent.
 
-These are starting points. The quality of your prompts directly determines the quality of the plans. Invest here.
-
-More specifically: the quality of Prompt A determines the quality of Prompt B, and Prompt B is where most of the system's horsepower lives.
+**Plans on disk are the source of truth.** If an agent session degrades, the plan file persists. A fresh session picks up from the plan, not from broken context. If the process crashes entirely, the Zod-validated checkpoint resets in-flight features to `planned` and re-runs them.
 
 ---
 
 ## Configuration
 
-`openweft init` writes `.openweftrc.json`. Config loads via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig), so `.openweftrc`, `.openweftrc.yaml`, `openweft.config.js`, or the `openweft` key in `package.json` all work.
+`openweft init` writes `.openweftrc.json`. Config loads via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig) — so `.openweftrc`, `.openweftrc.yaml`, `openweft.config.js`, or the `openweft` key in `package.json` all work.
+
+**Auth:** `subscription` (default) uses your existing CLI login. `api_key` mode reads from an env var you specify.
+
+**Budget:** `pauseAtUsd` halts after the current phase. `stopAtUsd` is a hard stop. Both enforced at runtime. All null by default — your money, your call.
+
+**Concurrency:** 3 parallel agents, 5s stagger delay, 5 retry attempts with backoff. All configurable.
+
+**Models:** Defaults to `gpt-5.3-codex` for Codex and `claude-sonnet-4-6` for Claude — both work on standard subscription plans. The onboarding wizard lets you pick a different model, or change it anytime in your config:
+
+| Plan | Codex models | Claude models |
+|---|---|---|
+| Standard ($20/mo) | `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini` | `claude-sonnet-4-6`, `claude-haiku-4-5` |
+| Premium ($100–200/mo) | All above + `gpt-5.3-codex-spark` | All above + `claude-opus-4-6` |
+
+**Effort:** Controls how hard the model reasons per task. Default is `medium`. Codex supports `low`, `medium`, `high`, `xhigh`. Claude supports `low`, `medium`, `high`, `max` Higher effort = better results on complex tasks, but slower and costlier.
+
+**Permissions:** Handled automatically. Claude Code runs with `--dangerously-skip-permissions`. Codex runs with `--sandbox danger-full-access` for execution and `--sandbox read-only` for planning. No popups, no interruptions — you walk away.
+
+**Approval:** OpenWeft auto-approves all execution stages by default — true fire-and-forget. Set `"approval": "per-feature"` if you want to confirm each feature before it runs, or `"first-only"` to approve once and auto-approve the rest.
 
 <details>
-<summary>Default config</summary>
+<summary>Full default config</summary>
 
 ```json
 {
@@ -284,6 +277,11 @@ More specifically: the quality of Prompt A determines the quality of Prompt B, a
     "codex": "gpt-5.3-codex",
     "claude": "claude-sonnet-4-6"
   },
+  "effort": {
+    "codex": "medium",
+    "claude": "medium"
+  },
+  "approval": "always",
   "concurrency": {
     "maxParallelAgents": 3,
     "staggerDelayMs": 5000
@@ -312,107 +310,38 @@ More specifically: the quality of Prompt A determines the quality of Prompt B, a
 
 </details>
 
-**Auth:**
-- `subscription` (default) — uses your existing CLI login
-- `api_key` — set the env var in `auth.codex.envVar` or `auth.claude.envVar`
-
-**Budget thresholds** — set `warnAtUsd` (toast), `pauseAtUsd` (stop after current phase), or `stopAtUsd` (hard stop). All null by default because your money is your business.
-
 ---
 
-## What OpenWeft writes to disk
+## What gets written to disk
 
-Not a mystery. Here's everything:
+Everything OpenWeft creates. No hidden state.
 
-| Path | What it is |
+| Path | Purpose |
 |---|---|
-| `feature_requests/queue.txt` | your requests, one per line. `#` comments. processed lines get `# ✓ [001]` |
-| `feature_requests/*.md` | generated plans with manifests |
-| `.openweft/checkpoint.json` | resumable orchestrator state |
-| `.openweft/costs.jsonl` | append-only cost ledger |
-| `.openweft/audit-trail.jsonl` | structured audit log |
+| `feature_requests/queue.txt` | Your requests — pending and processed, with feature IDs |
+| `feature_requests/*.md` | Generated plans with `## Manifest` blocks |
+| `feature_requests/briefs/*.md` | Generated worker briefs, tied to feature IDs |
+| `project_ledgers/*.md` | Living Plan Ledgers — one per feature, full execution narrative with before/after code |
+| `.openweft/checkpoint.json` | Orchestrator state — Zod-validated, atomically written with `.backup` sibling |
+| `.openweft/costs.jsonl` | Token usage + estimated USD per feature |
+| `.openweft/audit-trail.jsonl` | Every orchestrator event, append-only |
 | `.openweft/output.log` | `--bg` mode output |
+| `prompts/prompt-a.md` | Your Prompt A template (must contain `{{USER_REQUEST}}`) |
+| `prompts/plan-adjustment.md` | Your plan adjustment template (must contain `{{CODE_EDIT_SUMMARY}}`) |
 
-If you kill the process, reboot, lose power, or `Ctrl+C` at the worst possible moment, `openweft start` recovers from the last safe checkpoint boundary and restarts unfinished work safely when needed.
-
-It is designed to recover cleanly, not to resurrect a live in-flight agent session byte-for-byte.
-
----
-
-## Architecture (for the curious)
-
-```
-queue.txt / openweft add
-        |
-        v
-  Worker Brief Creation
-  Prompt A --> Prompt B
-        |
-        v
-  Execution + Orchestration
-  Prompt B worker --> edits + validation + manifest-backed plan state
-        |
-        v
-  Scoring + Phasing
-  blast radius × success likelihood
-  EMA dampening · hysteresis · tier buckets
-  manifest overlap --> conflict-safe groups
-  one git worktree per feature
-  one agent session per feature
-  CODEX_HOME isolation · staggered launch
-  Promise.allSettled barrier
-        |
-        v
-  Merge + Re-plan
-  priority-order merge (--no-ff)
-  conflict? merge main into worktree, agent resolves
-  diff summaries --> plan adjustment for remaining features
-  re-score --> re-phase --> next phase
-        |
-        v
-  Queue empty --> toast --> done
-```
-
-Three backends behind one adapter interface: Codex, Claude, and mock. The mock powers `--dry-run` and the test suite.
-
-State machine (XState) manages the phase lifecycle. Session chains (not long-lived processes) keep agent context from degrading across phases. Plans on disk are the source of truth — if a session rots, start a fresh one loaded with the plan file.
+**Crash recovery:** Kill the process, reboot, lose power, `Ctrl+C` at the worst moment — `openweft start` recovers from the last checkpoint. In-flight features reset to `planned` and re-run. Designed to recover cleanly, not to resurrect a live session byte-for-byte.
 
 ---
 
-## Best fit
+## Transparency
 
-It is a strong fit for:
+OpenWeft is beta. Here's what that means:
 
-- batching multiple coding requests that may or may not conflict
-- repositories where isolated git worktrees are acceptable
-- users already comfortable with Codex CLI or Claude Code
-- teams who want durable checkpoints and merge-aware orchestration
+**It does:** Recover from crashes. Track costs. Respect budget limits. Phase work by file conflict. Merge in priority order. Re-plan against updated code.
 
-## Not best fit
+**It doesn't yet:** Perfectly resume a live agent session mid-thought. Guarantee zero manual review. Promise stability across every environment and edge case.
 
-OpenWeft is probably not the right tool for:
-
-- one tiny one-off edit where running an agent directly is faster
-- highly interactive pair-programming sessions
-- repos with unusual git constraints or very strict branch/worktree policies
-- users expecting a polished 1.0 product with zero operational rough edges
-
----
-
-## Beta promises
-
-OpenWeft is aiming to be:
-
-- reliable enough to trust with real queues
-- explicit about what it writes to disk
-- conservative about git/worktree ownership
-- honest about failure and recovery behavior
-
-It is not yet promising:
-
-- perfect resumption of live in-flight agent sessions
-- zero manual review for every repo or workflow
-- final 1.0 stability guarantees across all environments
+If something breaks, the checkpoint and audit trail tell you exactly where and why.
 
 ---
 
@@ -424,49 +353,24 @@ That's the job.
 
 ---
 
-<details>
-<summary>Development</summary>
+## Development
 
 ```bash
 npm run typecheck      # tsc --noEmit
 npm test               # vitest
 npm run build          # tsc → dist/
-npm pack --dry-run     # verify package contents
+npm run release:check  # all of the above + npm publish --dry-run
+openweft start --dry-run   # full pipeline, mock adapter, zero cost
 ```
 
-Release gate (single command):
+## Contributing
 
-```bash
-npm run release:check  # typecheck + test + build + npm publish --dry-run
-```
-
-Fastest local validation:
-
-```bash
-openweft start --dry-run
-```
-
-Live backend smoke tests:
-
-```bash
-npm run smoke:live:codex
-npm run smoke:live:codex:resume
-npm run smoke:live:claude
-```
-
-### Publishing
-
-```bash
-npm run release:check
-npm publish
-```
-
-### Contributing
-
-PRs welcome. Run `npm run release:check` before submitting — it covers typecheck, tests, build, and package validation in one shot.
-
-</details>
+PRs welcome. Run `npm run release:check` before submitting.
 
 ## License
 
 MIT
+
+---
+
+If OpenWeft saves you time, consider giving it a star. It helps others find it.

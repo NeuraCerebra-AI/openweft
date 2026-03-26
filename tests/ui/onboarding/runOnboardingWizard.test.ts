@@ -37,6 +37,14 @@ vi.mock('../../../src/config/index.js', () => ({
       planAdjustment: './prompts/plan-adjustment.md',
     },
     backend: 'codex',
+    models: {
+      codex: 'gpt-5.3-codex',
+      claude: 'claude-sonnet-4-6'
+    },
+    effort: {
+      codex: 'medium',
+      claude: 'medium'
+    }
   })),
 }));
 
@@ -106,6 +114,7 @@ const makeDeps = (overrides?: Partial<WizardDependencies>): WizardDependencies =
   createInitialCommit: vi.fn().mockResolvedValue(undefined),
   detectCodex: vi.fn().mockResolvedValue({ installed: true, authenticated: true }),
   detectClaude: vi.fn().mockResolvedValue({ installed: false, authenticated: false }),
+  openExternalUrl: vi.fn().mockResolvedValue(undefined),
   ...overrides,
 });
 
@@ -325,12 +334,24 @@ describe('runOnboardingWizard', () => {
       await runOnboardingWizard(deps);
 
       expect(captured.callbacks).not.toBeNull();
-      await captured.callbacks!.onRunInit('codex');
+      await captured.callbacks!.onRunInit({
+        backend: 'codex',
+        model: 'gpt-5.4',
+        effort: 'high'
+      });
 
       expect(ensureRuntimeDirectories).toHaveBeenCalled();
       expect(writeTextFileAtomic).toHaveBeenCalledWith(
         expect.stringContaining('.openweftrc.json'),
         expect.stringContaining('codex')
+      );
+      expect(writeTextFileAtomic).toHaveBeenCalledWith(
+        expect.stringContaining('.openweftrc.json'),
+        expect.stringContaining('gpt-5.4')
+      );
+      expect(writeTextFileAtomic).toHaveBeenCalledWith(
+        expect.stringContaining('.openweftrc.json'),
+        expect.stringContaining('high')
       );
     });
 
@@ -349,7 +370,11 @@ describe('runOnboardingWizard', () => {
       await runOnboardingWizard(deps);
 
       expect(captured.callbacks).not.toBeNull();
-      await captured.callbacks!.onRunInit('codex');
+      await captured.callbacks!.onRunInit({
+        backend: 'codex',
+        model: 'gpt-5.3-codex',
+        effort: 'medium'
+      });
 
       const gitignoreWrite = (
         writeTextFileAtomic as MockedFunction<typeof writeTextFileAtomic>
@@ -372,7 +397,11 @@ describe('runOnboardingWizard', () => {
       await runOnboardingWizard(deps);
 
       expect(captured.callbacks).not.toBeNull();
-      await captured.callbacks!.onRunInit('codex');
+      await captured.callbacks!.onRunInit({
+        backend: 'codex',
+        model: 'gpt-5.3-codex',
+        effort: 'medium'
+      });
 
       const gitignoreWrite = (
         writeTextFileAtomic as MockedFunction<typeof writeTextFileAtomic>
@@ -421,6 +450,19 @@ describe('runOnboardingWizard', () => {
         codex: { installed: true, authenticated: true },
         claude: { installed: true, authenticated: false },
       });
+    });
+
+    it('onOpenSuperpowersRepo opens the upstream GitHub homepage', async () => {
+      const openExternalUrl = vi.fn().mockResolvedValue(undefined);
+      const deps = makeDeps({ openExternalUrl });
+      const captured = captureWithFullScreenProps();
+
+      await runOnboardingWizard(deps);
+
+      expect(captured.callbacks).not.toBeNull();
+      await captured.callbacks!.onOpenSuperpowersRepo();
+
+      expect(openExternalUrl).toHaveBeenCalledWith('https://github.com/obra/superpowers');
     });
   });
 

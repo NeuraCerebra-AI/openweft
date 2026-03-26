@@ -1,5 +1,10 @@
 import type { StoreApi } from 'zustand/vanilla';
 
+import {
+  getEffortOptionsForBackend,
+  getModelOptionsForBackend,
+  type BackendEffortLevel
+} from '../../config/options.js';
 import type { AgentState, UIStore } from '../store.js';
 import {
   deleteBackward,
@@ -20,7 +25,36 @@ export interface KeypressHandlers {
   onApprovalDecision?: (decision: 'approve' | 'deny' | 'skip' | 'always') => void;
   onStartRequest?: () => void;
   onRemoveAgent?: (agentId: string) => void;
+  onSaveModelSelection?: (selection: { model: string; effort: BackendEffortLevel }) => void;
 }
+
+const MODEL_MENU_FOCUS_ORDER = ['model', 'effort', 'save', 'cancel'] as const;
+
+const cycleIndexedOption = <T extends string>(
+  options: readonly T[],
+  current: string,
+  direction: -1 | 1
+): T => {
+  const currentIndex = options.indexOf(current as T);
+  const fallback = options[0];
+  if (fallback === undefined) {
+    throw new Error('Cannot cycle an empty options list.');
+  }
+
+  const resolvedIndex = currentIndex === -1 ? 0 : currentIndex;
+  return options[(resolvedIndex + direction + options.length) % options.length] ?? fallback;
+};
+
+const cycleModelMenuFocus = (
+  focus: typeof MODEL_MENU_FOCUS_ORDER[number],
+  direction: -1 | 1
+): typeof MODEL_MENU_FOCUS_ORDER[number] => {
+  const currentIndex = MODEL_MENU_FOCUS_ORDER.indexOf(focus);
+  const resolvedIndex = currentIndex === -1 ? 0 : currentIndex;
+  return MODEL_MENU_FOCUS_ORDER[
+    (resolvedIndex + direction + MODEL_MENU_FOCUS_ORDER.length) % MODEL_MENU_FOCUS_ORDER.length
+  ] ?? 'model';
+};
 
 export const filterAgents = (agents: readonly AgentState[], filterText: string): AgentState[] => {
   const query = filterText.toLowerCase();
@@ -167,6 +201,23 @@ export const handleKeypress = (
             return 'handled';
           }
           return 'unhandled';
+        case 'm':
+          if (state.executionRequested) {
+            return 'unhandled';
+          }
+          if (state.modelSelection === null) {
+            return 'unhandled';
+          }
+          if (!state.modelSelection.editable) {
+            state.setNotice({
+              level: 'info',
+              message: 'Model editing is only supported for dedicated JSON config files.'
+            });
+            return 'handled';
+          }
+          state.openModelMenu();
+          state.setMode('model-menu');
+          return 'handled';
 
         case 'return':
           return 'handled';
@@ -301,5 +352,105 @@ export const handleKeypress = (
         default:
           return 'handled';
       }
+
+    case 'model-menu': {
+      const modelSelection = state.modelSelection;
+      const modelMenu = state.modelMenu;
+
+      if (modelSelection === null || modelMenu === null) {
+        state.closeModelMenu();
+        state.setMode('normal');
+        return 'handled';
+      }
+
+      switch (key) {
+        case '?':
+          state.setShowHelp(true);
+          return 'handled';
+        case 'escape':
+          state.closeModelMenu();
+          state.setMode('normal');
+          return 'handled';
+        case 'up':
+        case 'k':
+          state.setModelMenu({
+            ...modelMenu,
+            focus: cycleModelMenuFocus(modelMenu.focus, -1)
+          });
+          return 'handled';
+        case 'down':
+        case 'j':
+        case 'tab':
+          state.setModelMenu({
+            ...modelMenu,
+            focus: cycleModelMenuFocus(modelMenu.focus, 1)
+          });
+          return 'handled';
+        case 'left':
+        case 'h':
+        case 'right':
+        case 'l': {
+          const direction: -1 | 1 = key === 'left' || key === 'h' ? -1 : 1;
+
+          if (modelMenu.focus === 'model') {
+            state.setModelMenu({
+              ...modelMenu,
+              model: cycleIndexedOption(
+                getModelOptionsForBackend(modelSelection.backend, modelMenu.model),
+                modelMenu.model,
+                direction
+              )
+            });
+            return 'handled';
+          }
+
+          if (modelMenu.focus === 'effort') {
+            state.setModelMenu({
+              ...modelMenu,
+              effort: cycleIndexedOption(
+                getEffortOptionsForBackend(modelSelection.backend),
+                modelMenu.effort,
+                direction
+              )
+            });
+            return 'handled';
+          }
+
+          state.setModelMenu({
+            ...modelMenu,
+            focus: cycleModelMenuFocus(modelMenu.focus, direction)
+          });
+          return 'handled';
+        }
+        case 'return':
+          if (modelMenu.focus === 'model') {
+            state.setModelMenu({ ...modelMenu, focus: 'effort' });
+            return 'handled';
+          }
+          if (modelMenu.focus === 'effort') {
+            state.setModelMenu({ ...modelMenu, focus: 'save' });
+            return 'handled';
+          }
+          if (modelMenu.focus === 'cancel') {
+            state.closeModelMenu();
+            state.setMode('normal');
+            return 'handled';
+          }
+          if (!handlers.onSaveModelSelection) {
+            state.setNotice({
+              level: 'error',
+              message: 'Model editing is not available in this session.'
+            });
+            return 'handled';
+          }
+          handlers.onSaveModelSelection({
+            model: modelMenu.model,
+            effort: modelMenu.effort
+          });
+          return 'handled';
+        default:
+          return 'handled';
+      }
+    }
   }
 };

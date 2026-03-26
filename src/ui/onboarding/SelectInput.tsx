@@ -10,16 +10,24 @@ export interface SelectOption<T extends string = string> {
 }
 
 interface SelectInputProps<T extends string = string> {
+  readonly initialIndex?: number;
   readonly options: readonly SelectOption<T>[];
   readonly onSelect: (value: T) => void;
 }
 
 export const SelectInput = <T extends string = string>({
+  initialIndex = 0,
   options,
   onSelect,
 }: SelectInputProps<T>): React.ReactElement => {
   const theme = useTheme();
-  const [focusedIndex, setFocusedIndex] = useState(0);
+  const [focusedIndex, setFocusedIndex] = useState(() => {
+    if (options.length === 0) {
+      return 0;
+    }
+
+    return Math.max(0, Math.min(initialIndex, options.length - 1));
+  });
   // Use a ref so the Enter handler always reads the latest index
   // without needing to be re-subscribed after every state update.
   const focusedIndexRef = useRef(focusedIndex);

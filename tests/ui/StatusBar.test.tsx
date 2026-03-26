@@ -128,4 +128,29 @@ describe('StatusBar', () => {
     expect(frame).toContain('750 tokens');
     expect(frame).not.toMatch(/\dk/);
   });
+
+  it('renders the active backend, model, and effort when provided', () => {
+    const { lastFrame } = render(
+      <ThemeContext.Provider value={catppuccinMocha}>
+        <StatusBar
+          phase={null}
+          activeCount={0}
+          pendingCount={0}
+          totalCount={0}
+          totalTokens={0}
+          elapsed={0}
+          modelSelection={{
+            backend: 'codex',
+            model: 'gpt-5.4',
+            effort: 'high'
+          }}
+        />
+      </ThemeContext.Provider>
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('codex');
+    expect(frame).toContain('gpt-5.4');
+    expect(frame).toContain('high');
+  });
 });

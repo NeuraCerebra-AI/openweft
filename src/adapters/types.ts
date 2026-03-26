@@ -1,6 +1,7 @@
 import type { CostRecord, CostStage } from '../domain/costs.js';
 import type { ClassifiedError } from '../domain/errors.js';
 import type { AuthMethod, Backend } from '../domain/primitives.js';
+import type { BackendEffortLevel } from '../config/options.js';
 
 export type AdapterSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export type ClaudePermissionMode = 'acceptEdits' | 'bypassPermissions' | 'default' | 'dontAsk' | 'plan';
@@ -43,6 +44,7 @@ export interface AdapterTurnRequest {
   cwd: string;
   prompt: string;
   model: string;
+  effortLevel?: BackendEffortLevel;
   auth: AdapterAuthConfig;
   sessionId?: string | null;
   persistSession?: boolean;

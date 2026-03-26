@@ -255,6 +255,7 @@ const planPendingRequests = async (
       priorityScore: 1,
       priorityTier: 'medium',
       rerunEligible: true,
+      mergeResolutionAttempts: 0,
       updatedAt: timestamp()
     };
     workingQueue = parseQueueFile(updatedQueueContent);

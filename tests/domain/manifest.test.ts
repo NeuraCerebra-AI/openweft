@@ -146,4 +146,17 @@ describe('manifest', () => {
 `)
     ).toThrow(/Ledger/i);
   });
+
+  it('reports missing ledger subheadings when a ledger heading exists without the required structure', () => {
+    expect(() =>
+      assertLedgerSection(`# Plan
+
+## Ledger
+- Constraint: Keep the change set small.
+- Assumption: The manifest is conservative.
+- Watchpoint: Preserve orchestrator compatibility.
+- Validation: Run targeted checks.
+`)
+    ).toThrow('Ledger section must include the subheadings: Constraints, Assumptions, Watchpoints, Validation.');
+  });
 });

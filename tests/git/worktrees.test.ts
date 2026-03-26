@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { simpleGit } from 'simple-git';
 
 import {
+  abortMerge,
   commitAllChanges,
   createWorktree,
   getAutoGcSetting,
@@ -195,8 +196,18 @@ describe('git worktree infrastructure', () => {
     const merged = await mergeBranchIntoCurrent(repoRoot, 'agent-stage-a');
     expect(merged.status).toBe('merged');
 
+    const beforeStage = await getHeadCommit(branchBPath);
     const stagedConflict = await mergeBranchIntoWorktree(branchBPath, 'main');
-    expect(stagedConflict.status).toBe('conflict');
+    expect(stagedConflict.status).toBe('conflicted');
+    expect(await getHeadCommit(branchBPath)).toBe(beforeStage);
+    if (stagedConflict.status === 'conflicted') {
+      expect(stagedConflict.conflicts[0]?.file).toBe('src.txt');
+      expect(stagedConflict.mergeHeadCommit).not.toBe(beforeStage);
+      const mergeHeadCommit = (await simpleGit(branchBPath).revparse(['MERGE_HEAD'])).trim();
+      expect(mergeHeadCommit).toBe(stagedConflict.mergeHeadCommit);
+    }
+
+    await abortMerge(branchBPath);
   });
 
   it('returns staged merge details for a clean merge into a worktree', async () => {

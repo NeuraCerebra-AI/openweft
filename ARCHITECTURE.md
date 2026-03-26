@@ -1,575 +1,785 @@
 # OpenWeft Architecture
 
-## Status
+OpenWeft is a batch orchestrator for AI coding agents. You give it a queue of feature requests, it figures out which ones can safely run in parallel, launches them in isolated git worktrees, merges the results, and repeats until the queue is empty.
 
-This document describes the **canonical target architecture** for OpenWeft.
-
-It is intentionally opinionated.
-
-It is not merely a description of whatever the code happens to do today.
-It describes the architecture OpenWeft should be converging toward:
-
-- Prompt A generates a powerful execution brief
-- Prompt B is that execution brief
-- Prompt B does the real work
-- OpenWeft owns orchestration, isolation, comparison, reconciliation, and merge control
-
-If the implementation and this document disagree, treat that as a design gap to resolve rather than a reason to water this document down.
+This document explains how every piece works.
 
 ---
 
-## 1. Core Thesis
+## The loop
 
-OpenWeft is **not** primarily a planner.
+Everything OpenWeft does fits inside one loop:
 
-OpenWeft is a **wrapper and orchestrator around autonomous worker sessions**.
+```
+                    ┌─────────────────────────────────────────┐
+                    │                                         │
+                    ▼                                         │
+              ┌──────────┐                                    │
+              │  Queue    │◄── openweft add "feature"         │
+              └────┬─────┘                                    │
+                   │                                          │
+                   ▼                                          │
+              ┌──────────┐    Prompt A compiles each          │
+              │  Plan     │    request into a worker brief    │
+              └────┬─────┘    (Prompt B)                      │
+                   │                                          │
+                   ▼                                          │
+              ┌──────────┐    successLikelihood /              │
+              │  Score    │    blastRadius^0.6                 │
+              └────┬─────┘    EWMA · hysteresis · tiers       │
+                   │                                          │
+                   ▼                                          │
+              ┌──────────┐    Group by manifest overlap        │
+              │  Phase    │    Hot-file features get           │
+              └────┬─────┘    isolated phases                 │
+                   │                                          │
+                   ▼                                          │
+              ┌──────────┐    One worktree per feature         │
+              │  Execute  │    One agent per feature            │
+              └────┬─────┘    Staggered launch                 │
+                   │          Promise.allSettled barrier        │
+                   ▼                                          │
+              ┌──────────┐    Priority-order merge (--no-ff)   │
+              │  Merge    │    Conflicts? Agent resolves        │
+              └────┬─────┘                                    │
+                   │                                          │
+                   ▼                                          │
+              ┌──────────┐    Diff summaries fed to remaining  │
+              │ Re-plan   │    features via plan adjustment     │
+              └────┬─────┘                                    │
+                   │                                          │
+                   ▼                                          │
+              ┌──────────┐                                    │
+         ┌────│  Check    │────┐                               │
+         │    └──────────┘    │                               │
+         │                    │                               │
+    Queue empty          Features remain                      │
+         │                    │                               │
+         ▼                    └───────────────────────────────┘
+       Done
+```
 
-The real intelligence of the system lives in the generated worker brief:
-
-- **Prompt A** compiles a rough human request into a powerful mission brief
-- **Prompt B** is that mission brief
-- **Prompt B** runs inside an OpenWeft-controlled worktree and performs the actual work
-- **OpenWeft** compares real execution outcomes, determines compatibility, merges safe results, and updates the remaining queue
-
-The simplest accurate sentence for OpenWeft is:
-
-> OpenWeft launches powerful Prompt-B workers in orchestrator-owned worktrees, then compares, reconciles, and merges their actual results safely.
-
-That is the product.
-
----
-
-## 2. The Main Architectural Shift
-
-Older mental models tend to treat Prompt B as:
-
-- an intermediate artifact
-- a planning helper
-- transient glue text between two runtime stages
-
-That is the wrong mental model.
-
-In the target architecture, Prompt B is:
-
-- the **worker operating system**
-- the **mission packet**
-- the **behavioral engine**
-
-Prompt B should not be demoted to a small planning intermediary.
-It is the mechanism that gives the worker its depth, discipline, context, and execution style.
-
-OpenWeft should therefore be designed around **respecting and containing** Prompt B, not replacing it with internal planning bureaucracy.
-
----
-
-## 3. Design Goals
-
-The target architecture optimizes for:
-
-1. **Preserving Prompt B power**
-   - Prompt B is allowed to be dense, overbuilt, and behavior-shaping.
-   - It should remain the strongest part of the system.
-
-2. **Separating intelligence from orchestration**
-   - Prompt B owns reasoning and execution behavior.
-   - OpenWeft owns topology, scheduling, and reconciliation.
-
-3. **Using real execution artifacts as truth**
-   - actual git diffs
-   - actual files changed
-   - actual validation results
-   - actual ledger state
-
-4. **Keeping worktree control centralized**
-   - workers do not invent topology
-   - OpenWeft owns worktree lifecycle completely
-
-5. **Making the system easier to understand**
-   - Prompt A writes the mission brief
-   - Prompt B runs the mission
-   - OpenWeft coordinates the missions
+The loop runs inside a `while(true)` in `realRun.ts`. Each iteration: plan pending requests → check for pending re-analysis → score and phase → execute phases → merge → collect diff summaries → loop. It breaks when the queue is empty, the user stops it, or unresolved failures remain.
 
 ---
 
-## 4. Non-Goals
+## Module map
 
-OpenWeft should **not** try to:
-
-- become the main planner instead of Prompt B
-- micromanage the worker's internal reasoning
-- force all intelligence into rigid internal schemas before execution
-- let workers create their own git worktrees or repository topology
-- confuse "internal" with "better"
-
-Whether an artifact is internal or external is not the important distinction.
-What matters is whether the artifact is **architecturally first-class** and whether the system uses it honestly.
-
----
-
-## 5. Layer Responsibilities
-
-### 5.1 Prompt A
-
-Prompt A is a **compiler**.
-
-Its job is to transform:
-
-- a human feature request
-
-into:
-
-- a powerful Markdown execution brief for a worker session
-
-That output is Prompt B.
-
-Prompt A should:
-
-- investigate the relevant codebase context
-- inject the most useful constraints and context
-- tell the downstream worker how to think and work
-- encode ledger discipline
-- encode testing discipline
-- encode validation discipline
-- encode safety boundaries
-- explicitly forbid the worker from owning git topology
-
-Prompt A should **not** perform the implementation itself.
-
-Prompt A's deliverable is **the generated worker brief**.
-
-### 5.2 Prompt B
-
-Prompt B is the **worker brain**.
-
-Prompt B is not just a plan.
-Prompt B is the actual operating brief that drives the worker session.
-
-Prompt B should run inside the assigned OpenWeft workspace and:
-
-- inspect the codebase
-- decide how to approach the task
-- create and maintain a ledger
-- edit code
-- run validation
-- report what it changed
-- report what it learned
-
-Prompt B owns:
-
-- reasoning
-- planning
-- execution style
-- validation behavior
-- ledger discipline
-- reporting
-
-Prompt B does **not** own:
-
-- worktree creation
-- branch creation by default
-- merge policy
-- queue state
-- scheduling
-- compatibility policy
-
-### 5.3 OpenWeft
-
-OpenWeft is the **scheduler, isolation layer, and reconciliation engine**.
-
-OpenWeft should own:
-
-- queue intake
-- feature ID assignment
-- worktree creation
-- workspace lifecycle
-- session launch
-- checkpointing
-- result comparison
-- compatibility determination
-- merge sequencing
-- conflict handling
-- requeue / rerun behavior
-- post-merge updates to the remaining queue
-
-OpenWeft should **not** try to replace the worker's reasoning with its own internal planning bureaucracy.
-
-OpenWeft is air traffic control, not the pilot.
+```
+src/
+├── cli/                    Commander program + command handlers
+│   ├── buildProgram.ts     Commands: launch, init, add, start, status, stop
+│   └── handlers.ts         Default templates (Prompt A, plan adjustment)
+│
+├── adapters/               Backend abstraction layer
+│   ├── types.ts            AgentAdapter interface, AdapterSuccess | AdapterFailure
+│   ├── codex.ts            Codex CLI adapter
+│   ├── claude.ts           Claude Code adapter
+│   ├── mock.ts             Deterministic mock (powers --dry-run and tests)
+│   ├── runner.ts           Subprocess execution via execa
+│   └── prompts.ts          Template injection ({{USER_REQUEST}}, {{CODE_EDIT_SUMMARY}})
+│
+├── orchestrator/           Core workflow engine
+│   ├── realRun.ts          Main orchestration loop + state transitions
+│   ├── dryRun.ts           XState v5 state machine (mock-backed pipeline)
+│   ├── audit.ts            Append-only JSONL audit trail
+│   └── stop.ts             Graceful shutdown controller
+│
+├── domain/                 Pure business logic (no side effects)
+│   ├── scoring.ts          Priority scoring: blast radius, fan-in, EWMA, tiers
+│   ├── phases.ts           Manifest overlap → conflict-safe execution groups
+│   ├── manifest.ts         Parse/repair ## Manifest JSON + assert ## Ledger
+│   ├── queue.ts            Queue parsing, v1 JSON format, line rewriting
+│   ├── costs.ts            Token usage tracking + USD estimation
+│   └── featureIds.ts       ID formatting, plan/brief filenames, slugification
+│
+├── state/                  Persistence
+│   └── checkpoint.ts       Zod-validated checkpoint with atomic write + backup
+│
+├── config/                 Configuration
+│   ├── schema.ts           OpenWeftConfig Zod schema (strict)
+│   └── loadConfig.ts       cosmiconfig loader
+│
+├── git/                    Git operations
+│   └── worktrees.ts        Worktree lifecycle, --no-ff merge, conflict handling, gc
+│
+└── fs/                     File system utilities
+    ├── paths.ts            RuntimePaths (all .openweft/ subdirectories)
+    └── ...                 Atomic writes, retry reads, JSONL append
+```
 
 ---
 
-## 6. The Canonical Flow
+## The two-stage prompt system
 
-The canonical flow is:
+OpenWeft doesn't send your feature request directly to an agent. It compiles it first.
 
-1. User adds one or more requests.
-2. OpenWeft assigns a feature ID to each request.
-3. OpenWeft creates an isolated worktree for each worker session it wants to launch.
-4. Prompt A runs for that request and generates Prompt B.
-5. OpenWeft persists Prompt B as a first-class artifact.
-6. OpenWeft launches the worker session in the assigned worktree using Prompt B.
-7. Prompt B investigates, edits, validates, and updates its ledger inside that assigned workspace.
-8. Prompt B finishes by producing a final execution report.
-9. OpenWeft inspects the actual result:
-   - git diff
-   - touched files
-   - worker report
-   - validation result
-   - ledger state
-10. OpenWeft compares completed work across active or pending features.
-11. OpenWeft merges safe results in the configured order.
-12. OpenWeft updates the remaining queue based on the new repository state.
-13. Repeat until the queue is empty or the user stops the run.
+```
+┌─────────────────────┐
+│  "add password       │
+│   reset flow"        │     Your raw request
+└─────────┬───────────┘
+          │
+          ▼
+┌─────────────────────┐
+│     Prompt A         │     Meta-prompt (212 lines, production-grade)
+│                      │     Tells the agent HOW to plan:
+│  • 5-approach        │     - investigate codebase first
+│    brainstorming     │     - brainstorm 5 high-level approaches
+│  • Living Plan       │     - score by blast radius, reversibility
+│    Ledger creation   │     - build structured execution plan
+│  • Downstream        │     - maintain a Living Plan Ledger
+│    Impact Reviews    │     - validate incrementally
+│  • 4-phase debug     │     - review downstream impact
+│    protocol          │
+└─────────┬───────────┘
+          │
+          ▼
+┌─────────────────────┐
+│     Prompt B         │     The actual worker brief
+│                      │     Persisted to feature_requests/briefs/
+│  Contains:           │     Inspectable, durable, recoverable
+│  • Codebase context  │
+│  • Execution plan    │     This is what the agent runs.
+│  • ## Manifest       │     Not a one-liner. A full operating document.
+│  • ## Ledger         │
+│  • Safety boundaries │
+└─────────────────────┘
+```
 
----
+**Stage 1 (S1):** Prompt A runs against your request. Output: a planning prompt for the next agent.
 
-## 7. Canonical Artifacts
+**Stage 2 (S2):** That output runs against the codebase. Output: Prompt B — a full Markdown plan with a `## Manifest` block (files to create/modify/delete) and a `## Ledger` (constraints, assumptions, watchpoints, validation).
 
-OpenWeft should think in terms of **artifacts**, not just stages.
+Both `## Manifest` and `## Ledger` are validated:
 
-### 7.1 Feature Request
+- **Manifest** must parse as `{ create: string[], modify: string[], delete: string[] }`. If JSON is malformed, OpenWeft tries `jsonrepair`, then `JSON5.parse`, then falls back to the last known good manifest.
+- **Ledger** must contain four required h3 subheadings: `Constraints`, `Assumptions`, `Watchpoints`, `Validation`. Enforced by `assertLedgerSection()`.
 
-The raw user request.
-
-Examples:
-
-- add password reset flow
-- refactor auth middleware for oauth2
-- add audit log export
-
-### 7.2 Prompt B Artifact
-
-The generated worker brief.
-
-This is the output of Prompt A.
-
-This should be treated as first-class because it contains:
-
-- execution discipline
-- task framing
-- context
-- safety instructions
-- ledger requirements
-- validation guidance
-
-This artifact should be inspectable, debuggable, and durable.
-
-### 7.3 Worker Ledger
-
-The worker-maintained execution log.
-
-The ledger is the worker's durable memory and continuity mechanism.
-
-It should capture:
-
-- the selected path
-- execution state
-- decisions
-- discoveries
-- validation state
-- changes to the plan of attack
-- completion status
-
-The ledger is maintained by the worker, not by OpenWeft.
-OpenWeft may inspect it, but does not author it.
-
-### 7.4 Execution Result
-
-The worker's final result package.
-
-This should include, at minimum:
-
-- success or failure
-- a concise edit summary
-- a validation summary
-- ledger path or ledger status
-- a claimed manifest or touched-file summary if available
-
-### 7.5 Actual Repository Diff
-
-This is the real source of truth.
-
-If a worker claims one thing but the git diff shows another, the actual diff wins.
-
-### 7.6 Compatibility Decision
-
-OpenWeft's decision about whether multiple completed worker results can be safely merged together.
+The Prompt B artifact is saved to `feature_requests/briefs/` and tied to the feature ID. If a session degrades or the process crashes, the brief survives. A fresh session can resume from it.
 
 ---
 
-## 8. Worktree Model
+## Scoring algorithm
 
-### 8.1 Ownership
+Every feature gets scored before execution. The score determines execution order and phase grouping.
 
-Worktree creation is owned by OpenWeft.
+### Blast radius
 
-Always.
+How much damage could this feature cause?
 
-Workers must not:
+```
+For each file in the manifest:
+  risk = typeWeight × opWeight × fanInScore
 
-- create additional git worktrees
-- clone the repo elsewhere
-- create sibling checkouts
-- relocate work into another copy of the repository
-- create or switch to ad hoc branches unless explicitly instructed by OpenWeft
+typeWeight:                      opWeight:
+  schema-migration  1.0            create   0.6
+  config-ci         0.8            modify   1.0
+  shared-lib        0.8            delete   0.3
+  route-controller  0.5
+  feature-component 0.4
+  test              0.1
+  docs              0.05
 
-### 8.2 Why This Boundary Exists
+fanInScore (how many other files depend on this one):
+  create:          0.1  (new files have no dependents yet)
+  modify/delete:   max(normalizedFanIn, 0.1)
+                   where normalizedFanIn = fanIn / maxFanIn across repo
 
-This boundary is essential because git topology is orchestration infrastructure, not worker intelligence.
+spreadMultiplier = 1 + log₂(uniqueDirectories) / log₂(totalDirectories)
 
-If workers create their own worktrees, OpenWeft loses clean ownership of:
+blastRadius = sum(fileRisks) × spreadMultiplier
+```
 
-- workspace layout
-- cleanup
-- merge lineage
-- conflict resolution flow
-- feature-to-workspace mapping
+A feature that modifies three schema migrations across four directories scores dramatically higher than one that creates a test file.
 
-That produces architectural chaos.
+### Success likelihood
 
-### 8.3 Worker Assumption
+How likely is this feature to succeed on the first attempt?
 
-Every Prompt B worker should operate under this assumption:
+```
+score  = 0.85                                  baseline
+score -= 0.10 × (fileCount - 1)               more files = more risk
+score -= 0.15 × modifyRatio                   modifications are riskier
+score += 0.10 × createRatio                   creates are safer
+score -= 0.20   if hasExternalApi              external calls are risky
+score -= 0.05 × max(0, stepCount - 3)         complex plans penalized
+score -= 0.10 × highCouplingRatio             high fan-in files penalized
+score -= successPenalty                        manual penalty for retries
 
-> Workspace isolation has already been solved by the orchestrator. Use the current assigned worktree as the only workspace.
+clamped to [0.05, 0.95]
+```
 
----
+### Priority
 
-## 9. Compatibility Model
+```
+rawPriority = successLikelihood / (normalizedBlastRadius^0.6 + 0.01)
+```
 
-The key simplifying move in this architecture is:
+Features that are likely to succeed AND have low blast radius run first. The `^0.6` exponent means blast radius matters, but doesn't dominate — a high-risk feature that's very likely to succeed still gets reasonable priority.
 
-> OpenWeft should compare **real outcomes**, not try to fully substitute for the worker by planning everything itself in advance.
+### EWMA smoothing
 
-This means compatibility is determined primarily using:
+Priority doesn't jump wildly between cycles. After the first two scoring passes, it smooths:
 
-- actual changed files
-- actual diffs
-- actual repository state after execution
-- worker-reported manifest or file summary as a supporting signal
+```
+if cyclesSeen < 2:
+  smoothedPriority = rawPriority           (responsive to initial data)
+else:
+  lambda = 0.25
+  smoothedPriority = 0.25 × rawPriority + 0.75 × previousSmoothedPriority
+```
 
-### 9.1 Primary Source of Truth
+### Tier assignment with hysteresis
 
-Use the actual repository diff as the final truth.
+Features are bucketed into tiers: `critical`, `high`, `medium`, `low`.
 
-Worker-reported manifests are useful, but they are not more authoritative than the files that actually changed.
+Hysteresis prevents flickering between tiers. A feature at `high` needs to score above `0.82` to promote to `critical`, but a `critical` feature only demotes at `0.77`. The gap prevents oscillation:
 
-### 9.2 Compatibility Questions
+```
+                    Promote ↑              Demote ↓
+  critical ────────────────────────────── 0.77 ──────
+                    0.82 ──────
+  high     ────────────────────────────── 0.52 ──────
+                    0.57 ──────
+  medium   ────────────────────────────── 0.27 ──────
+                    0.32 ──────
+  low      ──────────────────────────────────────────
+```
 
-OpenWeft should ask:
+First-time scoring (no previous tier) uses the promote thresholds directly.
 
-- Did these workers touch overlapping files?
-- Did they change shared interfaces or contracts?
-- Can these results be merged cleanly in priority order?
-- If not, which one should merge first?
-- Which remaining workers must be rerun or recontextualized after that merge?
+### Sorting
 
-### 9.3 Tradeoff
-
-This architecture accepts more **speculative parallel execution**.
-
-That means two workers may both spend time on overlapping areas before OpenWeft discovers the collision.
-
-This is not inherently bad.
-
-It is a deliberate trade:
-
-- less internal planning bureaucracy
-- more reliance on powerful workers
-- more post-execution reconciliation
-
-In exchange, the system is much easier to reason about.
-
----
-
-## 10. Planning Versus Execution
-
-The old temptation is to force OpenWeft to produce a complete machine-readable plan before any worker is allowed to do real work.
-
-This target architecture rejects that as the center of gravity.
-
-The real center of gravity is:
-
-- Prompt A produces the execution brief
-- Prompt B performs the real work
-- OpenWeft evaluates the outcome
-
-That does **not** mean planning disappears.
-
-It means planning lives where it is strongest:
-
-- inside Prompt B's worker behavior
-- inside the worker ledger
-- inside OpenWeft's compatibility and merge decisions
-
-The important distinction is:
-
-- OpenWeft does not need to out-plan the worker
-- OpenWeft needs to contain and reconcile workers safely
+Features sorted by `smoothedPriority` descending. If two features are within `0.03` of each other, the tiebreaker is their previous rank — stability over noise.
 
 ---
 
-## 11. The Role of the Ledger
+## Phasing: how parallel groups are built
 
-The ledger is important, but it should be understood correctly.
+This is what makes OpenWeft different from "just run five agents at once."
 
-The ledger is:
+### The problem
 
-- the worker's durable execution memory
-- the record of how the worker thought and adapted
-- the continuation point after interruption
+If Feature A modifies `src/auth/middleware.ts` and Feature B also modifies `src/auth/middleware.ts`, running them in parallel means one will overwrite the other's work. Or worse — both succeed in their isolated worktrees, but the merge produces a conflict that neither agent anticipated.
 
-The ledger is **not** the same thing as OpenWeft's checkpoint.
+### The solution
 
-### 11.1 Worker Ledger
+Before any agent launches, OpenWeft compares every feature's manifest (`create`, `modify`, `delete` arrays) against every other feature's manifest. Features with overlapping file sets never execute in the same phase.
 
-Owned by the worker.
+### Algorithm
 
-Captures:
+```
+for each feature (in priority order):
 
-- decisions
-- discoveries
-- validations
-- evolving execution path
-- current status
+  if feature touches hot files (schema-migration, config-ci,
+     or shared-lib with above-median fan-in):
+    → isolate into its own phase (one feature, one phase)
 
-### 11.2 OpenWeft Checkpoint
+  else:
+    → scan existing phases:
+      - skip phases at maxParallelAgents capacity
+      - skip phases containing a hot-file feature
+      - skip phases with ANY manifest file overlap
+      → first compatible phase? add feature there
+      → no compatible phase? create a new phase
 
-Owned by OpenWeft.
+output: ExecutionPhase[] (numbered, each containing non-conflicting features)
+```
 
-Captures:
+### Manifest overlap detection
 
-- queue state
-- feature IDs
-- worktree paths
-- run status
-- merge status
-- resumability for orchestration
+```
+findManifestOverlap(left, right):
+  leftPaths  = Set(left.create ∪ left.modify ∪ left.delete)
+  rightPaths = Set(right.create ∪ right.modify ∪ right.delete)
+  return sorted(leftPaths ∩ rightPaths)
+```
 
-These should cooperate, but they should not be confused.
-
-The worker ledger is cognitive continuity.
-The checkpoint is orchestration continuity.
-
----
-
-## 12. Failure Model
-
-OpenWeft should assume workers may:
-
-- fail outright
-- produce partial work
-- validate incompletely
-- touch unexpected files
-- become stale relative to newly merged work
-
-That means failure handling should focus on:
-
-- preserving artifacts
-- preserving worktree state
-- preserving ledger and result reports
-- classifying failure cleanly
-- deciding whether to retry, recontextualize, or discard
-
-The system should avoid magical hidden repair.
-
-When something fails, it should be inspectable.
+If the intersection is non-empty, the features conflict. One runs first; the other waits.
 
 ---
 
-## 13. Why This Architecture Is Simpler
+## Worktree isolation
 
-This architecture is simpler because each layer has one clear job.
+Each feature executes in its own git worktree under `.openweft/worktrees/`. This is physical isolation — agents literally work in different copies of the repo.
 
-### Prompt A
+```
+your-repo/
+├── .openweft/
+│   └── worktrees/
+│       ├── feature-0001-add-password-reset/    ◄── Agent A works here
+│       ├── feature-0002-refactor-auth/         ◄── Agent B works here
+│       └── feature-0003-audit-log-export/      ◄── Agent C works here
+├── src/                                        ◄── Main repo (merge target)
+└── ...
+```
 
-Writes the mission brief.
+### Ownership
 
-### Prompt B
+OpenWeft owns all worktree lifecycle — creation, cleanup, merge, and garbage collection. Workers are explicitly instructed to never create additional worktrees, clone the repo, or create ad hoc branches. Every Prompt B includes this boundary:
 
-Does the mission.
+> *Workspace isolation has already been solved by the orchestrator. Use the current assigned worktree as the only workspace.*
 
-### OpenWeft
+### Merge
 
-Controls the battlefield.
+When agents finish, OpenWeft merges their branches back to the base branch in priority order:
 
-That is easier to understand than a system where:
+```
+mergeBranchIntoCurrent(repoRoot, branch):
+  → git merge --no-ff --no-edit <branch>
 
-- OpenWeft half-acts like the planner
-- Prompt B secretly does the real thinking
-- worktree ownership is blurry
-- internal runtime stages pretend the most important artifact is unimportant
+  success:
+    → { status: 'merged', mergeCommit, editSummary }
 
-This architecture makes the truth explicit.
+  conflict:
+    → git merge --abort
+    → { status: 'conflict', conflicts: [{ file, reason }] }
+    → OpenWeft merges main INTO the worktree
+    → Agent resolves conflicts in worktree context
+    → Retry merge to base
+```
 
----
+The `--no-ff` flag ensures every feature merge is a visible merge commit, even if it could fast-forward. This preserves per-feature history.
 
-## 14. Architectural Principles
+### Reuse detection
 
-The following principles should guide all future OpenWeft changes.
+On resume, OpenWeft checks if a worktree already has a completion commit (`openweft: complete feature <id>`). If so, it skips re-execution and goes straight to merge. No wasted compute on work that already succeeded.
 
-### 14.1 Prompt B is first-class
+### Cleanup
 
-Do not treat Prompt B as disposable glue.
-
-### 14.2 OpenWeft owns topology
-
-Workers do not own git topology.
-
-### 14.3 Real diffs beat declared intent
-
-Actual repository changes are the final truth.
-
-### 14.4 Separate cognition from orchestration
-
-Prompt B thinks and works.
-OpenWeft schedules and reconciles.
-
-### 14.5 Durable artifacts matter
-
-Persist the important things:
-
-- Prompt B
-- worker ledger
-- execution result
-- checkpoint
-
-### 14.6 Simplicity is role clarity
-
-Simplicity here does not mean fewer files or fewer moving parts at any cost.
-It means fewer blurred responsibilities.
+After merges, `pruneOrphanedOpenWeftArtifacts` removes worktrees and branches not in the active set. Auto-gc is temporarily disabled during heavy worktree operations to avoid git pauses.
 
 ---
 
-## 15. What OpenWeft Is
+## The adapter layer
 
-OpenWeft is:
+Three backends, one interface. The orchestrator doesn't know or care which agent is running.
 
-- a queue manager
-- a worktree allocator
-- a worker launcher
-- a result comparator
-- a merge controller
-- a recovery system
+```
+                    ┌──────────────────┐
+                    │  AgentAdapter     │
+                    │                  │
+                    │  buildCommand()  │
+                    │  runTurn()       │
+                    └───────┬──────────┘
+                            │
+              ┌─────────────┼─────────────┐
+              │             │             │
+        ┌─────────┐  ┌─────────┐  ┌─────────┐
+        │  Codex  │  │ Claude  │  │  Mock   │
+        │  CLI    │  │  Code   │  │         │
+        └─────────┘  └─────────┘  └─────────┘
+                                  powers --dry-run
+                                  and test suite
+```
 
-OpenWeft is not:
+### The interface
 
-- the main planner
-- the main reasoner
-- the author of the worker's execution discipline
+```typescript
+interface AgentAdapter {
+  readonly backend: 'codex' | 'claude' | 'mock';
+  buildCommand(request: AdapterTurnRequest): AdapterCommandSpec;
+  runTurn(request: AdapterTurnRequest): Promise<AdapterTurnResult>;
+}
+```
 
-Prompt B is where the power lives.
-OpenWeft's job is to make that power safe, parallelizable, and recoverable.
+### Request
+
+Every agent call gets a typed request:
+
+```typescript
+AdapterTurnRequest {
+  featureId:    string
+  stage:        'planning-s1' | 'planning-s2' | 'execution'
+                | 'adjustment' | 'conflict-resolution'
+  cwd:          string     // worktree path
+  prompt:       string     // injected prompt
+  model:        string     // e.g. 'claude-sonnet-4-6'
+  auth:         { method: 'subscription' | 'api_key', envVar?: string }
+  sessionId?:   string     // persist across turns
+  sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
+  effortLevel?: string     // 'low'|'medium'|'high'|'xhigh' (codex) or 'max' (claude)
+  maxBudgetUsd?: number
+  // ...
+}
+```
+
+### Result (discriminated union)
+
+```typescript
+AdapterSuccess {
+  ok: true
+  finalMessage: string           // agent output
+  usage: {
+    inputTokens, outputTokens,
+    totalCostUsd: number | null
+  }
+  sessionId: string | null
+}
+
+AdapterFailure {
+  ok: false
+  error: string
+  classified: {
+    tier: 'infrastructure' | 'rate-limit' | 'permission'
+          | 'circuit-breaker' | 'user-input' | 'unknown'
+    isRecoverable: boolean
+  }
+}
+```
+
+Pattern: `if (result.ok) { ... } else { ... }`. No exception-based flow control.
 
 ---
 
-## 16. Canonical Summary
+## Checkpoint and recovery
 
-If someone asks how OpenWeft works, the shortest correct answer is:
+OpenWeft is designed to survive crashes, power loss, `Ctrl+C`, and process kills.
 
-1. OpenWeft takes queued requests.
-2. Prompt A turns each request into a powerful worker brief called Prompt B.
-3. OpenWeft launches Prompt-B workers inside orchestrator-owned worktrees.
-4. Each worker investigates, edits, validates, and maintains its ledger.
-5. OpenWeft compares the actual results, merges the compatible ones, and updates what remains.
+### Schema
 
-That is the architecture.
+The checkpoint is a Zod-validated JSON blob (schema version `1.0.0`, strict — no extra properties allowed):
+
+```typescript
+OrchestratorCheckpoint {
+  schemaVersion:    '1.0.0'
+  runId:            string (UUID, unique per orchestration session)
+  checkpointId:     string (UUID, unique per write)
+  status:           'idle' | 'in-progress' | 'paused'
+                    | 'completed' | 'failed' | 'stopped'
+  currentState:     'idle' | 'planning' | 'executing' | 'merging'
+                    | 're-analysis' | 'queue-management' | 'stopped'
+  currentPhase:     { index, name, featureIds, startedAt } | null
+  queue:            { orderedFeatureIds, totalCount }
+  features:         Record<featureId, FeatureCheckpoint>
+  pendingMergeSummaries: Array<{ featureId, summary }>
+  cost:             { totalInputTokens, totalOutputTokens,
+                      totalEstimatedUsd, perFeature: Record<...> }
+}
+```
+
+Each feature tracks:
+
+```typescript
+FeatureCheckpoint {
+  id, request, status, attempts,
+  planFile, promptBFile, evolvedPlanFile,
+  branchName, worktreePath, sessionId,
+  manifest, priorityScore, priorityTier, scoringCycles,
+  mergeCommit, lastError, updatedAt
+}
+```
+
+### Atomic write with backup
+
+```
+saveCheckpoint:
+  1. Read current checkpoint.json
+  2. Copy current → checkpoint.json.backup
+  3. Write new → checkpoint.json (via write-file-atomic)
+
+loadCheckpoint:
+  1. Try checkpoint.json (Zod parse)
+  2. If invalid → try checkpoint.json.backup
+  3. If both invalid → throw
+  4. If both missing → return null (fresh start)
+```
+
+### Recovery on resume
+
+When `openweft start` resumes from a checkpoint:
+
+```
+For each feature:
+  status === 'executing':
+    → Check if worktree exists and has completion commit
+      → yes (already-merged): mark 'completed'
+      → yes (reusable):       skip to merge phase
+      → missing:              reset to 'planned', re-run
+
+  status === 'failed' + rerunEligible:
+    → Re-attempt execution
+
+  status === 'planned':
+    → Normal execution
+```
+
+In-flight features that died mid-execution get reset to `planned`. They re-run from the persisted plan file, not from broken agent context. This is intentional: clean re-execution beats attempting to resurrect a half-finished session.
+
+---
+
+## Cost tracking
+
+Every agent call logs token usage and estimated cost.
+
+### Cost stages
+
+```
+planning-s1          Prompt A generation
+planning-s2          Prompt B + plan generation
+execution            Feature implementation
+adjustment           Plan re-evaluation after merges
+conflict-resolution  Resolving merge conflicts
+```
+
+### Model pricing
+
+```
+gpt-5.3-codex:       $1.75 / M input   $14.00 / M output
+claude-sonnet-4-6:    $3.00 / M input   $15.00 / M output
+```
+
+Unknown models log a warning (once) and return `$0` — no silent cost blindness.
+
+### Budget enforcement
+
+```
+pauseAtUsd:  halts after the current phase completes
+stopAtUsd:   hard stop, checked before each phase
+
+Both enforced in the orchestration loop.
+All null by default — your money, your call.
+```
+
+Cost data accumulates in `.openweft/costs.jsonl` (append-only, one JSON line per agent call) and in the checkpoint's `cost` field (totals + per-feature breakdown).
+
+---
+
+## Queue format
+
+### v1 (current)
+
+```
+# openweft queue format: v1
+{"version":1,"type":"pending","id":"q_a1b2c3","request":"add password reset flow"}
+{"version":1,"type":"processed","id":"q_d4e5f6","featureId":"1","request":"refactor auth middleware"}
+```
+
+Each line is a self-contained JSON record. Pending requests become processed when OpenWeft assigns a feature ID and begins planning.
+
+### Multiline requests
+
+Requests containing newlines or starting with `#` are base64url-encoded:
+
+```
+@@openweft:request:v1:<base64url-encoded-utf8>
+```
+
+Decoded transparently on parse.
+
+### Legacy format
+
+OpenWeft still parses the older plain-text format for backward compatibility:
+
+```
+# ✓ [001] refactored auth middleware
+add password reset flow
+```
+
+New writes always use v1 JSON.
+
+---
+
+## The Living Plan Ledger
+
+This is what makes execution inspectable, not just observable.
+
+Every agent writes a Living Plan Ledger to `project_ledgers/` — a structured Markdown file that captures the full execution narrative. Not a log dump. A narrative.
+
+A real ledger from this codebase (`13.frontend-backend-stability-hardening.md`) includes:
+
+```
+## Executive Outcome
+- 7 confirmed bugs fixed, 1 planned fix skipped as already safe
+- Baseline: 63 test files, 641 tests → Final: 63 test files, 644 tests
+
+## Investigation Method
+10 dedicated analysis agents ran in parallel before any code was touched:
+| Agent                    | Scope                          | Key Finding              |
+|--------------------------|--------------------------------|--------------------------|
+| Planning/Prompt Contract | prompts.ts, manifest.ts        | Path regex permissive    |
+| Checkpoint/Recovery      | checkpoint.ts, realRun.ts      | Backup write failures    |
+| ...                      | ...                            | ...                      |
+
+## Issue Disposition Ledger
+| # | Issue                              | Status          | What users would feel    |
+|---|------------------------------------|-----------------|--------------------------|
+| 1 | EWMA priority damping never fires  | Fixed           | "Why do priorities jump?" |
+| 2 | NaN corrupts queue ordering        | Fixed           | Feature order randomized  |
+| ...                                                                                   |
+
+## Code Changes With Before/After
+### Fix 1 — Propagate cyclesSeen through scoring pipeline
+Before: [exact code]
+After:  [exact code]
+Why it matters: [explanation]
+```
+
+Each step in the plan uses a required schema:
+
+```
+- Step ID, title
+- Dependencies (which prior steps must complete)
+- Risk level
+- Rollback notes (how to undo if it breaks)
+- Validation criteria (how to verify it worked)
+- Status (pending → in-progress → completed)
+```
+
+The ledger survives context loss. If a long-running session hits a context window limit and the LLM compacts, the instruction at the top of every ledger says: *reread the full ledger before continuing*. The ledger is the source of truth, not the model's memory.
+
+---
+
+## State transitions
+
+The orchestrator moves through these states during a run:
+
+```
+  idle ──► planning ──► executing ──► merging ──► re-analysis ──► planning ...
+    │                       │            │
+    │                       │            └──► queue-management
+    │                       │
+    └───────────────────────┴──► stopped (user requested)
+```
+
+Feature statuses:
+
+```
+  pending ──► planned ──► executing ──► completed
+                 │            │
+                 │            └──► failed (retry if rerunEligible)
+                 │
+                 └──► skipped
+```
+
+Run statuses:
+
+```
+  idle ──► in-progress ──► completed
+               │
+               ├──► paused (budget threshold hit)
+               ├──► stopped (user requested)
+               └──► failed (unrecoverable)
+```
+
+---
+
+## Configuration
+
+Config loads via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig). Any of these work: `.openweftrc.json`, `.openweftrc.yaml`, `openweft.config.js`, or the `openweft` key in `package.json`.
+
+The schema is Zod-strict (no extra properties). Full shape:
+
+```
+backend:         'codex' | 'claude'
+auth:
+  codex:         { method: 'subscription' | 'api_key', envVar?: string }
+  claude:        { method: 'subscription' | 'api_key', envVar?: string }
+prompts:
+  promptA:       path to Prompt A template (must contain {{USER_REQUEST}})
+  planAdjustment: path to plan adjustment template (must contain {{CODE_EDIT_SUMMARY}})
+featureRequestsDir: path (default: ./feature_requests)
+queueFile:       path (default: ./feature_requests/queue.txt)
+models:
+  codex:         string (default: 'gpt-5.3-codex')
+  claude:        string (default: 'claude-sonnet-4-6')
+effort:
+  codex:           'low' | 'medium' | 'high' | 'xhigh' (default: 'medium')
+  claude:          'low' | 'medium' | 'high' | 'max' (default: 'medium')
+approval:          'always' | 'per-feature' | 'first-only' (default: 'always')
+concurrency:
+  maxParallelAgents:  positive int (default: 3)
+  staggerDelayMs:     non-negative int (default: 5000)
+rateLimits:
+  codex/claude:
+    mode:                'subscription' | 'api_key'
+    maxConcurrentRequests: positive int (codex: 3, claude: 2)
+    retryBackoffMs:      non-negative int (default: 5000)
+    retryMaxAttempts:    positive int (default: 5)
+budget:
+  warnAtUsd:     number | null (defined but not yet enforced at runtime)
+  pauseAtUsd:    number | null (halts after current phase)
+  stopAtUsd:     number | null (hard stop)
+```
+
+---
+
+## What gets written to disk
+
+```
+your-repo/
+├── feature_requests/
+│   ├── queue.txt                    Your requests (v1 JSON format)
+│   ├── 0001-add-password-reset.md   Generated plan with ## Manifest + ## Ledger
+│   ├── 0002-refactor-auth.md
+│   └── briefs/
+│       ├── 0001-add-password-reset.md   Prompt B artifact
+│       └── 0002-refactor-auth.md
+│
+├── project_ledgers/
+│   ├── 1.add-password-reset.md      Living Plan Ledger (full execution narrative)
+│   └── 2.refactor-auth.md
+│
+├── prompts/
+│   ├── prompt-a.md                  Your Prompt A template
+│   └── plan-adjustment.md           Your plan adjustment template
+│
+├── .openweft/
+│   ├── checkpoint.json              Orchestrator state (Zod-validated)
+│   ├── checkpoint.json.backup       Backup sibling (atomic)
+│   ├── costs.jsonl                  Token usage + USD per call
+│   ├── audit-trail.jsonl            Every orchestrator event
+│   ├── output.log                   --bg mode output
+│   ├── pid                          Background process ID
+│   ├── worktrees/                   Git worktrees (one per feature)
+│   ├── shadow-plans/                Internal plan copies
+│   └── evolved-plans/               Post-merge adjusted plans
+│
+└── .openweftrc.json                 Configuration
+```
+
+Everything is inspectable. No hidden state.
+
+---
+
+## Design principles
+
+**Prompt B is first-class.** It's persisted, inspectable, and durable. Not disposable glue between stages.
+
+**OpenWeft owns topology.** Workers never create worktrees, clone repos, or switch branches. Git infrastructure is orchestration, not intelligence.
+
+**Real diffs beat declared intent.** The actual repository changes are the final truth. Worker-reported manifests are useful signals, not gospel.
+
+**Separate cognition from orchestration.** Prompt B thinks and works. OpenWeft schedules and reconciles. Neither tries to do the other's job.
+
+**Simplicity is role clarity.** Three layers, three jobs: Prompt A writes the mission brief. Prompt B runs the mission. OpenWeft controls the battlefield.
+
+---
+
+## CLI commands
+
+```
+openweft                setup wizard (first run) · dashboard (returning)
+openweft init           config, directories, prompt files
+openweft add "feature"  queue a request (also accepts stdin)
+openweft start          run the queue with interactive dashboard
+openweft start --bg     detach — PID tracked, logs to .openweft/output.log
+openweft start --stream stream raw agent output to terminal
+openweft start --tmux   launch in a tmux session
+openweft start --dry-run full pipeline with mock adapter, zero cost
+openweft status         queue state, tokens, cost, feature breakdown
+openweft stop           finish current phase, then stop
+```
+
+---
+
+## TypeScript conventions
+
+- ESM-only (`"type": "module"`), Node.js `>=24`, target `ES2023`
+- `moduleResolution: "NodeNext"` — all local imports require `.js` extension
+- `verbatimModuleSyntax: true` — use `import type` for type-only imports
+- `exactOptionalPropertyTypes: true` — `undefined` must be explicit in optional props
+- `noUncheckedIndexedAccess: true` — indexed access returns `T | undefined`
+- All Zod schemas use `.strict()` — no extra properties allowed
+- Discriminated unions (`ok: true | false`) for adapter results — no exception-based flow control

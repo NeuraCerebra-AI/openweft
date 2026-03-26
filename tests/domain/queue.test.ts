@@ -51,8 +51,24 @@ describe('queue', () => {
     expect(parseQueueFile(updated).pending.map((line) => line.request)).toEqual(['add dark mode', 'add auth']);
   });
 
-  it('throws on malformed v1 record lines once the v1 header is present', () => {
-    expect(() => parseQueueFile('# openweft queue format: v1\nnot json\n')).toThrow(
+  it('accepts plain-English pending lines in a v1 queue file and canonicalizes them on write', () => {
+    const content = '# openweft queue format: v1\n# OpenWeft feature queue\nplain english manual queue line\n';
+    const parsed = parseQueueFile(content);
+
+    expect(parsed.pending.map((entry) => entry.request)).toEqual(['plain english manual queue line']);
+
+    const updated = appendRequestsToQueueContent(content, ['add auth']);
+    expect(updated).toContain('"request":"plain english manual queue line"');
+    expect(updated).toContain('"request":"add auth"');
+    expect(updated).not.toContain('\nplain english manual queue line\n');
+    expect(parseQueueFile(updated).pending.map((entry) => entry.request)).toEqual([
+      'plain english manual queue line',
+      'add auth'
+    ]);
+  });
+
+  it('throws on malformed object-like v1 record lines once the v1 header is present', () => {
+    expect(() => parseQueueFile('# openweft queue format: v1\n{"version":1,"type":"pending"\n')).toThrow(
       'Malformed v1 queue record at line 1.'
     );
   });
@@ -73,6 +89,21 @@ describe('queue', () => {
     expect(lines[2]).toMatch(
       /^\{"version":1,"type":"processed","id":"q_[^"]+","featureId":"002","request":"add auth"\}$/
     );
+  });
+
+  it('marks a plain-English pending line as processed inside a v1 queue file', () => {
+    const updated = markQueueLineProcessed(
+      '# openweft queue format: v1\n# OpenWeft feature queue\nplain english manual queue line\n',
+      2,
+      '001'
+    );
+
+    expect(parseQueueFile(updated).processed).toEqual([
+      expect.objectContaining({
+        featureId: '001',
+        request: 'plain english manual queue line'
+      })
+    ]);
   });
 
   it('throws when the expected request no longer matches during processing', () => {

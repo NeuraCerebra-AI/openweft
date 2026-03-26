@@ -1,11 +1,16 @@
 import React, { useState } from 'react';
 import { Box, useInput } from 'ink';
 
+import {
+  getDefaultEffortForBackend,
+  getDefaultModelForBackend
+} from '../../config/options.js';
 import { ThemeContext, catppuccinMocha } from '../theme.js';
 import { ProgressBar } from './ProgressBar.js';
 import { CompletedSummary } from './CompletedSummary.js';
 import { StepWelcome } from './StepWelcome.js';
 import { StepBackends } from './StepBackends.js';
+import { StepSuperpowers } from './StepSuperpowers.js';
 import { StepInit } from './StepInit.js';
 import { StepFeatureInput } from './StepFeatureInput.js';
 import { StepAddMore } from './StepAddMore.js';
@@ -24,7 +29,7 @@ export interface OnboardingAppProps {
  */
 function buildCompletedItems(state: OnboardingState): readonly string[] {
   const items: string[] = [];
-  const { currentStep, selectedBackend, queuedRequests } = state;
+  const { currentStep, selectedBackend, selectedModel, selectedEffort, queuedRequests } = state;
 
   // Step 1 complete when we're on step 2 or beyond
   if (currentStep >= 2) {
@@ -33,21 +38,24 @@ function buildCompletedItems(state: OnboardingState): readonly string[] {
 
   // Step 2 complete when we're on step 3 or beyond (and we have a backend selected)
   if (currentStep >= 3 && selectedBackend !== null) {
-    items.push(`Backend: ${selectedBackend}`);
+    const selectionSummary = [selectedBackend, selectedModel, selectedEffort]
+      .filter((value): value is string => value !== null)
+      .join(' · ');
+    items.push(`Backend: ${selectionSummary}`);
   }
 
-  // Step 3 complete when we're on step 4 or beyond
-  if (currentStep >= 4) {
+  // Step 4 (init) complete when we're on step 5 or beyond
+  if (currentStep >= 5) {
     items.push('Initialized');
   }
 
-  // Step 4 complete when we're on step 5 or beyond
-  if (currentStep >= 5) {
+  // Step 5 (first request) complete when we're on step 6 or beyond
+  if (currentStep >= 6) {
     items.push('First request');
   }
 
-  // Step 5 complete when we're on step 6 or beyond
-  if (currentStep >= 6) {
+  // Step 6 (add more) complete when we're on step 7 or beyond
+  if (currentStep >= 7) {
     items.push(`Queue: ${String(queuedRequests.length)} items`);
   }
 
@@ -62,12 +70,14 @@ export const OnboardingApp: React.FC<OnboardingAppProps> = ({
   const [state, setState] = useState<OnboardingState>(initialState);
 
   const { currentStep } = state;
+  const demoMode = process.env.OPENWEFT_DEMO_MODE === '1';
+  const suppressCompletedSummary = demoMode && (currentStep === 5 || currentStep === 6);
 
   // Navigation helpers
   const onAdvance = () => {
     setState((prev) => ({
       ...prev,
-      currentStep: Math.min(6, prev.currentStep + 1) as OnboardingState['currentStep'],
+      currentStep: Math.min(7, prev.currentStep + 1) as OnboardingState['currentStep'],
     }));
   };
 
@@ -82,10 +92,10 @@ export const OnboardingApp: React.FC<OnboardingAppProps> = ({
     onComplete({ launch: false });
   };
 
-  // Handle ← back for steps 1-3 and 6. Steps 4 and 5 handle ← themselves
+  // Handle ← back for steps 1, 4, and 7. Steps 2, 3, 5, and 6 handle ← themselves
   // (only going back when text input is empty, per spec).
   useInput((_input, key) => {
-    if (key.leftArrow && currentStep > 1 && currentStep !== 4 && currentStep !== 5) {
+    if (key.leftArrow && currentStep > 1 && currentStep !== 2 && currentStep !== 3 && currentStep !== 5 && currentStep !== 6) {
       onBack();
     }
   });
@@ -126,24 +136,44 @@ export const OnboardingApp: React.FC<OnboardingAppProps> = ({
           <StepBackends
             codexStatus={state.codexStatus}
             claudeStatus={state.claudeStatus}
-            onAdvance={(selectedBackend) => {
+            onAdvance={({ backend, model, effort }) => {
               setState((prev) => ({
                 ...prev,
-                selectedBackend,
+                selectedBackend: backend,
+                selectedModel: model,
+                selectedEffort: effort,
               }));
               onAdvance();
             }}
+            onBack={onBack}
             onExit={onExit}
             onRedetectBackends={callbacks.onRedetectBackends}
           />
         );
 
       case 3: {
+        const backend = state.selectedBackend ?? 'codex';
+        return (
+          <StepSuperpowers
+            selectedBackend={backend}
+            onAdvance={onAdvance}
+            onBack={onBack}
+            onExit={onExit}
+            onOpenRepo={callbacks.onOpenSuperpowersRepo}
+          />
+        );
+      }
+
+      case 4: {
         // selectedBackend must be set by this point
         const backend = state.selectedBackend ?? 'codex';
+        const model = state.selectedModel ?? getDefaultModelForBackend(backend);
+        const effort = state.selectedEffort ?? getDefaultEffortForBackend(backend);
         return (
           <StepInit
             selectedBackend={backend}
+            selectedModel={model}
+            selectedEffort={effort}
             initialized={state.initialized}
             initError={state.initError}
             onAdvance={onAdvance}
@@ -165,7 +195,7 @@ export const OnboardingApp: React.FC<OnboardingAppProps> = ({
         );
       }
 
-      case 4:
+      case 5:
         return (
           <StepFeatureInput
             onAdvance={onAdvance}
@@ -181,7 +211,7 @@ export const OnboardingApp: React.FC<OnboardingAppProps> = ({
           />
         );
 
-      case 5:
+      case 6:
         return (
           <StepAddMore
             queuedRequests={state.queuedRequests}
@@ -198,7 +228,7 @@ export const OnboardingApp: React.FC<OnboardingAppProps> = ({
           />
         );
 
-      case 6: {
+      case 7: {
         const backend = state.selectedBackend ?? 'codex';
         return (
           <StepLaunch
@@ -228,9 +258,9 @@ export const OnboardingApp: React.FC<OnboardingAppProps> = ({
   return (
     <ThemeContext.Provider value={catppuccinMocha}>
       <Box flexDirection="column">
-        <ProgressBar steps={6} current={currentStep} />
+        <ProgressBar steps={7} current={currentStep} />
         {renderStep()}
-        {completedItems.length > 0 && <CompletedSummary items={completedItems} />}
+        {!suppressCompletedSummary && completedItems.length > 0 && <CompletedSummary items={completedItems} />}
       </Box>
     </ThemeContext.Provider>
   );

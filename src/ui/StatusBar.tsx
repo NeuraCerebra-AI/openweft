@@ -11,10 +11,15 @@ interface StatusBarProps {
   readonly totalCount: number;
   readonly totalTokens: number;
   readonly elapsed: number;
+  readonly modelSelection?: {
+    readonly backend: string;
+    readonly model: string;
+    readonly effort: string;
+  } | null;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = React.memo(
-  ({ phase, activeCount, pendingCount, totalCount: _totalCount, totalTokens, elapsed }) => {
+  ({ phase, activeCount, pendingCount, totalCount: _totalCount, totalTokens, elapsed, modelSelection }) => {
     const { colors } = useTheme();
 
     return (
@@ -24,6 +29,16 @@ export const StatusBar: React.FC<StatusBarProps> = React.memo(
           <Text>
             <Text color={colors.muted}>{'│ '}</Text>
             <Text color={colors.blue}>{`⚙ ${phase.label ?? `${phase.current}/${phase.total}`}`}</Text>
+          </Text>
+        )}
+        {modelSelection !== null && modelSelection !== undefined && (
+          <Text>
+            <Text color={colors.muted}>{'│ '}</Text>
+            <Text color={colors.green}>{modelSelection.backend}</Text>
+            <Text color={colors.muted}>{' · '}</Text>
+            <Text color={colors.text}>{modelSelection.model}</Text>
+            <Text color={colors.muted}>{' · '}</Text>
+            <Text color={colors.peach}>{modelSelection.effort}</Text>
           </Text>
         )}
         {(activeCount > 0 || pendingCount > 0) && (

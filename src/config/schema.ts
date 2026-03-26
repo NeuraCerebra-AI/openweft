@@ -2,6 +2,11 @@ import { z } from 'zod';
 
 import { AuthMethodSchema, UserBackendSchema } from '../domain/primitives.js';
 import type { RuntimePaths } from '../fs/paths.js';
+import {
+  APPROVAL_MODE_OPTIONS,
+  CLAUDE_EFFORT_OPTIONS,
+  CODEX_EFFORT_OPTIONS
+} from './options.js';
 export { AuthMethodSchema, UserBackendSchema };
 
 export const BackendAuthConfigSchema = z
@@ -30,6 +35,10 @@ export const BudgetConfigSchema = z
   })
   .strict();
 
+export const CodexEffortLevelSchema = z.enum(CODEX_EFFORT_OPTIONS);
+export const ClaudeEffortLevelSchema = z.enum(CLAUDE_EFFORT_OPTIONS);
+export const ApprovalModeSchema = z.enum(APPROVAL_MODE_OPTIONS);
+
 export const OpenWeftConfigSchema = z
   .object({
     backend: UserBackendSchema,
@@ -53,6 +62,13 @@ export const OpenWeftConfigSchema = z
         claude: z.string().min(1)
       })
       .strict(),
+    effort: z
+      .object({
+        codex: CodexEffortLevelSchema,
+        claude: ClaudeEffortLevelSchema
+      })
+      .strict(),
+    approval: ApprovalModeSchema,
     concurrency: z
       .object({
         maxParallelAgents: z.number().int().positive(),
@@ -87,6 +103,11 @@ export const DEFAULT_OPENWEFT_CONFIG: OpenWeftConfig = {
     codex: 'gpt-5.3-codex',
     claude: 'claude-sonnet-4-6'
   },
+  effort: {
+    codex: 'medium',
+    claude: 'medium'
+  },
+  approval: 'always',
   concurrency: {
     maxParallelAgents: 3,
     staggerDelayMs: 5000

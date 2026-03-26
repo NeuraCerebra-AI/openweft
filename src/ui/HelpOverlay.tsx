@@ -7,13 +7,15 @@ import { useTheme } from './theme.js';
 interface HelpOverlayProps {
   readonly mode: UIMode;
   readonly executionStarted: boolean;
+  readonly canEditModelSelection?: boolean;
 }
 
 type Shortcut = readonly [key: string, description: string];
 
 const getShortcuts = (
   mode: HelpOverlayProps['mode'],
-  executionStarted: boolean
+  executionStarted: boolean,
+  canEditModelSelection: boolean
 ): readonly Shortcut[] => {
   switch (mode) {
     case 'approval':
@@ -47,6 +49,16 @@ const getShortcuts = (
         ['q', 'Quit'],
         ['?', 'Toggle this help'],
       ];
+    case 'model-menu':
+      return [
+        ['↑/↓', 'Change selected value'],
+        ['j/k', 'Change selected value'],
+        ['←/→', 'Move focus'],
+        ['h/l', 'Move focus'],
+        ['Enter', 'Save or advance'],
+        ['Esc', 'Cancel'],
+        ['?', 'Toggle this help'],
+      ];
     case 'normal':
       return executionStarted
         ? [
@@ -66,6 +78,7 @@ const getShortcuts = (
             ['Enter', 'Focus agent'],
             ['/', 'Filter agents'],
             ['s', 'Start execution'],
+            ...(canEditModelSelection ? ([['m', 'Change model + effort']] as const) : []),
             ['a', 'Add to queue'],
             ['d', 'Remove queued item'],
             ['h', 'History'],
@@ -75,9 +88,9 @@ const getShortcuts = (
   }
 };
 
-export const HelpOverlay: React.FC<HelpOverlayProps> = React.memo(({ mode, executionStarted }) => {
+export const HelpOverlay: React.FC<HelpOverlayProps> = React.memo(({ mode, executionStarted, canEditModelSelection = false }) => {
   const { colors, borders } = useTheme();
-  const shortcuts = getShortcuts(mode, executionStarted);
+  const shortcuts = getShortcuts(mode, executionStarted, canEditModelSelection);
 
   return (
     <Box flexDirection="column" flexGrow={1} borderStyle={borders.prompt} borderColor={colors.blue} padding={1}>

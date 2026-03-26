@@ -18,6 +18,7 @@ describe('UIStore', () => {
     expect(state.spinnerFrame).toBe(0);
     expect(state.completion).toBeNull();
     expect(state.showHelp).toBe(false);
+    expect(state.modelSelection).toBeNull();
   });
 
   it('adds an agent via addAgent', () => {
@@ -55,6 +56,22 @@ describe('UIStore', () => {
     expect(store.getState().mode).toBe('approval');
   });
 
+  it('stores the active backend/model/effort selection', () => {
+    store.getState().setModelSelection({
+      backend: 'codex',
+      model: 'gpt-5.4',
+      effort: 'high',
+      editable: true
+    });
+
+    expect(store.getState().modelSelection).toEqual({
+      backend: 'codex',
+      model: 'gpt-5.4',
+      effort: 'high',
+      editable: true
+    });
+  });
+
   it('sets phase info', () => {
     store.getState().setPhase({ current: 2, total: 4 });
     expect(store.getState().phase).toEqual({ current: 2, total: 4 });
@@ -77,7 +94,7 @@ describe('UIStore', () => {
 
   it('adopts the next queued placeholder into a live agent row', () => {
     store.getState().addAgent({ id: 'cp1', name: 'Resume checkpoint', feature: 'checkpoint', status: 'queued', removable: false });
-    store.getState().addAgent({ id: 'queued-1', name: 'Queued request', feature: 'Queued request', status: 'queued', removable: true });
+    store.getState().addAgent({ id: 'queued-1', name: 'Queued request', feature: 'Original queued request', status: 'queued', removable: true });
     store.getState().setFocusedAgent('queued-1');
 
     store.getState().adoptQueuedPlaceholder({
@@ -90,7 +107,7 @@ describe('UIStore', () => {
     expect(store.getState().agents[1]).toMatchObject({
       id: '001',
       name: '001 Planned request',
-      feature: 'Planned request',
+      feature: 'Original queued request',
       status: 'running',
       removable: false
     });

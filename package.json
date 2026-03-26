@@ -43,7 +43,8 @@
     "openweft": "tsx src/bin/openweft.ts",
     "smoke:live:codex": "node scripts/live-smoke.mjs codex",
     "smoke:live:codex:resume": "node scripts/live-smoke.mjs codex resume",
-    "smoke:live:claude": "node scripts/live-smoke.mjs claude"
+    "smoke:live:claude": "node scripts/live-smoke.mjs claude",
+    "demo:record": "bash scripts/record-demo.sh"
   },
   "dependencies": {
     "@inkjs/ui": "^2.0.0",

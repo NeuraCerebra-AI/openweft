@@ -72,6 +72,7 @@ const formatFeatureList = (
 
 export const renderStatusReport = (input: {
   checkpoint: OrchestratorCheckpoint | null;
+  checkpointSource?: 'primary' | 'backup' | 'none';
   queueContent: string;
   background?: {
     pid: number;
@@ -100,6 +101,10 @@ export const renderStatusReport = (input: {
     ...formatFeatureList(checkpoint, 'Failed', failed),
     ...formatFeatureList(checkpoint, 'Completed', completed.slice(-5))
   ];
+
+  if (input.checkpointSource === 'backup') {
+    lines.splice(2, 0, 'Checkpoint Source: backup');
+  }
 
   if (checkpoint?.currentPhase) {
     lines.splice(

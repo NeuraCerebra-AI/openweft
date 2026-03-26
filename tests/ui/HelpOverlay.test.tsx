@@ -20,6 +20,26 @@ describe('HelpOverlay', () => {
     expect(frame).toContain('j/k');
   });
 
+  it('shows model switching in ready-state help when supported', () => {
+    const { lastFrame } = render(
+      <ThemeContext.Provider value={catppuccinMocha}>
+        <HelpOverlay mode="normal" executionStarted={false} canEditModelSelection={true} />
+      </ThemeContext.Provider>
+    );
+
+    expect(lastFrame()).toContain('Change model + effort');
+  });
+
+  it('does not show model switching in help when unsupported', () => {
+    const { lastFrame } = render(
+      <ThemeContext.Provider value={catppuccinMocha}>
+        <HelpOverlay mode="normal" executionStarted={false} canEditModelSelection={false} />
+      </ThemeContext.Provider>
+    );
+
+    expect(lastFrame()).not.toContain('Change model + effort');
+  });
+
   it('renders approval-specific shortcuts in approval mode', () => {
     const { lastFrame } = render(
       <ThemeContext.Provider value={catppuccinMocha}>

@@ -5,6 +5,7 @@ import { execa } from 'execa';
 
 import type { CommandHandlers } from './buildProgram.js';
 import { ClaudeCliAdapter, CodexCliAdapter, MockAgentAdapter, createExecaCommandRunner } from '../adapters/index.js';
+import type { BackendEffortLevel } from '../config/options.js';
 import type { BackendDetection } from '../ui/onboarding/types.js';
 import { getDefaultConfig, loadOpenWeftConfig } from '../config/index.js';
 import {
@@ -59,6 +60,7 @@ interface CliDependencies {
   detectGitHasCommits: () => Promise<boolean>;
   initGitRepo: () => Promise<void>;
   createInitialCommit: () => Promise<void>;
+  openExternalUrl: (url: string) => Promise<void>;
   getProcessArgv: () => string[];
   getExecPath: () => string;
   getEnv: () => NodeJS.ProcessEnv;
@@ -75,29 +77,229 @@ const isActionableCheckpointFeature = (feature: { status: string }): boolean => 
   return ACTIONABLE_CHECKPOINT_STATUSES.has(feature.status);
 };
 
-export const DEFAULT_PROMPT_A_TEMPLATE = `You are preparing a planning prompt for a coding agent.
+export const DEFAULT_PROMPT_A_TEMPLATE = `### Instructions for Prompt Creation
 
-User request:
+Write a **hyper-detailed, comprehensive, exhaustively verbose prompt** (saved in a \`.md\` file in the ./prompts folder) following this exact structure:
+
+1. **Role**
+2. **Goal**
+3. **Pre-step chain-of-thought analysis instructions**
+4. **General instructions**
+5. **Rules**
+6. **Context**
+
+### Requirements
+
+#### Codebase Investigation and Relevant Context Injection
+* In the prompt you create, you must instruct the model that **before any implementation planning or code changes**, it must first use a plethora of agents to analyze the relevant files in the codebase so its reasoning is grounded in the actual implementation rather than assumptions.
+* The prompt must be **densely grounded in relevant context** and should equip the target LLM with the information needed to reason accurately, plan effectively, and execute safely.
+* In the prompt's rules, explicitly instruct the target LLM to use **ULTRATHINK mode** for deep, careful, high-diligence reasoning.
+
+* The prompt must include:
+  * relevant **file paths and line numbers**,
+  * targeted **code snippets** that clarify the current implementation, constraints, and likely problem surfaces,
+  * **diagrams** when they materially improve understanding of architecture, control flow, dependencies, or data movement,
+  * and relevant, up-to-date **Context7 documentation excerpts** when framework, library, or API behavior is important to the task.
+
+* The injected context must be selected to **guide and inform** the target LLM with the technical details, constraints, signals, and surrounding implementation state needed to perform the work effectively.
+
+* Do **not** provide the actual solution inside the prompt.
+* Do **not** include prompt-authoring meta-commentary, such as instructions about how the prompt itself was constructed or remarks about resisting solving the problem inside the prompt.
+* It is acceptable and expected to include **task-facing operational instructions** that govern how the target LLM should reason, plan, validate, test, document, and execute. These include instructions related to planning discipline, ledger usage, confidence reporting, validation behavior, testing cadence, and implementation safeguards.
+
+* The output instructions within the prompt must direct the target LLM to operate using a disciplined workflow that includes:
+  * reasoning deeply and producing the best solution it can justify,
+  * investigating the codebase and gathering the necessary context before planning,
+  * developing and maintaining the **Living Plan Ledger** before and throughout implementation,
+  * preparing carefully before making code edits,
+  * executing the implementation incrementally in accordance with the established plan,
+  * stating confidence percentages for key judgments when appropriate,
+  * running **targeted tests after each meaningful edit or edit group** before proceeding so correctness is validated progressively,
+  * and performing the required **Downstream Impact Reviews** before closing major steps, including reassessing whether the remaining plan and ledger structure still reflect the best current execution path.
+
+* The prompt should provide enough context to make the target LLM effective while still leaving the **core reasoning, diagnosis, planning, and implementation work** to the target LLM itself.
+
+#### 'Living Plan Ledger' Creation Directive
+<Living Plan Ledger>
+* In the prompt you create, you must instruct the model that **after completing the initial codebase research**, it must use the **Plan-Creation Brainstorming Instructions** below to determine the best implementation plan for accomplishing the goal.
+* It must then create a **Living Plan Ledger** Markdown file in \`./project_ledgers\`.
+* The filename must begin with the next sequential number and then a short relevant label, for example:
+* \`1.relevant-label.md\`
+* \`2.relevant-label.md\`
+* The Living Plan Ledger must serve as the **canonical execution record** and **single source of truth** for the task.
+
+* The Living Plan Ledger must contain:
+* the selected implementation plan in full,
+* a checklist of major steps and sub-steps,
+* current execution status,
+* enough detail for work to resume reliably after interruption, compaction, or context loss,
+* and a structured schema for each step and sub-step.
+
+* At the top of the Living Plan Ledger, include a short instruction block stating that:
+* **after every compaction, the full ledger must be reread before any further work begins**,
+* the ledger is the source of truth for what has been completed, what remains, and what has changed,
+* and the next action must be chosen only after reviewing the ledger in full.
+
+* As work proceeds, progress, decisions, discoveries, plan adjustments, and completion state must be recorded in the ledger so execution remains recoverable, auditable, and consistent.
+
+#### Plan-Creation Brainstorming Instructions
+Brainstorm **5 distinct high-level approaches** to accomplish the goal.
+
+Evaluate each high-level approach against at minimum:
+* blast radius,
+* reversibility,
+* dependency complexity,
+* implementation effort,
+* long-term maintainability.
+
+Score and select the strongest high-level approach.
+
+Then, based on that winning high-level approach, brainstorm **5 concrete actionable implementation strategies**.
+
+Evaluate each implementation strategy against at minimum:
+* risk of cascading failures,
+* operational complexity,
+* implementation clarity,
+* observability and debuggability,
+* compatibility with the existing architecture.
+
+Select the strongest implementation strategy.
+
+Write the resulting plan into the **Living Plan Ledger** using the step schema defined below.
+
+When constructing the plan, you must be deliberate about the **order of operations**. Sequence the steps to minimize blast radius and prevent cascading effects.
+
+Follow these ordering rules:
+* ensure prerequisites exist before dependent steps are executed,
+* place behavior-preserving preparation steps before behavior-changing steps,
+* isolate high-risk changes and introduce them only after compatibility layers, scaffolding, or safeguards are in place,
+* prefer reversible changes before irreversible ones,
+* and, where appropriate, follow an **expand → migrate → contract** pattern.
+
+Each step should make subsequent steps safer and easier to execute.
+
+Before finalizing the plan, review the ordered steps and verify that no step would break, constrain, invalidate, or destabilize a later step if executed in sequence. If it would, reorder the plan before writing it into the ledger.
+
+#### Required Step Schema for the Living Plan Ledger
+Each major step and sub-step in the Living Plan Ledger must include the following fields:
+
+* **Step ID**
+* **Title**
+* **Objective**
+* **Why This Step Exists**
+* **Dependencies**
+* **Preconditions**
+* **Planned Actions**
+* **Risk Level** (\`Low\`, \`Medium\`, \`High\`)
+* **Potential Blast Radius**
+* **Rollback / Recovery Notes**
+* **Validation / Completion Criteria**
+* **Affected Files / Systems**
+* **Downstream Steps Potentially Impacted**
+* **Status** (\`Not Started\`, \`In Progress\`, \`Blocked\`, \`Complete\`)
+* **Notes / Discoveries**
+
+The schema must be detailed enough that another agent could resume execution with minimal ambiguity.
+
+#### Step-Completion, Downstream Impact Review, and Plan-Integrity Requirements
+Before marking any **major step** as **Complete**, the main agent must launch **1 or 2 dedicated verification agents** to perform a **Downstream Impact Review**.
+
+Use **1 verification agent by default**.
+
+Use **2 verification agents** when the completed step is high-risk, cross-cutting, architecture-affecting, touches shared interfaces or schemas, has meaningful blast radius, or when confidence is not high that downstream implications have been fully understood.
+
+The Downstream Impact Review must:
+* reread the remaining planned steps and their schemas,
+* understand the assumptions, dependencies, sequencing, and intended outcomes of the remaining work,
+* inspect whether the completed edits introduced any unexpected coupling, side effects, invalidated assumptions, sequencing changes, or newly required work,
+* determine whether any future step must be revised, reordered, expanded, split, merged, or replaced based on what was learned from the completed implementation,
+* and assess whether the **overall remaining plan and ledger structure** still reflect the best current execution path, or whether accumulated changes now justify broader restructuring of the remaining work.
+
+If the completed work changes the conditions under which later steps were originally planned, or reveals that the broader remaining plan or ledger structure no longer reflects current reality, the **Living Plan Ledger** must be updated to reflect the latest reality **before** the current major step is marked complete.
+
+A major step is not truly complete until:
+* its own validation criteria are satisfied,
+* downstream impact has been reviewed,
+* and the ledger has been updated to reflect any newly discovered implications for the remaining plan.
+
+For **sub-steps**, a dedicated Downstream Impact Review is **not required by default**.
+
+Instead, the main agent must use **risk-based judgment** to decide whether a sub-step warrants launching a targeted verification agent. A sub-step should receive a dedicated downstream review when it appears likely to affect later assumptions, shared system boundaries, sequencing, implementation requirements, or the integrity of the remaining plan.
+
+This is especially important when a sub-step touches:
+* shared interfaces or contracts,
+* schemas, persistence, or migrations,
+* auth, permissions, or security-sensitive logic,
+* build, deploy, config, or environment behavior,
+* shared utilities or cross-cutting infrastructure,
+* or any area where local edits may have non-local effects.
+
+Simple, local, mechanical, or low-risk sub-steps usually do **not** require a dedicated downstream review unless the main agent detects reason for concern.
+
+When in doubt for a sub-step, prefer launching **1 targeted verification agent** rather than skipping review entirely.
+
+
+</Living Plan Ledger>
+
+### Debugging Request Trigger
+If the first draft prompt has a 75% confidence percentage it is a debugging request, include the following, adapting the wording contextually based on the request while retaining the spirit of the debugging execution workflow. You are INCLUDING this, while maintaining flexibility and intelligent creativity with the rest of the prompt. You will also use Context7 to saturate the prompt with relevant documentation code snippet quotes:
+
+<debugging_guidelines>
+### Phase 1: Error Sequence Analysis
+1. Trace the complete execution flow from initial input through all major components to the point where the error or incorrect behavior occurs.
+2. Identify each handoff point where data, control, or state passes between functions, modules, services, or external systems.
+3. Map the exact state of the system at the moment of failure (key variables, inputs, configuration, environment, and external dependencies).
+4. List all assumptions the code makes about inputs, outputs, data formats, and external component behavior.
+5. Enumerate all plausible reasons why the expected result (e.g., output, side effect, state change) might not be produced.
+6. Analyze the relevant logic and control flow for potential ambiguities, edge cases, or missing conditions.
+7. Compare the current implementation against official documentation for any external APIs, libraries, frameworks, or protocols involved.
+8. Identify gaps between what the code expects to happen and what the system or dependencies actually guarantee or return.
+
+### Phase 2: Root Cause Hypothesis Formation
+1. Generate at least 5 distinct hypotheses for why the error or incorrect behavior is occurring.
+2. For each hypothesis, estimate probability (0–100%) based on evidence from logs, code inspection, and observed behavior.
+3. Rank hypotheses by likelihood × impact (how likely they are and how severely they affect the system).
+4. Identify which hypotheses can be tested immediately (e.g., via logging, small code changes, or reproduction steps) vs. those requiring more substantial changes or setup.
+5. Map dependencies between hypotheses (e.g., if H1 is true, H3 becomes more/less likely).
+
+### Phase 3: Fix Strategy Design
+1. For the top 3 most likely hypotheses, design targeted fixes or mitigations.
+2. Identify potential side effects, regressions, or breaking changes associated with each fix.
+3. Design validation tests (unit, integration, end-to-end, or manual checks) that would conclusively demonstrate each fix works.
+4. Plan rollback strategies in case a fix introduces new issues (e.g., feature flags, git revert, configuration toggles).
+5. Design or refine logging and telemetry that would make future diagnosis of similar issues faster and clearer.
+6. Identify opportunities to make the system more robust and resilient to variations in inputs, configuration, or external dependencies.
+
+### Phase 4: Implementation Planning
+1. Break down the chosen fix (or set of fixes) into atomic, testable changes.
+2. Prioritize changes by risk and expected benefit (low-risk, high-value improvements first; higher-risk changes later).
+3. Identify which changes can be made and tested in parallel vs. those that must be applied sequentially.
+4. Plan targeted tests for each change, including what to test, how to test it, and the exact expected outcomes.
+5. Define explicit confidence thresholds: what evidence (passing tests, logs, metrics, user reports) will make you confident that the issue is resolved and no new critical bugs were introduced?
+6. Understand your eventual goal is to keep iteratively analyzing and debugging and testing and analyzing and debugging and testing until we reach ~95%+ confidence we have found the solution and it has been robustly implemented.
+</debugging_guidelines>
+
+### Rules
+1. There must be zero data loss from the first draft prompt in your rewrite. For example, if first draft prompt is extensively large, put any extra content in the context area in the rewrite.
+2. Must double check this in your thinking before publishing it as an .md file, and after you do write the .md file, check one more time and fix if you need to.
+3. You must explicitly instruct the target LLM that workspace creation and git topology are owned by the orchestrator, not by the target LLM. The prompt you create must tell it to use the current assigned repository/worktree as its only workspace.
+4. You must explicitly instruct the target LLM that it must not create additional git worktrees, must not clone the repository elsewhere, must not create or switch to ad hoc branches unless explicitly instructed by the orchestrator, and must not relocate the task into another checkout or sibling repo.
+5. You must explicitly instruct the target LLM to treat workspace isolation as already solved and to focus instead on investigation, planning, ledger maintenance, implementation, validation, and safe completion within the provided workspace.
+### First Draft Prompt
+<first_draft_prompt>
 {{USER_REQUEST}}
-
-Return a Prompt B that tells the next agent to produce a compact Markdown feature plan with:
-- a short request summary
-- 3-5 implementation steps
-- a \`## Ledger\` section covering constraints, assumptions, watchpoints, and validation
-- a \`## Manifest\` section containing a strict JSON manifest code block with \`create\`, \`modify\`, and \`delete\` arrays
-- targeted validation steps
-- explicit instructions to use the current assigned repository/worktree only and not create additional git worktrees, clones, sibling checkouts, or ad hoc branches unless explicitly instructed by the orchestrator
-
-Prefer the smallest safe change set.
+</first_draft_prompt>
 `;
 
 export const DEFAULT_PLAN_ADJUSTMENT_TEMPLATE = `Review these merged edits:
+<CODE_EDIT_SUMMARY>
 {{CODE_EDIT_SUMMARY}}
+</CODE_EDIT_SUMMARY>
 
 Investigate whether they interfere with the referenced feature plan.
-Use the \`## Ledger\` section to preserve or update constraints, assumptions, watchpoints, and validation.
-If they do, return the updated full plan markdown, including the \`## Ledger\` and \`## Manifest\` sections.
-If they do not, return the original plan unchanged.
+Use the Ledger section to preserve or update its constraints, assumptions, watchpoints, and validation.
+If they do, update the returned plan markdown, including the \`## Ledger\` and \`## Manifest\` sections.
+If they do not, leave the plan unchanged.
 Do not modify source files during this adjustment step.
 `;
 
@@ -208,6 +410,24 @@ async function createInitialCommit(): Promise<void> {
   await execa('git', ['commit', '--allow-empty', '-m', 'Initial commit']);
 }
 
+async function openExternalUrl(url: string): Promise<void> {
+  try {
+    const result = process.platform === 'darwin'
+      ? await execa('open', [url], { reject: false })
+      : process.platform === 'win32'
+        ? await execa('cmd', ['/c', 'start', '', url], { reject: false, windowsHide: true })
+        : await execa('xdg-open', [url], { reject: false });
+
+    if (result.exitCode === 0) {
+      return;
+    }
+  } catch {
+    // fall through to the user-facing error below
+  }
+
+  throw new Error('Failed to open the browser automatically.');
+}
+
 const sleep = async (ms: number): Promise<void> => {
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
@@ -288,6 +508,7 @@ const defaultDependencies: CliDependencies = {
   detectGitHasCommits,
   initGitRepo,
   createInitialCommit,
+  openExternalUrl,
   getProcessArgv: () => [...process.argv],
   getExecPath: () => process.execPath,
   getEnv: () => ({ ...process.env }),
@@ -310,8 +531,10 @@ const defaultDependencies: CliDependencies = {
     }
 
     const useTsx = invocationPath.endsWith('.ts');
-    const command = useTsx ? 'tsx' : process.execPath;
-    const childArgs = [invocationPath, ...input.args];
+    const command = process.execPath;
+    const childArgs = useTsx
+      ? [...process.execArgv, invocationPath, ...input.args]
+      : [invocationPath, ...input.args];
     const child = execa(command, childArgs, {
       cwd: input.cwd,
       detached: true,
@@ -398,6 +621,101 @@ const cleanupBackgroundPidIfOwned = async (pidFile: string): Promise<void> => {
   }
 };
 
+const waitForBackgroundChildReady = async (input: {
+  pidFile: string;
+  spawnedPid: number;
+  isPidAlive: (pid: number) => boolean;
+  sleep: (ms: number) => Promise<void>;
+  attempts?: number;
+  delayMs?: number;
+}): Promise<number | null> => {
+  const attempts = input.attempts ?? 40;
+  const delayMs = input.delayMs ?? 250;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const background = await readBackgroundPid(input.pidFile, input.isPidAlive);
+    if (background?.alive) {
+      return background.pid;
+    }
+
+    if (!input.isPidAlive(input.spawnedPid)) {
+      return null;
+    }
+
+    await input.sleep(delayMs);
+  }
+
+  return null;
+};
+
+const supportsJsonConfigEditing = (configFilePath: string | null): boolean => {
+  return (
+    configFilePath !== null &&
+    path.extname(configFilePath) === '.json' &&
+    path.basename(configFilePath) !== 'package.json'
+  );
+};
+
+const buildModelSelectionForConfig = (
+  config: ResolvedOpenWeftConfig
+): UIStore['modelSelection'] => {
+  if (config.backend === 'claude') {
+    return {
+      backend: 'claude',
+      model: config.models.claude,
+      effort: config.effort.claude,
+      editable: supportsJsonConfigEditing(config.configFilePath)
+    };
+  }
+
+  return {
+    backend: 'codex',
+    model: config.models.codex,
+    effort: config.effort.codex,
+    editable: supportsJsonConfigEditing(config.configFilePath)
+  };
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+};
+
+const persistModelSelectionToConfigFile = async (input: {
+  configFilePath: string;
+  backend: 'codex' | 'claude';
+  model: string;
+  effort: BackendEffortLevel;
+}): Promise<void> => {
+  const currentContent = await readTextFileIfExists(input.configFilePath);
+  if (currentContent === null) {
+    throw new Error(`OpenWeft config file not found at ${input.configFilePath}.`);
+  }
+
+  const parsed = JSON.parse(currentContent) as unknown;
+  if (!isRecord(parsed)) {
+    throw new Error(`OpenWeft config at ${input.configFilePath} must be a JSON object.`);
+  }
+
+  const models = isRecord(parsed.models) ? parsed.models : {};
+  const effort = isRecord(parsed.effort) ? parsed.effort : {};
+  const nextConfig = {
+    ...parsed,
+    models: {
+      ...models,
+      [input.backend]: input.model
+    },
+    effort: {
+      ...effort,
+      [input.backend]: input.effort
+    }
+  };
+
+  await writeTextFileAtomic(
+    input.configFilePath,
+    `${JSON.stringify(nextConfig, null, 2)}\n`
+  );
+};
+
 
 export const createCommandHandlers = (
   dependencies: Partial<CliDependencies> = {}
@@ -415,6 +733,10 @@ export const createCommandHandlers = (
     onStartRequest?: (store: StoreApi<UIStore>) => Promise<void> | void;
     onRemoveAgent?: (agentId: string, store: StoreApi<UIStore>) => Promise<void>;
     onAddRequest?: (request: string, store: StoreApi<UIStore>) => Promise<void>;
+    onSaveModelSelection?: (
+      selection: { model: string; effort: BackendEffortLevel },
+      store: StoreApi<UIStore>
+    ) => Promise<void>;
   }): Promise<void> => {
     const { withFullScreen } = await import('fullscreen-ink');
     const { App } = await import('../ui/App.js');
@@ -427,7 +749,11 @@ export const createCommandHandlers = (
     const stopController = new StopController();
     const approvalController = new ApprovalController(onEvent);
     const notificationDependencies = createDefaultNotificationDependencies();
+    let activeConfig = input.config;
+    let activeConfigHash = input.configHash;
+    let configDirty = false;
 
+    uiStore.getState().setModelSelection(buildModelSelectionForConfig(input.config));
     input.prePopulate?.(uiStore);
 
     // Non-gated (openweft start): execution is already requested
@@ -468,6 +794,23 @@ export const createCommandHandlers = (
           : {}),
         ...(input.onRemoveAgent ? { onRemoveAgent: (agentId: string) => { void (async () => { try { await input.onRemoveAgent!(agentId, uiStore); } catch { uiStore.getState().setNotice({ level: 'error', message: 'Failed to write to queue file' }); } })(); } } : {}),
         ...(input.onAddRequest ? { onAddRequest: (request: string) => { void (async () => { try { await input.onAddRequest!(request, uiStore); } catch { uiStore.getState().setNotice({ level: 'error', message: 'Failed to write to queue file' }); } })(); } } : {}),
+        ...(input.onSaveModelSelection
+          ? {
+              onSaveModelSelection: (selection: { model: string; effort: BackendEffortLevel }) => {
+                void (async () => {
+                  try {
+                    await input.onSaveModelSelection!(selection, uiStore);
+                    configDirty = true;
+                  } catch {
+                    uiStore.getState().setNotice({
+                      level: 'error',
+                      message: 'Failed to save model settings'
+                    });
+                  }
+                })();
+              }
+            }
+          : {}),
       }),
       { exitOnCtrlC: false }
     );
@@ -488,10 +831,17 @@ export const createCommandHandlers = (
         if (action === 'quit') return;
       }
 
+      if (configDirty) {
+        const refreshed = await loadOpenWeftConfig(resolvedDependencies.getCwd());
+        activeConfig = refreshed.config;
+        activeConfigHash = refreshed.configHash;
+        uiStore.getState().setModelSelection(buildModelSelectionForConfig(activeConfig));
+      }
+
       const result = await runRealOrchestration({
-        config: input.config,
-        configHash: input.configHash,
-        adapter: selectAdapter({ backend: input.config.backend, streamOutput: false }),
+        config: activeConfig,
+        configHash: activeConfigHash,
+        adapter: selectAdapter({ backend: activeConfig.backend, streamOutput: false }),
         stopController,
         approvalController,
         notificationDependencies,
@@ -692,6 +1042,12 @@ export const createCommandHandlers = (
             }
 
             store.getState().requestExecution();
+            if (resolvedDependencies.getEnv().OPENWEFT_DEMO_MODE === '1') {
+              store.getState().setNotice({
+                level: 'info',
+                message: 'Starting orchestration…'
+              });
+            }
           },
           onRemoveAgent: async (agentId, store) => {
             await enqueueReadyStateMutation(async () => {
@@ -747,6 +1103,42 @@ export const createCommandHandlers = (
               } catch {
                 store.getState().setNotice({ level: 'error', message: 'Failed to write to queue file' });
               }
+            });
+          },
+          onSaveModelSelection: async (selection, store) => {
+            const currentSelection = store.getState().modelSelection;
+            const configFilePath = config.configFilePath;
+
+            if (
+              currentSelection === null ||
+              configFilePath === null ||
+              !supportsJsonConfigEditing(configFilePath)
+            ) {
+              store.getState().setNotice({
+                level: 'info',
+                message: 'Model editing is only supported for dedicated JSON config files.'
+              });
+              return;
+            }
+
+            await persistModelSelectionToConfigFile({
+              configFilePath,
+              backend: currentSelection.backend,
+              model: selection.model,
+              effort: selection.effort
+            });
+
+            store.getState().setModelSelection({
+              backend: currentSelection.backend,
+              model: selection.model,
+              effort: selection.effort,
+              editable: currentSelection.editable
+            });
+            store.getState().closeModelMenu();
+            store.getState().setMode('normal');
+            store.getState().setNotice({
+              level: 'info',
+              message: 'Saved model + effort for the next run.'
             });
           },
         });
@@ -878,13 +1270,14 @@ export const createCommandHandlers = (
       await ensureRuntimeDirectories(config.paths);
       await ensureQueueFile(config.paths.queueFile);
 
+      const backgroundChild = resolvedDependencies.getEnv().OPENWEFT_BACKGROUND_CHILD === '1';
       const existingBackground = await readBackgroundPid(
         config.paths.pidFile,
         resolvedDependencies.isPidAlive
       );
       const tmuxMonitor = readTmuxMonitorEnv(resolvedDependencies.getEnv());
 
-      if (existingBackground?.alive && !tmuxMonitor) {
+      if (existingBackground?.alive && !tmuxMonitor && !backgroundChild) {
         throw new Error(`OpenWeft is already running with PID ${existingBackground.pid}.`);
       }
 
@@ -910,9 +1303,19 @@ export const createCommandHandlers = (
           args: childArgs,
           outputLogFile: config.paths.outputLogFile
         });
-        await writeTextFileAtomic(config.paths.pidFile, `${pid}\n`);
+        const readyPid = await waitForBackgroundChildReady({
+          pidFile: config.paths.pidFile,
+          spawnedPid: pid,
+          isPidAlive: resolvedDependencies.isPidAlive,
+          sleep: resolvedDependencies.sleep
+        });
+        if (readyPid === null) {
+          throw new Error(
+            `Background child process ${pid} did not become ready. Check ${config.paths.outputLogFile} for details.`
+          );
+        }
         resolvedDependencies.writeLine(
-          `► Backgrounded (PID ${pid}). Use 'openweft status' to check progress.`
+          `► Backgrounded (PID ${readyPid}). Use 'openweft status' to check progress.`
         );
         return;
       }
@@ -949,7 +1352,7 @@ export const createCommandHandlers = (
         useStream = true;
       }
 
-      if (process.stdout.isTTY && !options.bg && !options.tmux && !tmuxMonitor && !options.dryRun) {
+      if (process.stdout.isTTY && !options.bg && !options.stream && !options.tmux && !tmuxMonitor && !options.dryRun) {
         let nextInlineQueuedAgentId = 1;
         let nextPreloadedQueuedAgentId = 1;
         const queueContent = (await readTextFileIfExists(config.paths.queueFile)) ?? '';
@@ -1122,6 +1525,7 @@ export const createCommandHandlers = (
       resolvedDependencies.writeLine(
         renderStatusReport({
           checkpoint: checkpointResult.checkpoint,
+          checkpointSource: checkpointResult.source,
           queueContent,
           background
         }).trimEnd()
@@ -1158,6 +1562,7 @@ export const createCommandHandlers = (
         `Sent SIGTERM to OpenWeft background process ${background.pid}. Waiting for the current phase to finish...`
       );
 
+      let terminalStateObserved: string | null = null;
       for (let attempt = 0; attempt < 300; attempt += 1) {
         await resolvedDependencies.sleep(1000);
         const liveState = await readBackgroundPid(
@@ -1188,10 +1593,12 @@ export const createCommandHandlers = (
           checkpoint.checkpoint.currentPhase === null &&
           ['stopped', 'paused', 'completed', 'failed'].includes(checkpoint.checkpoint.status)
         ) {
-          resolvedDependencies.writeLine(
-            `OpenWeft run reached terminal state ${checkpoint.checkpoint.status} and is finishing cleanup.`
-          );
-          return;
+          if (terminalStateObserved !== checkpoint.checkpoint.status) {
+            terminalStateObserved = checkpoint.checkpoint.status;
+            resolvedDependencies.writeLine(
+              `OpenWeft run reached terminal state ${checkpoint.checkpoint.status}. Waiting for the process to exit...`
+            );
+          }
         }
       }
 

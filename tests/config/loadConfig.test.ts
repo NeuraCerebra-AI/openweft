@@ -13,6 +13,11 @@ describe('loadOpenWeftConfig', () => {
     const { config, configHash } = await loadOpenWeftConfig(tempDirectory);
 
     expect(config.backend).toBe('codex');
+    expect(config.effort).toEqual({
+      codex: 'medium',
+      claude: 'medium'
+    });
+    expect(config.approval).toBe('always');
     expect(config.paths.openweftDir).toBe(path.join(tempDirectory, '.openweft'));
     expect(config.paths.queueFile).toBe(path.join(tempDirectory, 'feature_requests', 'queue.txt'));
     expect(configHash).toBe(createConfigHash(config));
@@ -63,6 +68,47 @@ describe('loadOpenWeftConfig', () => {
     expect(fromNested.configHash).toBe(fromRoot.configHash);
   });
 
+  it('deep-merges backend-specific effort overrides and top-level approval overrides', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-effort-merge-'));
+    await writeFile(
+      path.join(tempDirectory, '.openweftrc.json'),
+      JSON.stringify({
+        approval: 'per-feature',
+        effort: {
+          codex: 'high'
+        }
+      }),
+      'utf8'
+    );
+
+    const { config } = await loadOpenWeftConfig(tempDirectory);
+
+    expect(config.approval).toBe('per-feature');
+    expect(config.effort).toEqual({
+      codex: 'high',
+      claude: 'medium'
+    });
+  });
+
+  it('changes the config hash when effort or approval changes', async () => {
+    const defaults = getDefaultConfig();
+
+    const approvalHash = createConfigHash({
+      ...defaults,
+      approval: 'first-only'
+    });
+    const effortHash = createConfigHash({
+      ...defaults,
+      effort: {
+        ...defaults.effort,
+        codex: 'high'
+      }
+    });
+
+    expect(approvalHash).not.toBe(createConfigHash(defaults));
+    expect(effortHash).not.toBe(createConfigHash(defaults));
+  });
+
   it('formats invalid config schema errors with the config file path', async () => {
     const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-invalid-'));
     const configPath = path.join(tempDirectory, '.openweftrc.json');
@@ -93,6 +139,37 @@ describe('loadOpenWeftConfig', () => {
     );
 
     await expect(loadOpenWeftConfig(tempDirectory)).rejects.toThrow(/backend/);
+  });
+
+  it('rejects invalid approval values', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-invalid-approval-'));
+    await writeFile(
+      path.join(tempDirectory, '.openweftrc.json'),
+      JSON.stringify({
+        ...getDefaultConfig(),
+        approval: 'per-turn'
+      }),
+      'utf8'
+    );
+
+    await expect(loadOpenWeftConfig(tempDirectory)).rejects.toThrow(/approval/);
+  });
+
+  it('rejects invalid backend effort values', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-invalid-effort-'));
+    await writeFile(
+      path.join(tempDirectory, '.openweftrc.json'),
+      JSON.stringify({
+        ...getDefaultConfig(),
+        effort: {
+          codex: 'max',
+          claude: 'medium'
+        }
+      }),
+      'utf8'
+    );
+
+    await expect(loadOpenWeftConfig(tempDirectory)).rejects.toThrow(/effort\.codex/);
   });
 
   it('rejects unsupported audio config fields', async () => {

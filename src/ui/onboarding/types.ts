@@ -1,9 +1,11 @@
+import type { BackendEffortLevel } from '../../config/options.js';
+
 export interface BackendDetection {
   installed: boolean;
   authenticated: boolean;
 }
 
-export type StepKey = 1 | 2 | 3 | 4 | 5 | 6;
+export type StepKey = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export interface OnboardingState {
   currentStep: StepKey;
@@ -12,6 +14,8 @@ export interface OnboardingState {
   codexStatus: BackendDetection;
   claudeStatus: BackendDetection;
   selectedBackend: 'codex' | 'claude' | null;
+  selectedModel: string | null;
+  selectedEffort: BackendEffortLevel | null;
   gitInitError: string | null;
   initialized: boolean;
   initError: string | null;
@@ -21,9 +25,14 @@ export interface OnboardingState {
 
 export interface WizardCallbacks {
   onGitInit: () => Promise<void>;
-  onRunInit: (backend: 'codex' | 'claude') => Promise<void>;
+  onRunInit: (selection: {
+    backend: 'codex' | 'claude';
+    model: string;
+    effort: BackendEffortLevel;
+  }) => Promise<void>;
   onQueueRequest: (request: string) => Promise<void>;
   onRedetectBackends: () => Promise<{ codex: BackendDetection; claude: BackendDetection }>;
+  onOpenSuperpowersRepo: () => Promise<void>;
 }
 
 /**
@@ -40,4 +49,5 @@ export interface WizardDependencies {
   createInitialCommit: () => Promise<void>;
   detectCodex: () => Promise<BackendDetection>;
   detectClaude: () => Promise<BackendDetection>;
+  openExternalUrl: (url: string) => Promise<void>;
 }

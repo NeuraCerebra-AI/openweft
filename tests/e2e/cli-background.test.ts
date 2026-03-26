@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -30,7 +30,10 @@ describe('openweft CLI background flow', () => {
             authenticated: true
           }),
           detectTmux: async () => false,
-          spawnBackground: async () => 4321,
+          spawnBackground: async () => {
+            await writeFile(path.join(repoRoot, '.openweft', 'pid'), '4321\n', 'utf8');
+            return 4321;
+          },
           isPidAlive: () => alive,
           sendSignal: (_pid, signal) => {
             sentSignal = signal;

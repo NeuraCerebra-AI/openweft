@@ -44,6 +44,7 @@ describe('codex adapter', () => {
     expect(command.input).toBe('Reply with OK.');
     expect(command.env).toEqual({ CODEX_HOME: '/tmp/codex-home' });
     expect(command.idleTimeoutMs).toBe(90 * 60 * 1000);
+    expect(command.args).not.toContain('-c');
   });
 
   it('defaults new sessions to danger-full-access when sandbox mode is omitted', () => {
@@ -72,6 +73,62 @@ describe('codex adapter', () => {
       '-'
     ]);
     expect(command.idleTimeoutMs).toBe(90 * 60 * 1000);
+  });
+
+  it('rejects effort levels that Codex does not support', () => {
+    expect(() => buildCodexCommand({
+      ...baseRequest(),
+      effortLevel: 'max'
+    } as AdapterTurnRequest & { effortLevel: 'max' })).toThrow(
+      'Unsupported Codex effort level: max'
+    );
+  });
+
+  it('adds a reasoning effort override for non-medium new sessions', () => {
+    const command = buildCodexCommand({
+      ...baseRequest(),
+      effortLevel: 'high'
+    } as AdapterTurnRequest & { effortLevel: 'high' });
+
+    expect(command.args).toEqual([
+      'exec',
+      '--sandbox',
+      'danger-full-access',
+      '-C',
+      '/tmp/openweft-test',
+      '--ephemeral',
+      '--add-dir',
+      '/tmp/shared',
+      '--json',
+      '--color',
+      'never',
+      '--model',
+      'gpt-5.3-codex',
+      '-c',
+      'model_reasoning_effort="high"',
+      '-'
+    ]);
+  });
+
+  it('adds a reasoning effort override for non-medium resumed sessions', () => {
+    const command = buildCodexCommand({
+      ...baseRequest(),
+      sessionId: 'session-123',
+      persistSession: true,
+      effortLevel: 'xhigh'
+    } as AdapterTurnRequest & { effortLevel: 'xhigh' });
+
+    expect(command.args).toEqual([
+      'exec',
+      'resume',
+      'session-123',
+      '--json',
+      '--model',
+      'gpt-5.3-codex',
+      '-c',
+      'model_reasoning_effort="xhigh"',
+      '-'
+    ]);
   });
 
   it('uses a shorter idle timeout for planning stages', () => {

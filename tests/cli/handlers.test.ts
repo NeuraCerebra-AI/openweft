@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildProgram } from '../../src/cli/buildProgram.js';
 import { createCommandHandlers } from '../../src/cli/handlers.js';
 import { parseQueueFile } from '../../src/domain/queue.js';
+import { createEmptyCheckpoint, saveCheckpoint } from '../../src/state/checkpoint.js';
 import type { TmuxSpawnInput } from '../../src/tmux/index.js';
 
 describe('git detection dependencies', () => {
@@ -229,8 +230,8 @@ describe('command handlers', () => {
     const planAdjustment = await readFile(planAdjustmentPath, 'utf8');
 
     expect(promptA).toContain('{{USER_REQUEST}}');
-    expect(promptA).toContain('Return a Prompt B');
-    expect(promptA).toContain('## Ledger');
+    expect(promptA).toContain('### Instructions for Prompt Creation');
+    expect(promptA).toContain('Living Plan Ledger');
     expect(promptA).toContain('not create additional git worktrees');
     expect(planAdjustment).toContain('{{CODE_EDIT_SUMMARY}}');
     expect(planAdjustment).toContain('## Ledger');
@@ -383,6 +384,50 @@ describe('command handlers', () => {
     expect(parseQueueFile(queueContent).pending[0]?.request).toBe(request);
   });
 
+  it('queues onto a manually edited v1 queue file and canonicalizes the manual line', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-add-v1-manual-line-'));
+    const output: string[] = [];
+    const program = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        })
+      })
+    );
+
+    await program.parseAsync(['init'], { from: 'user' });
+    await writeFile(
+      path.join(repoRoot, 'feature_requests', 'queue.txt'),
+      '# openweft queue format: v1\n# OpenWeft feature queue\nplain english manual queue line\n',
+      'utf8'
+    );
+
+    await createCommandHandlers({
+      getCwd: () => repoRoot,
+      writeLine: (message) => {
+        output.push(message);
+      }
+    }).add('add auth');
+
+    const queueContent = await readFile(path.join(repoRoot, 'feature_requests', 'queue.txt'), 'utf8');
+    expect(parseQueueFile(queueContent).pending.map((entry) => entry.request)).toEqual([
+      'plain english manual queue line',
+      'add auth'
+    ]);
+    expect(queueContent).not.toContain('\nplain english manual queue line\n');
+    expect(output.some((line) => line.includes('Queued #002'))).toBe(true);
+  });
+
   it('refuses start before OpenWeft has been initialized', async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-start-no-config-'));
     const program = buildProgram(
@@ -403,6 +448,106 @@ describe('command handlers', () => {
     await expect(program.parseAsync(['start'], { from: 'user' })).rejects.toThrow(/openweft init/i);
     await expect(readFile(path.join(repoRoot, '.openweft', 'checkpoint.json'), 'utf8')).rejects.toThrow();
     await expect(readFile(path.join(repoRoot, 'feature_requests', 'queue.txt'), 'utf8')).rejects.toThrow();
+  });
+
+  it('allows a background child process to start even when the parent pid file already exists', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-bg-child-'));
+    const output: string[] = [];
+    const initProgram = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        })
+      })
+    );
+
+    await initProgram.parseAsync(['init'], { from: 'user' });
+    await writeFile(path.join(repoRoot, '.openweft', 'pid'), '4321\n', 'utf8');
+
+    output.length = 0;
+    const program = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        getEnv: () => ({
+          ...process.env,
+          OPENWEFT_BACKGROUND_CHILD: '1'
+        }),
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        isPidAlive: (pid) => pid === 4321
+      })
+    );
+
+    await expect(program.parseAsync(['start', '--dry-run'], { from: 'user' })).resolves.toBeDefined();
+    expect(output.some((line) => line.includes('Dry run complete'))).toBe(true);
+  });
+
+  it('does not claim background success before the child becomes ready', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-bg-ready-'));
+    const output: string[] = [];
+    const initProgram = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        })
+      })
+    );
+
+    await initProgram.parseAsync(['init'], { from: 'user' });
+
+    output.length = 0;
+    const program = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        spawnBackground: async () => 4321,
+        isPidAlive: () => false,
+        sleep: async () => {}
+      })
+    );
+
+    await expect(program.parseAsync(['start', '--bg'], { from: 'user' })).rejects.toThrow(/ready/i);
+    await expect(readFile(path.join(repoRoot, '.openweft', 'pid'), 'utf8')).rejects.toThrow();
+    expect(output.some((line) => line.includes('Backgrounded'))).toBe(false);
   });
 
   it('fails start before orchestration when the configured backend CLI is missing', async () => {
@@ -458,6 +603,78 @@ describe('command handlers', () => {
         configurable: true
       });
     }
+  });
+
+  it('waits for the background process to exit instead of returning early on a terminal checkpoint', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-stop-terminal-'));
+    const output: string[] = [];
+    const initProgram = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        })
+      })
+    );
+
+    await initProgram.parseAsync(['init'], { from: 'user' });
+    await writeFile(path.join(repoRoot, '.openweft', 'pid'), '4321\n', 'utf8');
+
+    const checkpoint = createEmptyCheckpoint({
+      orchestratorVersion: 'test',
+      configHash: 'test-config-hash',
+      runId: 'test-run',
+      checkpointId: 'test-checkpoint',
+      createdAt: '2026-03-24T00:00:00.000Z'
+    });
+    checkpoint.status = 'stopped';
+    checkpoint.currentState = 'stopped';
+
+    await saveCheckpoint({
+      checkpoint,
+      checkpointFile: path.join(repoRoot, '.openweft', 'checkpoint.json'),
+      checkpointBackupFile: path.join(repoRoot, '.openweft', 'checkpoint.json.backup')
+    });
+
+    let pidChecks = 0;
+    const program = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        isPidAlive: () => {
+          pidChecks += 1;
+          return pidChecks < 3;
+        },
+        sendSignal: () => {},
+        sleep: async () => {}
+      })
+    );
+
+    await expect(program.parseAsync(['stop'], { from: 'user' })).resolves.toBeDefined();
+    expect(output).toContain(
+      'Sent SIGTERM to OpenWeft background process 4321. Waiting for the current phase to finish...'
+    );
+    expect(output).toContain('OpenWeft background run stopped.');
+    expect(output.some((line) => line.includes('finishing cleanup'))).toBe(false);
   });
 
   it('fails api_key auth mode before tmux launch when the required env var is missing', async () => {

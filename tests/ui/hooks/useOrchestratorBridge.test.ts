@@ -101,7 +101,7 @@ describe('createEventHandler', () => {
     store.getState().addAgent({
       id: 'queued-1',
       name: 'Queued request',
-      feature: 'Queued request',
+      feature: 'I want a cow',
       status: 'queued',
       removable: true
     });
@@ -113,7 +113,7 @@ describe('createEventHandler', () => {
     expect(store.getState().agents[0]).toMatchObject({
       id: '001',
       name: '001 Alpha',
-      feature: 'Alpha',
+      feature: 'I want a cow',
       status: 'running',
       removable: false
     });

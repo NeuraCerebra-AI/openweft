@@ -9,8 +9,8 @@ describe('onboarding types', () => {
     expectTypeOf(detection.authenticated).toEqualTypeOf<boolean>();
   });
 
-  it('StepKey is a union of 1 through 6', () => {
-    expectTypeOf<StepKey>().toEqualTypeOf<1 | 2 | 3 | 4 | 5 | 6>();
+  it('StepKey is a union of 1 through 7', () => {
+    expectTypeOf<StepKey>().toEqualTypeOf<1 | 2 | 3 | 4 | 5 | 6 | 7>();
   });
 
   it('OnboardingState has all required fields with correct types', () => {
@@ -21,6 +21,8 @@ describe('onboarding types', () => {
       codexStatus: { installed: true, authenticated: true },
       claudeStatus: { installed: false, authenticated: false },
       selectedBackend: 'codex',
+      selectedModel: 'gpt-5.3-codex',
+      selectedEffort: 'medium',
       gitInitError: null,
       initialized: false,
       initError: null,
@@ -33,6 +35,8 @@ describe('onboarding types', () => {
     expectTypeOf(state.codexStatus).toEqualTypeOf<BackendDetection>();
     expectTypeOf(state.claudeStatus).toEqualTypeOf<BackendDetection>();
     expectTypeOf(state.selectedBackend).toEqualTypeOf<'codex' | 'claude' | null>();
+    expectTypeOf(state.selectedModel).toEqualTypeOf<string | null>();
+    expectTypeOf(state.selectedEffort).toEqualTypeOf<'low' | 'medium' | 'high' | 'xhigh' | 'max' | null>();
     expectTypeOf(state.gitInitError).toEqualTypeOf<string | null>();
     expectTypeOf(state.initialized).toEqualTypeOf<boolean>();
     expectTypeOf(state.initError).toEqualTypeOf<string | null>();
@@ -43,16 +47,22 @@ describe('onboarding types', () => {
   it('WizardCallbacks has correct async callback signatures', () => {
     const callbacks: WizardCallbacks = {
       onGitInit: async () => undefined,
-      onRunInit: async (_backend: 'codex' | 'claude') => undefined,
+      onRunInit: async (_selection) => undefined,
       onQueueRequest: async (_request: string) => undefined,
+      onOpenSuperpowersRepo: async () => undefined,
       onRedetectBackends: async () => ({
         codex: { installed: true, authenticated: true },
         claude: { installed: false, authenticated: false },
       }),
     };
     expectTypeOf(callbacks.onGitInit).toEqualTypeOf<() => Promise<void>>();
-    expectTypeOf(callbacks.onRunInit).toEqualTypeOf<(backend: 'codex' | 'claude') => Promise<void>>();
+    expectTypeOf(callbacks.onRunInit).toEqualTypeOf<(selection: {
+      backend: 'codex' | 'claude';
+      model: string;
+      effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+    }) => Promise<void>>();
     expectTypeOf(callbacks.onQueueRequest).toEqualTypeOf<(request: string) => Promise<void>>();
+    expectTypeOf(callbacks.onOpenSuperpowersRepo).toEqualTypeOf<() => Promise<void>>();
     expectTypeOf(callbacks.onRedetectBackends).toEqualTypeOf<() => Promise<{ codex: BackendDetection; claude: BackendDetection }>>();
   });
 });

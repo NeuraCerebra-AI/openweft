@@ -52,6 +52,7 @@ export const FeatureCheckpointSchema = z
     backend: BackendSchema.nullable().optional(),
     manifest: ManifestSchema.nullable().optional(),
     rerunEligible: z.boolean().optional().default(true),
+    mergeResolutionAttempts: z.number().int().nonnegative().optional().default(0),
     priorityScore: z.number().nullable().optional(),
     priorityTier: PriorityTierSchema.nullable().optional(),
     scoringCycles: z.number().int().nonnegative().optional(),
@@ -71,6 +72,15 @@ export const PendingMergeSummarySchema = z
   .strict();
 
 export type PendingMergeSummary = z.infer<typeof PendingMergeSummarySchema>;
+
+export const ApprovalStateCheckpointSchema = z
+  .object({
+    firstApprovalSatisfied: z.boolean(),
+    approvedFeatureIds: z.array(z.string())
+  })
+  .strict();
+
+export type ApprovalStateCheckpoint = z.infer<typeof ApprovalStateCheckpointSchema>;
 
 export const CheckpointSchema = z
   .object({
@@ -107,6 +117,10 @@ export const CheckpointSchema = z
         .strict()
     ),
     pendingMergeSummaries: z.array(PendingMergeSummarySchema).optional().default([]),
+    approvalState: ApprovalStateCheckpointSchema.optional().default({
+      firstApprovalSatisfied: false,
+      approvedFeatureIds: []
+    }),
     cost: CheckpointCostTotalsSchema
   })
   .strict();
@@ -196,6 +210,10 @@ export const createEmptyCheckpoint = (input: {
     features: {},
     pendingRequests: [],
     pendingMergeSummaries: [],
+    approvalState: {
+      firstApprovalSatisfied: false,
+      approvedFeatureIds: []
+    },
     cost: createEmptyCostTotals()
   };
 };

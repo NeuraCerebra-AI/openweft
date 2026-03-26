@@ -88,6 +88,23 @@ describe('App', () => {
     expect(frame).toContain('Press q to exit');
   });
 
+  it('shows the active backend, model, and effort in the dashboard status bar', () => {
+    const store = createUIStore();
+    store.getState().setModelSelection({
+      backend: 'claude',
+      model: 'claude-sonnet-4-6',
+      effort: 'max',
+      editable: true
+    });
+
+    const { lastFrame } = render(<App store={store} />);
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('claude');
+    expect(frame).toContain('claude-sonnet-4-6');
+    expect(frame).toContain('max');
+  });
+
   it('auto-clears notices after a timeout', async () => {
     vi.useFakeTimers();
 
@@ -126,6 +143,34 @@ describe('App', () => {
 
     expect(frame).toContain('hel');
     expect(frame).toContain('█lo');
+  });
+
+  it('deletes the previous word in compose mode for alt-delete sequences terminals send', async () => {
+    const store = createUIStore();
+    store.getState().setAddInputText('hello world');
+
+    const { stdin } = render(<App store={store} />);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    stdin.write('\u001B\u007F');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(store.getState().addInputText).toBe('hello ');
+    expect(store.getState().addInputCursorOffset).toBe(6);
+  });
+
+  it('deletes the previous word in compose mode for CSI alt-delete sequences', async () => {
+    const store = createUIStore();
+    store.getState().setAddInputText('hello world');
+
+    const { stdin } = render(<App store={store} />);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    stdin.write('\u001B[3;3~');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(store.getState().addInputText).toBe('hello ');
+    expect(store.getState().addInputCursorOffset).toBe(6);
   });
 
   it('renders the filter cursor at the insertion point in INPUT mode', () => {

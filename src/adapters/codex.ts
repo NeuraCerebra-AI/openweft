@@ -1,5 +1,6 @@
 import type { AgentAdapter, AdapterCommandSpec, AdapterTurnRequest, AdapterUsage, CommandRunner } from './types.js';
 
+import { CODEX_EFFORT_OPTIONS } from '../config/options.js';
 import {
   createAdapterFailure,
   createAdapterSuccess,
@@ -98,6 +99,13 @@ export const buildCodexCommand = (request: AdapterTurnRequest): AdapterCommandSp
     ...(request.isolatedHomeDir ? { CODEX_HOME: request.isolatedHomeDir } : {})
   };
 
+  if (
+    request.effortLevel !== undefined &&
+    !CODEX_EFFORT_OPTIONS.includes(request.effortLevel as typeof CODEX_EFFORT_OPTIONS[number])
+  ) {
+    throw new Error(`Unsupported Codex effort level: ${request.effortLevel}`);
+  }
+
   if (request.sessionId) {
     args.push('resume', request.sessionId);
     args.push('--json', '--model', request.model);
@@ -119,6 +127,11 @@ export const buildCodexCommand = (request: AdapterTurnRequest): AdapterCommandSp
 
     args.push('--json', '--color', 'never', '--model', request.model);
   }
+
+  if (request.effortLevel && request.effortLevel !== 'medium') {
+    args.push('-c', `model_reasoning_effort="${request.effortLevel}"`);
+  }
+
   args.push('-');
 
   return {

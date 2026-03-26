@@ -146,7 +146,7 @@ describe('checkpoint persistence', () => {
     expect(loaded.checkpoint?.pendingMergeSummaries).toEqual([]);
   });
 
-  it('defaults legacy feature checkpoints without evolvedPlanFile and rerunEligible when loading', async () => {
+  it('defaults legacy feature checkpoints without evolvedPlanFile, rerunEligible, or mergeResolutionAttempts when loading', async () => {
     const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-checkpoint-legacy-feature-'));
     const checkpointFile = path.join(tempDirectory, 'checkpoint.json');
     const backupFile = path.join(tempDirectory, 'checkpoint.json.backup');
@@ -168,6 +168,7 @@ describe('checkpoint persistence', () => {
       worktreePath: '/tmp/worktrees/001',
       sessionId: null,
       rerunEligible: true,
+      mergeResolutionAttempts: 0,
       updatedAt: '2026-03-13T08:00:00.000Z'
     };
     const legacyCheckpoint = JSON.parse(JSON.stringify(checkpoint)) as {
@@ -175,6 +176,7 @@ describe('checkpoint persistence', () => {
     };
     delete legacyCheckpoint.features['001']?.evolvedPlanFile;
     delete legacyCheckpoint.features['001']?.rerunEligible;
+    delete legacyCheckpoint.features['001']?.mergeResolutionAttempts;
 
     await writeFile(checkpointFile, JSON.stringify(legacyCheckpoint), 'utf8');
 
@@ -183,6 +185,7 @@ describe('checkpoint persistence', () => {
     expect(loaded.source).toBe('primary');
     expect(loaded.checkpoint?.features['001']?.evolvedPlanFile).toBeNull();
     expect(loaded.checkpoint?.features['001']?.rerunEligible).toBe(true);
+    expect(loaded.checkpoint?.features['001']?.mergeResolutionAttempts).toBe(0);
   });
 });
 

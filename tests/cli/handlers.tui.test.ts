@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StoreApi } from 'zustand/vanilla';
 
+import { createConfigHash, loadOpenWeftConfig } from '../../src/config/index.js';
 import { parseQueueFile } from '../../src/domain/queue.js';
 import type { UIStore } from '../../src/ui/store.js';
 
@@ -138,6 +139,7 @@ const createTtyHarness = async (input: {
 const writeLaunchProjectFiles = async (
   repoRoot: string,
   options: {
+    configOverrides?: Record<string, unknown>;
     queueContent: string;
     checkpointContent?: Record<string, unknown>;
   }
@@ -154,7 +156,8 @@ const writeLaunchProjectFiles = async (
         concurrency: {
           maxParallelAgents: 1,
           staggerDelayMs: 0
-        }
+        },
+        ...options.configOverrides
       },
       null,
       2
@@ -495,6 +498,97 @@ describe('TTY start handler', () => {
       checkpoint: { status: 'completed' },
       mergedCount: 0,
       plannedCount: 3
+    });
+
+    await startPromise;
+  });
+
+  it('does not expose pre-start model editing in direct start TTY mode', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-tui-direct-start-no-model-edit-'));
+    let resolveStart: ((result: StartResult) => void) | null = null;
+
+    await writeLaunchProjectFiles(repoRoot, {
+      queueContent: ''
+    });
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async () => await new Promise<StartResult>((resolve) => {
+        resolveStart = resolve;
+      })
+    });
+
+    const startPromise = harness.handlers.start({});
+    await waitFor(() => harness.getAppProps() !== null);
+
+    const props = harness.getAppProps();
+    if (!props) {
+      throw new Error('Expected App props to be captured.');
+    }
+
+    expect(props.onSaveModelSelection).toBeUndefined();
+
+    if (!resolveStart) {
+      throw new Error('Expected orchestration resolver to be set.');
+    }
+    const finishRun: (result: StartResult) => void = resolveStart;
+    finishRun({
+      checkpoint: { status: 'completed' },
+      mergedCount: 0,
+      plannedCount: 0
+    });
+
+    await startPromise;
+  });
+
+  it('seeds the direct start dashboard with the active backend, model, and effort', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-tui-direct-start-model-'));
+    let resolveStart: ((result: StartResult) => void) | null = null;
+
+    await writeLaunchProjectFiles(repoRoot, {
+      queueContent: '',
+      configOverrides: {
+        backend: 'claude',
+        models: {
+          claude: 'claude-haiku-4-5'
+        },
+        effort: {
+          claude: 'max'
+        }
+      }
+    });
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async () => await new Promise<StartResult>((resolve) => {
+        resolveStart = resolve;
+      })
+    });
+
+    const startPromise = harness.handlers.start({});
+    await waitFor(() => harness.getStore() !== null);
+
+    const store = harness.getStore();
+    if (!store) {
+      throw new Error('Expected App store to be captured.');
+    }
+
+    expect(store.getState().modelSelection).toEqual({
+      backend: 'claude',
+      model: 'claude-haiku-4-5',
+      effort: 'max',
+      editable: true
+    });
+    expect(store.getState().executionRequested).toBe(true);
+
+    if (!resolveStart) {
+      throw new Error('Expected orchestration resolver to be set.');
+    }
+    const finishRun: (result: StartResult) => void = resolveStart;
+    finishRun({
+      checkpoint: { status: 'completed' },
+      mergedCount: 0,
+      plannedCount: 0
     });
 
     await startPromise;
@@ -945,9 +1039,74 @@ describe('TTY start handler', () => {
     expect(store.getState().agents[0]).toMatchObject({
       id: '001',
       name: '001 Alpha',
-      feature: 'Alpha',
+      feature: 'alpha',
       status: 'running',
       removable: false
+    });
+
+    if (!resolveRun) {
+      throw new Error('Expected orchestration resolver to be set.');
+    }
+
+    const finishRun: (result: StartResult) => void = resolveRun;
+    finishRun({
+      checkpoint: { status: 'completed' },
+      mergedCount: 1,
+      plannedCount: 1
+    });
+
+    await launchPromise;
+  });
+
+  it('shows a demo-mode start notice when execution is requested from the ready dashboard', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-launch-demo-notice-'));
+    let resolveRun: ((result: StartResult) => void) | null = null;
+
+    await writeLaunchProjectFiles(repoRoot, {
+      queueContent: 'alpha\n',
+      configOverrides: {
+        backend: 'claude'
+      }
+    });
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async () => {
+        return await new Promise<StartResult>((resolve) => {
+          resolveRun = resolve;
+        });
+      },
+      handlerOverrides: {
+        getEnv: () => ({
+          ...process.env,
+          OPENWEFT_DEMO_MODE: '1'
+        }),
+        detectCodex: async () => ({
+          installed: false,
+          authenticated: false
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        })
+      }
+    });
+
+    const launchPromise = harness.handlers.launch();
+    await waitFor(() => harness.getAppProps() !== null && harness.getStore() !== null);
+
+    const props = harness.getAppProps();
+    const store = harness.getStore();
+    if (!props || !store) {
+      throw new Error('Expected App props and store to be captured.');
+    }
+
+    (props.onStartRequest as () => void)();
+    await waitFor(() => store.getState().executionRequested);
+
+    expect(store.getState().notice).toEqual({
+      level: 'info',
+      message: 'Starting orchestration…'
     });
 
     if (!resolveRun) {
@@ -1188,6 +1347,188 @@ describe('TTY start handler', () => {
     expect(parseQueueFile(queueContent).pending.map((entry) => entry.request)).toEqual(['new work item']);
 
     (props.onQuitRequest as () => void)();
+    await launchPromise;
+  });
+
+  it('seeds the gated ready-state dashboard with the active backend, model, and effort', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-launch-model-'));
+
+    await writeLaunchProjectFiles(repoRoot, {
+      queueContent: '',
+      configOverrides: {
+        backend: 'claude',
+        models: {
+          claude: 'claude-opus-4-6'
+        },
+        effort: {
+          claude: 'high'
+        }
+      }
+    });
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async () => ({
+        checkpoint: { status: 'completed' },
+        mergedCount: 0,
+        plannedCount: 0
+      })
+    });
+
+    const launchPromise = harness.handlers.launch();
+    await waitFor(() => harness.getStore() !== null);
+
+    const store = harness.getStore();
+    if (!store) {
+      throw new Error('Expected App store to be captured.');
+    }
+
+    expect(store.getState().modelSelection).toEqual({
+      backend: 'claude',
+      model: 'claude-opus-4-6',
+      effort: 'high',
+      editable: true
+    });
+    expect(store.getState().executionRequested).toBe(false);
+
+    const props = harness.getAppProps();
+    if (!props) {
+      throw new Error('Expected App props to be captured.');
+    }
+
+    (props.onQuitRequest as () => void)();
+    await launchPromise;
+  });
+
+  it('marks package.json-backed config as non-editable in the ready-state dashboard', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-launch-package-json-model-'));
+
+    await mkdir(path.join(repoRoot, 'feature_requests'), { recursive: true });
+    await mkdir(path.join(repoRoot, 'prompts'), { recursive: true });
+    await mkdir(path.join(repoRoot, '.openweft'), { recursive: true });
+
+    await writeFile(
+      path.join(repoRoot, 'package.json'),
+      `${JSON.stringify(
+        {
+          name: 'openweft-fixture',
+          private: true,
+          openweft: {
+            backend: 'claude',
+            models: {
+              claude: 'claude-sonnet-4-5'
+            },
+            effort: {
+              claude: 'high'
+            }
+          }
+        },
+        null,
+        2
+      )}\n`,
+      'utf8'
+    );
+    await writeFile(path.join(repoRoot, 'prompts', 'prompt-a.md'), 'Plan {{USER_REQUEST}}.', 'utf8');
+    await writeFile(
+      path.join(repoRoot, 'prompts', 'plan-adjustment.md'),
+      'Review {{CODE_EDIT_SUMMARY}} and update the plan if needed.',
+      'utf8'
+    );
+    await writeFile(path.join(repoRoot, 'feature_requests', 'queue.txt'), '', 'utf8');
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async () => ({
+        checkpoint: { status: 'completed' },
+        mergedCount: 0,
+        plannedCount: 0
+      })
+    });
+
+    const launchPromise = harness.handlers.launch();
+    await waitFor(() => harness.getStore() !== null);
+
+    const store = harness.getStore();
+    if (!store) {
+      throw new Error('Expected App store to be captured.');
+    }
+
+    expect(store.getState().modelSelection).toEqual({
+      backend: 'claude',
+      model: 'claude-sonnet-4-5',
+      effort: 'high',
+      editable: false
+    });
+
+    const props = harness.getAppProps();
+    if (!props) {
+      throw new Error('Expected App props to be captured.');
+    }
+
+    (props.onQuitRequest as () => void)();
+    await launchPromise;
+  });
+
+  it('persists pre-start model changes and starts with refreshed config and hash', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-launch-model-save-'));
+    let capturedInput: Record<string, unknown> | null = null;
+
+    await writeLaunchProjectFiles(repoRoot, {
+      queueContent: 'alpha\n'
+    });
+
+    const beforeSave = await loadOpenWeftConfig(repoRoot);
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async (input) => {
+        capturedInput = input;
+        return {
+          checkpoint: { status: 'completed' },
+          mergedCount: 0,
+          plannedCount: 1
+        };
+      }
+    });
+
+    const launchPromise = harness.handlers.launch();
+    await waitFor(() => harness.getAppProps() !== null && harness.getStore() !== null);
+
+    const props = harness.getAppProps();
+    const store = harness.getStore();
+    if (!props || !store) {
+      throw new Error('Expected App props and store to be captured.');
+    }
+
+    expect(typeof props.onSaveModelSelection).toBe('function');
+
+    await (props.onSaveModelSelection as (selection: { model: string; effort: 'high' }) => Promise<void>)({
+      model: 'gpt-5.4',
+      effort: 'high'
+    });
+
+    await waitFor(() =>
+      store.getState().modelSelection?.model === 'gpt-5.4' &&
+      store.getState().modelSelection?.effort === 'high'
+    );
+
+    const configText = await readFile(path.join(repoRoot, '.openweftrc.json'), 'utf8');
+    expect(configText).toContain('"codex": "gpt-5.4"');
+    expect(configText).toContain('"codex": "high"');
+
+    (props.onStartRequest as () => void)();
+    await waitFor(() => capturedInput !== null);
+
+    const runtimeInput = capturedInput as unknown as {
+      config: Awaited<ReturnType<typeof loadOpenWeftConfig>>['config'];
+      configHash: string;
+    };
+
+    expect(runtimeInput.config.models.codex).toBe('gpt-5.4');
+    expect(runtimeInput.config.effort.codex).toBe('high');
+    expect(runtimeInput.configHash).not.toBe(beforeSave.configHash);
+    expect(runtimeInput.configHash).toBe(createConfigHash(runtimeInput.config));
+
     await launchPromise;
   });
 

@@ -19,6 +19,7 @@ import type { NotificationDependencies } from '../../src/notifications/index.js'
 import { ApprovalController } from '../../src/orchestrator/approval.js';
 import { StopController } from '../../src/orchestrator/stop.js';
 import { runRealOrchestration } from '../../src/orchestrator/realRun.js';
+import type { LoadCheckpointResult } from '../../src/state/checkpoint.js';
 import { createEmptyCheckpoint, loadCheckpoint, saveCheckpoint } from '../../src/state/checkpoint.js';
 
 const TEST_LEDGER_SECTION = `## Ledger
@@ -657,6 +658,7 @@ const createTempRepo = async (): Promise<string> => {
 const writeProjectFiles = async (
   repoRoot: string,
   options: {
+    configOverrides?: Record<string, unknown>;
     maxParallelAgents?: number;
     queueRequests: string[];
   }
@@ -672,7 +674,8 @@ const writeProjectFiles = async (
         concurrency: {
           maxParallelAgents: options.maxParallelAgents ?? 1,
           staggerDelayMs: 0
-        }
+        },
+        ...options.configOverrides
       },
       null,
       2
@@ -690,6 +693,41 @@ const writeProjectFiles = async (
     `${options.queueRequests.join('\n')}\n`,
     'utf8'
   );
+};
+
+const createAutoApproveController = (events: string[]): ApprovalController => {
+  let controller: ApprovalController;
+
+  controller = new ApprovalController((event) => {
+    events.push(event.type);
+
+    if (event.type === 'agent:approval') {
+      queueMicrotask(() => {
+        controller.resolveCurrent('approve');
+      });
+    }
+  });
+
+  return controller;
+};
+
+const createDelayedApproveController = (
+  events: string[],
+  delayMs: number
+): ApprovalController => {
+  let controller: ApprovalController;
+
+  controller = new ApprovalController((event) => {
+    events.push(event.type);
+
+    if (event.type === 'agent:approval') {
+      setTimeout(() => {
+        controller.resolveCurrent('approve');
+      }, delayMs);
+    }
+  });
+
+  return controller;
 };
 
 
@@ -787,6 +825,7 @@ const seedInterruptedExecutionFeature = async (input: {
       delete: []
     },
     rerunEligible: false,
+    mergeResolutionAttempts: 0,
     updatedAt: now
   };
   checkpoint.queue = {
@@ -883,6 +922,7 @@ const seedPlannedPromptBRecoveryFeature = async (input: {
       delete: []
     },
     rerunEligible: true,
+    mergeResolutionAttempts: 0,
     updatedAt: now
   };
   checkpoint.queue = {
@@ -1396,6 +1436,242 @@ describe('runRealOrchestration', () => {
     });
   });
 
+  it('persists planning state before the first stage-one turn starts', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+    let checkpointDuringStageOne: LoadCheckpointResult | null = null;
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'planning-s1' && checkpointDuringStageOne === null) {
+        checkpointDuringStageOne = await loadCheckpoint({
+          checkpointFile: config.paths.checkpointFile,
+          checkpointBackupFile: config.paths.checkpointBackupFile
+        });
+      }
+
+      return originalRunTurn(request);
+    };
+
+    await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    const capturedCheckpointDuringStageOne = checkpointDuringStageOne as LoadCheckpointResult | null;
+
+    expect(capturedCheckpointDuringStageOne).not.toBeNull();
+    if (!capturedCheckpointDuringStageOne) {
+      throw new Error('Expected to capture a checkpoint snapshot during planning stage one.');
+    }
+
+    expect(capturedCheckpointDuringStageOne.source).toBe('primary');
+    expect(capturedCheckpointDuringStageOne.checkpoint).toMatchObject({
+      status: 'in-progress',
+      currentState: 'planning',
+      currentPhase: null,
+      pendingRequests: [expect.objectContaining({ request: 'add dashboard filters' })]
+    });
+    expect(capturedCheckpointDuringStageOne.checkpoint?.features).toEqual({});
+  });
+
+  it('sanitizes fenced markdown from contaminated stage-one Prompt B output before persisting it', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'planning-s1') {
+        return {
+          ok: true,
+          backend: 'codex',
+          sessionId: 'contaminated-prompt-b',
+          finalMessage: `Could not save due read-only sandbox (\`operation not permitted\` on write to \`prompts/...\`).\n\n\`\`\`md\n# Role\nSanitized prompt body.\n\`\`\`\n`,
+          model: request.model,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cachedInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            totalCostUsd: 0,
+            raw: null
+          },
+          costRecord: {
+            featureId: request.featureId,
+            stage: request.stage,
+            model: request.model,
+            inputTokens: 10,
+            outputTokens: 5,
+            estimatedCostUsd: 0,
+            timestamp: new Date().toISOString()
+          },
+          artifacts: {
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+            command: adapter.buildCommand(request)
+          }
+        };
+      }
+
+      return originalRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    const promptBFile = result.checkpoint.features['001']?.promptBFile;
+    expect(promptBFile).toBeTruthy();
+    await expect(readFile(promptBFile ?? '', 'utf8')).resolves.toBe('# Role\nSanitized prompt body.\n');
+  });
+
+  it('sanitizes read-only save preambles that wrap a fenced Prompt B brief', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['improve the not found flow']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'planning-s1') {
+        return {
+          ok: true,
+          backend: 'codex',
+          sessionId: 'contaminated-read-only-prompt-b',
+          finalMessage: `I could not save the file because this workspace is read-only (\`operation not permitted\` when writing to \`prompts/example.md\`).\n\nIntended path: [prompts/example.md](/tmp/prompts/example.md)\n\n\`\`\`md\n# Role\nRecovered prompt body.\n\`\`\`\n`,
+          model: request.model,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cachedInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            totalCostUsd: 0,
+            raw: null
+          },
+          costRecord: {
+            featureId: request.featureId,
+            stage: request.stage,
+            model: request.model,
+            inputTokens: 10,
+            outputTokens: 5,
+            estimatedCostUsd: 0,
+            timestamp: new Date().toISOString()
+          },
+          artifacts: {
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+            command: adapter.buildCommand(request)
+          }
+        };
+      }
+
+      return originalRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    const promptBFile = result.checkpoint.features['001']?.promptBFile;
+    expect(promptBFile).toBeTruthy();
+    await expect(readFile(promptBFile ?? '', 'utf8')).resolves.toBe('# Role\nRecovered prompt body.\n');
+  });
+
+  it('sanitizes read-only write preambles that point to an intended file path', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['document the checkout flow']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'planning-s1') {
+        return {
+          ok: true,
+          backend: 'codex',
+          sessionId: 'contaminated-write-prompt-b',
+          finalMessage: `I couldn't write this into the repo because the workspace is read-only in this session.\nIntended file path: [prompts/example.md](/tmp/prompts/example.md)\n\n\`\`\`md\n## Role\nRecovered write prompt body.\n\`\`\`\n`,
+          model: request.model,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cachedInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            totalCostUsd: 0,
+            raw: null
+          },
+          costRecord: {
+            featureId: request.featureId,
+            stage: request.stage,
+            model: request.model,
+            inputTokens: 10,
+            outputTokens: 5,
+            estimatedCostUsd: 0,
+            timestamp: new Date().toISOString()
+          },
+          artifacts: {
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+            command: adapter.buildCommand(request)
+          }
+        };
+      }
+
+      return originalRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    const promptBFile = result.checkpoint.features['001']?.promptBFile;
+    expect(promptBFile).toBeTruthy();
+    await expect(readFile(promptBFile ?? '', 'utf8')).resolves.toBe(
+      '## Role\nRecovered write prompt body.\n'
+    );
+  });
+
   it('skips a malformed stage-two planning result and keeps the rest of the queue moving', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
@@ -1464,6 +1740,122 @@ describe('runRealOrchestration', () => {
     expect(queueContent).toContain('"featureId":"001"');
     expect(queueContent).toContain('"featureId":"002"');
     expect(queueContent).toContain('"request":"add export controls"');
+  });
+
+  it('records invalid planning repair attempts and preserves the latest invalid markdown before skipping', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add export controls']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+    let planningStageTwoAttempts = 0;
+
+    const invalidPlan = (label: string): string => `# ${label}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/${label.toLowerCase().replace(/\s+/g, '-')}.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`;
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'planning-s2') {
+        planningStageTwoAttempts += 1;
+        return {
+          ok: true,
+          backend: 'codex',
+          sessionId: `invalid-planning-s2-${planningStageTwoAttempts}`,
+          finalMessage: invalidPlan(`Repair Attempt ${planningStageTwoAttempts}`),
+          model: request.model,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cachedInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            totalCostUsd: 0,
+            raw: null
+          },
+          costRecord: {
+            featureId: request.featureId,
+            stage: request.stage,
+            model: request.model,
+            inputTokens: 10,
+            outputTokens: 5,
+            estimatedCostUsd: 0,
+            timestamp: new Date().toISOString()
+          },
+          artifacts: {
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+            command: adapter.buildCommand(request)
+          }
+        };
+      }
+
+      return originalRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(planningStageTwoAttempts).toBe(3);
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'skipped'
+    });
+    expect(result.checkpoint.features['001']?.lastError).toContain(
+      'Failed to extract manifest for feature 001 after 2 repair attempts.'
+    );
+    expect(result.checkpoint.features['001']?.lastError).toContain(
+      'Repair attempt 2: No ledger section found under a "## Ledger" heading.'
+    );
+
+    await expect(readFile(path.join(config.paths.shadowPlansDir, '001.md'), 'utf8')).resolves.toContain(
+      '# Repair Attempt 3'
+    );
+
+    const auditEntries = (await readFile(config.paths.auditLogFile, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) =>
+        JSON.parse(line) as {
+          event: string;
+          data?: {
+            attempt?: number;
+            error?: string;
+            featureId?: string;
+            shadowPlanFile?: string;
+          };
+        }
+      );
+
+    const repairAuditEntries = auditEntries.filter(
+      (entry) => entry.event === 'feature.planning.repair.rejected'
+    );
+    expect(repairAuditEntries).toHaveLength(3);
+    expect(repairAuditEntries.map((entry) => entry.data?.attempt)).toEqual([0, 1, 2]);
+    expect(repairAuditEntries.every((entry) => entry.data?.featureId === '001')).toBe(true);
+    expect(repairAuditEntries.every((entry) => entry.data?.shadowPlanFile?.endsWith('/001.md'))).toBe(
+      true
+    );
+    expect(repairAuditEntries[2]?.data?.error).toContain(
+      'No ledger section found under a "## Ledger" heading.'
+    );
   });
 
   it('recovers planned work after a crash that happens after queue rewrite but before the planning checkpoint is saved', async () => {
@@ -1686,6 +2078,7 @@ describe('runRealOrchestration', () => {
         delete: []
       },
       rerunEligible: true,
+      mergeResolutionAttempts: 0,
       updatedAt: new Date().toISOString()
     };
     savedBefore.checkpoint.queue = {
@@ -2110,7 +2503,119 @@ describe('runRealOrchestration', () => {
     expect(executionAudit?.data?.resumedSession).toBe(false);
   });
 
-  it('notifies when a feature fails after its retry budget is exhausted', async () => {
+  it('reruns a failed feature from a fresh top-level pass and succeeds on the first full rerun', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const inner = new MockAgentAdapter();
+    const adapter = new RecordingAdapter(inner);
+    const innerRunTurn = inner.runTurn.bind(inner);
+    const { lines, dependencies } = createNotificationRecorder();
+    let executionAttempts = 0;
+
+    adapter.runTurn = async (request) => {
+      adapter.requests.push(request);
+      if (request.stage === 'execution') {
+        executionAttempts += 1;
+        if (executionAttempts <= 2) {
+          return {
+            ok: false,
+            backend: 'mock',
+            sessionId: `failed-execution-${executionAttempts}`,
+            model: request.model,
+            error: 'bad output from agent',
+            classified: { tier: 'agent', reason: 'bad output from agent' },
+            artifacts: {
+              stdout: '',
+              stderr: 'bad output from agent',
+              exitCode: 1,
+              command: adapter.buildCommand(request)
+            }
+          };
+        }
+      }
+
+      return innerRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'completed',
+      attempts: 2,
+      rerunEligible: false
+    });
+    expect(adapter.requests.filter((request) => request.stage === 'execution')).toHaveLength(3);
+    expect(lines.some((line) => line.includes('Scheduling full rerun 2/3 for feature 001'))).toBe(true);
+  });
+
+  it('reruns a failed feature twice and succeeds on the second full rerun', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const inner = new MockAgentAdapter();
+    const adapter = new RecordingAdapter(inner);
+    const innerRunTurn = inner.runTurn.bind(inner);
+    let executionAttempts = 0;
+
+    adapter.runTurn = async (request) => {
+      adapter.requests.push(request);
+      if (request.stage === 'execution') {
+        executionAttempts += 1;
+        if (executionAttempts <= 4) {
+          return {
+            ok: false,
+            backend: 'mock',
+            sessionId: `failed-execution-${executionAttempts}`,
+            model: request.model,
+            error: 'bad output from agent',
+            classified: { tier: 'agent', reason: 'bad output from agent' },
+            artifacts: {
+              stdout: '',
+              stderr: 'bad output from agent',
+              exitCode: 1,
+              command: adapter.buildCommand(request)
+            }
+          };
+        }
+      }
+
+      return innerRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'completed',
+      attempts: 3,
+      rerunEligible: false
+    });
+    expect(adapter.requests.filter((request) => request.stage === 'execution')).toHaveLength(5);
+  });
+
+  it('notifies when a feature fails after its full rerun budget is exhausted', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -2138,9 +2643,67 @@ describe('runRealOrchestration', () => {
     });
 
     expect(result.checkpoint.status).toBe('failed');
-    expect(adapter.requests.filter((request) => request.stage === 'execution')).toHaveLength(2);
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'failed',
+      attempts: 3,
+      rerunEligible: false
+    });
+    expect(adapter.requests.filter((request) => request.stage === 'execution')).toHaveLength(6);
     expect(lines.some((line) => line.includes('Feature 001 add dashboard filters failed'))).toBe(true);
-    expect(lines.some((line) => line.includes('Phase 1 halted by circuit breaker.'))).toBe(true);
+    expect(lines.some((line) => line.includes('Execution rerun budget exhausted for feature 001'))).toBe(
+      true
+    );
+  });
+
+  it('does not schedule a full rerun after a fatal execution failure', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const inner = new MockAgentAdapter();
+    const adapter = new RecordingAdapter(inner);
+
+    adapter.runTurn = async (request) => {
+      adapter.requests.push(request);
+      if (request.stage === 'execution') {
+        return {
+          ok: false,
+          backend: 'mock',
+          sessionId: 'fatal-execution',
+          model: request.model,
+          error: 'authentication failed',
+          classified: { tier: 'fatal', reason: 'authentication failed' },
+          artifacts: {
+            stdout: '',
+            stderr: 'authentication failed',
+            exitCode: 1,
+            command: adapter.buildCommand(request)
+          }
+        };
+      }
+
+      return inner.runTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('failed');
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'failed',
+      attempts: 1,
+      rerunEligible: false,
+      lastError: 'authentication failed'
+    });
+    expect(adapter.requests.filter((request) => request.stage === 'execution')).toHaveLength(1);
   });
 
   it('marks a feature failed when execution setup throws before a typed result is returned', async () => {
@@ -2803,11 +3366,11 @@ describe('runRealOrchestration', () => {
           };
         }),
         mergeBranchIntoWorktree: vi.fn(async (_worktreePath: string, branch: string) => ({
-          status: 'staged' as const,
+          status: 'conflicted' as const,
           branch,
           preMergeCommit: 'pre-merge-commit',
           mergeHeadCommit: 'merge-head-commit',
-          editSummary: mergedEditSummary
+          conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
         })),
         commitAllChanges: vi.fn(async () => 'resolved-commit')
       };
@@ -2838,6 +3401,284 @@ describe('runRealOrchestration', () => {
       expect(await readFile(planFile ?? '', 'utf8')).toContain(ledgerNote);
       expect(await readFile(path.join(config.paths.shadowPlansDir, '001.md'), 'utf8')).toContain(
         ledgerNote
+      );
+    } finally {
+      vi.doUnmock('../../src/git/index.js');
+      vi.resetModules();
+    }
+  });
+
+  it('retries merge conflict reconciliation until round 2 succeeds', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['update shared module']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const inner = new MockAgentAdapter();
+    const adapter = new RecordingAdapter(inner);
+    const innerRunTurn = inner.runTurn.bind(inner);
+    const ledgerNote = 'Conflict resolution succeeded on the second round.';
+
+    adapter.runTurn = async (request) => {
+      adapter.requests.push(request);
+      if (request.stage === 'conflict-resolution') {
+        const promptedPlanPath = extractConflictPromptPlanPath(request.prompt);
+        const worktreePlanPath = promptedPlanPath.startsWith(request.cwd)
+          ? promptedPlanPath
+          : path.join(request.cwd, '.openweft', 'feature-plans', path.basename(promptedPlanPath));
+        await appendLedgerNoteToPlan(worktreePlanPath, ledgerNote);
+      }
+
+      return innerRunTurn(request);
+    };
+
+    const mergedEditSummary = {
+      merge_commit: 'merge-commit',
+      branch: 'openweft-001-update-shared-module',
+      pre_merge_commit: 'pre-merge-commit',
+      total_files_changed: 1,
+      total_lines_added: 2,
+      total_lines_removed: 1,
+      files: [
+        {
+          path: 'src/features/001-runtime-generated-prompt-b-for-001.ts',
+          change_type: 'modified' as const,
+          lines_added: 2,
+          lines_removed: 1,
+          old_path: null
+        }
+      ]
+    };
+
+    vi.resetModules();
+    vi.doMock('../../src/git/index.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
+        '../../src/git/index.js'
+      );
+      const abortMerge = vi.fn(async () => {});
+      let mergeAttempts = 0;
+
+      return {
+        ...actual,
+        abortMerge,
+        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
+          mergeAttempts += 1;
+          if (mergeAttempts <= 2) {
+            return {
+              status: 'conflict' as const,
+              branch,
+              preMergeCommit: 'pre-merge-commit',
+              conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+            };
+          }
+
+          return {
+            status: 'merged' as const,
+            branch,
+            preMergeCommit: 'pre-merge-commit',
+            mergeCommit: 'merge-commit',
+            editSummary: mergedEditSummary
+          };
+        }),
+        mergeBranchIntoWorktree: vi.fn(async (_worktreePath: string, branch: string) => ({
+          status: 'conflicted' as const,
+          branch,
+          preMergeCommit: 'pre-merge-commit',
+          mergeHeadCommit: 'merge-head-commit',
+          conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+        }))
+      };
+    });
+
+    try {
+      const gitModule = await import('../../src/git/index.js');
+      const abortMergeMock = vi.mocked(gitModule.abortMerge);
+      const { runRealOrchestration: runRealOrchestrationWithConflictMocks } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithConflictMocks({
+        config,
+        configHash,
+        adapter,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('completed');
+      expect(result.checkpoint.features['001']).toMatchObject({
+        status: 'completed',
+        mergeResolutionAttempts: 0
+      });
+      expect(adapter.requests.filter((request) => request.stage === 'conflict-resolution')).toHaveLength(2);
+      expect(abortMergeMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.doUnmock('../../src/git/index.js');
+      vi.resetModules();
+    }
+  });
+
+  it('fails truthfully after exhausting all merge conflict reconciliation rounds', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['update shared module']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const inner = new MockAgentAdapter();
+    const adapter = new RecordingAdapter(inner);
+    const innerRunTurn = inner.runTurn.bind(inner);
+
+    adapter.runTurn = async (request) => {
+      adapter.requests.push(request);
+      if (request.stage === 'conflict-resolution') {
+        return innerRunTurn(request);
+      }
+
+      return innerRunTurn(request);
+    };
+
+    vi.resetModules();
+    vi.doMock('../../src/git/index.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
+        '../../src/git/index.js'
+      );
+      const abortMerge = vi.fn(async () => {});
+
+      return {
+        ...actual,
+        abortMerge,
+        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => ({
+          status: 'conflict' as const,
+          branch,
+          preMergeCommit: 'pre-merge-commit',
+          conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+        })),
+        mergeBranchIntoWorktree: vi.fn(async (_worktreePath: string, branch: string) => ({
+          status: 'conflicted' as const,
+          branch,
+          preMergeCommit: 'pre-merge-commit',
+          mergeHeadCommit: 'merge-head-commit',
+          conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+        }))
+      };
+    });
+
+    try {
+      const gitModule = await import('../../src/git/index.js');
+      const abortMergeMock = vi.mocked(gitModule.abortMerge);
+      const { runRealOrchestration: runRealOrchestrationWithConflictMocks } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithConflictMocks({
+        config,
+        configHash,
+        adapter,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('failed');
+      expect(result.checkpoint.features['001']).toMatchObject({
+        status: 'failed',
+        rerunEligible: false,
+        mergeResolutionAttempts: 3
+      });
+      expect(adapter.requests.filter((request) => request.stage === 'conflict-resolution')).toHaveLength(3);
+      expect(abortMergeMock.mock.calls.length).toBeGreaterThanOrEqual(3);
+    } finally {
+      vi.doUnmock('../../src/git/index.js');
+      vi.resetModules();
+    }
+  });
+
+  it('aborts preserved merge state when conflict resolution fails after a merge-into-worktree conflict', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['update shared module']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+
+    adapter.runTurn = async (request) => {
+      adapter.requests.push(request);
+      if (request.stage === 'conflict-resolution') {
+        return {
+          ok: false,
+          backend: 'mock',
+          sessionId: 'conflict-session',
+          model: request.model,
+          error: 'resolution failed',
+          classified: { tier: 'agent', reason: 'resolution failed' },
+          artifacts: {
+            stdout: '',
+            stderr: 'resolution failed',
+            exitCode: 1,
+            command: adapter.buildCommand(request)
+          }
+        };
+      }
+
+      return originalRunTurn(request);
+    };
+
+    vi.resetModules();
+    vi.doMock('../../src/git/index.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
+        '../../src/git/index.js'
+      );
+      const abortMerge = vi.fn(async () => {});
+
+      return {
+        ...actual,
+        abortMerge,
+        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => ({
+          status: 'conflict' as const,
+          branch,
+          preMergeCommit: 'pre-merge-commit',
+          conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+        })),
+        mergeBranchIntoWorktree: vi.fn(async (_worktreePath: string, branch: string) => ({
+          status: 'conflicted' as const,
+          branch,
+          preMergeCommit: 'pre-merge-commit',
+          mergeHeadCommit: 'merge-head-commit',
+          conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+        }))
+      };
+    });
+
+    try {
+      const gitModule = await import('../../src/git/index.js');
+      const abortMergeMock = vi.mocked(gitModule.abortMerge);
+      const { runRealOrchestration: runRealOrchestrationWithConflictMocks } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithConflictMocks({
+        config,
+        configHash,
+        adapter,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('failed');
+      expect(result.mergedCount).toBe(0);
+      expect(result.checkpoint.features['001']).toMatchObject({
+        status: 'failed',
+        lastError: 'resolution failed'
+      });
+      expect(adapter.requests.some((request) => request.stage === 'conflict-resolution')).toBe(true);
+      expect(abortMergeMock).toHaveBeenCalledWith(
+        result.checkpoint.features['001']?.worktreePath ?? expect.any(String)
       );
     } finally {
       vi.doUnmock('../../src/git/index.js');
@@ -3040,7 +3881,10 @@ describe('runRealOrchestration', () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
-      queueRequests: ['add dashboard filters']
+      queueRequests: ['add dashboard filters'],
+      configOverrides: {
+        approval: 'per-feature'
+      }
     });
 
     const { config, configHash } = await loadOpenWeftConfig(repoRoot);
@@ -3082,7 +3926,10 @@ describe('runRealOrchestration', () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
-      queueRequests: ['add dashboard filters']
+      queueRequests: ['add dashboard filters'],
+      configOverrides: {
+        approval: 'per-feature'
+      }
     });
 
     const { config, configHash } = await loadOpenWeftConfig(repoRoot);
@@ -3124,6 +3971,175 @@ describe('runRealOrchestration', () => {
     expect(events).toContain('agent:approval');
     expect(events).toContain('agent:approval-resolved');
     expect(events).not.toContain('agent:failed');
+  });
+
+  it('threads configured codex effort into adapter turn requests', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      queueRequests: ['add dashboard filters'],
+      configOverrides: {
+        effort: {
+          codex: 'high'
+        }
+      }
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new DeterministicManifestAdapter({ '001': ['src/target.ts'] }));
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(adapter.requests).not.toHaveLength(0);
+    expect(adapter.requests.every((request) => request.effortLevel === 'high')).toBe(true);
+  });
+
+  it('threads configured claude effort into adapter turn requests', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      queueRequests: ['add dashboard filters'],
+      configOverrides: {
+        backend: 'claude',
+        effort: {
+          claude: 'max'
+        }
+      }
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingClaudeFailureAdapter();
+
+    await expect(runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    })).rejects.toThrow('planning stage probe');
+
+    expect(adapter.requests).not.toHaveLength(0);
+    expect(adapter.requests.every((request) => request.effortLevel === 'max')).toBe(true);
+  });
+
+  it('fails fast when approval prompts are configured without an approval controller', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      queueRequests: ['add dashboard filters'],
+      configOverrides: {
+        approval: 'per-feature'
+      }
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('failed');
+    expect(result.checkpoint.features['001']?.lastError).toMatch(
+      /approval mode "per-feature" requires an approval controller/i
+    );
+  });
+
+  it('prompts once per feature in per-feature approval mode', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters', 'add export controls'],
+      configOverrides: {
+        approval: 'per-feature'
+      }
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const events: string[] = [];
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      approvalController: createAutoApproveController(events),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(events.filter((event) => event === 'agent:approval')).toHaveLength(2);
+  });
+
+  it('prompts only once in first-only approval mode', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 2,
+      queueRequests: ['add dashboard filters', 'add export controls'],
+      configOverrides: {
+        approval: 'first-only'
+      }
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const events: string[] = [];
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      approvalController: createDelayedApproveController(events, 25),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(events.filter((event) => event === 'agent:approval')).toHaveLength(1);
+  });
+
+  it('remembers first-only approval across checkpoint resume', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      queueRequests: ['add dashboard filters'],
+      configOverrides: {
+        approval: 'first-only'
+      }
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const checkpoint = createEmptyCheckpoint({
+      orchestratorVersion: 'test',
+      configHash,
+      runId: 'resume-run',
+      checkpointId: 'resume-checkpoint',
+      createdAt: new Date().toISOString()
+    });
+    checkpoint.approvalState = {
+      firstApprovalSatisfied: true,
+      approvedFeatureIds: ['001']
+    };
+    await saveCheckpoint({
+      checkpoint,
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
   });
 
   it('stops after the current planning item when a stop is requested during planning', async () => {

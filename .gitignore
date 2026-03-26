@@ -26,6 +26,9 @@ AUDIT.md
 docs/backend-hardening-queue.md
 docs/prompt-b-first-migration-plan.md
 
+# Intermediate asciinema recordings
+docs/*.cast
+
 # Prototype screenshots and design artifacts
 prototype-*.png
 winner-*.png

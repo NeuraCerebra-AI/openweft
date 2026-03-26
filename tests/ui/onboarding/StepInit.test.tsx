@@ -18,6 +18,8 @@ const makeOnRunInit = (shouldReject?: string) =>
 
 const successProps = {
   selectedBackend: 'codex' as const,
+  selectedModel: 'gpt-5.3-codex',
+  selectedEffort: 'medium' as const,
   initialized: true,
   initError: null,
   onAdvance: vi.fn(),
@@ -29,6 +31,8 @@ const successProps = {
 
 const errorProps = {
   selectedBackend: 'codex' as const,
+  selectedModel: 'gpt-5.3-codex',
+  selectedEffort: 'medium' as const,
   initialized: false,
   initError: 'Permission denied: cannot write to directory',
   onAdvance: vi.fn(),
@@ -40,6 +44,8 @@ const errorProps = {
 
 const loadingProps = {
   selectedBackend: 'claude' as const,
+  selectedModel: 'claude-sonnet-4-6',
+  selectedEffort: 'medium' as const,
   initialized: false,
   initError: null,
   onAdvance: vi.fn(),
@@ -98,11 +104,11 @@ describe('StepInit', () => {
       expect(frame).toContain('.gitignore');
     });
 
-    it('renders tip text about customizing prompt files', () => {
+    it('does not render the old prompt customization tip text', () => {
       const { lastFrame } = renderWithTheme(<StepInit {...successProps} />);
       const frame = lastFrame() ?? '';
-      expect(frame).toContain('prompt files');
-      expect(frame).toContain('Customize them after your first run');
+      expect(frame).not.toContain('The prompt files are the biggest lever for quality');
+      expect(frame).not.toContain('Customize them after your first run');
     });
 
     it('renders footer with continue, back, and quit keys', () => {
@@ -201,18 +207,24 @@ describe('StepInit', () => {
   });
 
   describe('onRunInit lifecycle', () => {
-    it('calls onRunInit with selectedBackend on mount', async () => {
+    it('calls onRunInit with selected backend, model, and effort on mount', async () => {
       const onRunInit = makeOnRunInit();
       renderWithTheme(
         <StepInit
           {...loadingProps}
           selectedBackend="claude"
+          selectedModel="claude-haiku-4-5"
+          selectedEffort="high"
           onRunInit={onRunInit}
         />
       );
       await waitForMount();
       expect(onRunInit).toHaveBeenCalledOnce();
-      expect(onRunInit).toHaveBeenCalledWith('claude');
+      expect(onRunInit).toHaveBeenCalledWith({
+        backend: 'claude',
+        model: 'claude-haiku-4-5',
+        effort: 'high'
+      });
     });
 
     it('calls onInitSuccess when onRunInit resolves', async () => {

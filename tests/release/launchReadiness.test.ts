@@ -9,12 +9,11 @@ describe('release launch readiness', () => {
   it('uses repo-relative README asset URLs for GitHub rendering', async () => {
     const readme = await readFile(path.join(repoRoot, 'README.md'), 'utf8');
 
-    expect(readme).toContain('srcset="./docs/banner-dark.svg"');
-    expect(readme).toContain('srcset="./docs/banner-light.svg"');
     expect(readme).toContain('src="./docs/banner-dark.svg"');
-    expect(readme).toContain('srcset="./docs/hero-dark.svg"');
-    expect(readme).toContain('srcset="./docs/hero-light.svg"');
     expect(readme).toContain('src="./docs/hero-dark.svg"');
+    expect(readme).toContain('src="./docs/wizard-dark.svg"');
+    expect(readme).not.toContain('srcset="./docs/wizard-dark.svg"');
+    expect(readme).not.toContain('srcset="./docs/wizard-light.svg"');
   });
 
   it('runs the documented release gate in CI', async () => {

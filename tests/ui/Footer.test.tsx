@@ -8,6 +8,7 @@ const renderFooter = (props: {
   mode: 'normal' | 'approval' | 'input';
   executionStarted: boolean;
   composing: boolean;
+  canEditModelSelection?: boolean;
 }) => {
   const { lastFrame } = render(
     <ThemeContext.Provider value={catppuccinMocha}>
@@ -25,6 +26,28 @@ describe('Footer', () => {
     expect(frame).toContain('add');
     expect(frame).toContain('remove');
     expect(frame).toContain('help');
+  });
+
+  it('shows model switching in idle when pre-start editing is supported', () => {
+    const frame = renderFooter({
+      mode: 'normal',
+      executionStarted: false,
+      composing: false,
+      canEditModelSelection: true
+    });
+
+    expect(frame).toContain('model');
+  });
+
+  it('hides model switching when pre-start editing is unsupported', () => {
+    const frame = renderFooter({
+      mode: 'normal',
+      executionStarted: false,
+      composing: false,
+      canEditModelSelection: false
+    });
+
+    expect(frame).not.toContain('model');
   });
 
   it('shows d remove during execution', () => {
