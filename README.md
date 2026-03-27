@@ -14,6 +14,7 @@ OpenWeft orchestrates [Claude Code](https://docs.anthropic.com/en/docs/claude-co
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT"></a>
+  <a href="https://github.com/sponsors/NeuraCerebra-AI"><img src="https://img.shields.io/badge/Sponsor-%E2%9D%A4-pink?style=for-the-badge" alt="Sponsor"></a>
 </p>
 
 ## Quick start
