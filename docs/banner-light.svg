@@ -1,0 +1,139 @@
+<svg viewBox="0 0 720 200" width="720" height="200" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="ag" gradientUnits="userSpaceOnUse" x1="320" y1="96" x2="480" y2="56">
+      <stop offset="0%" stop-color="#1a7f37"/>
+      <stop offset="50%" stop-color="#0550ae"/>
+      <stop offset="100%" stop-color="#8250df"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.3" cy="0.5" r="0.4">
+      <stop offset="0%" stop-color="#0550ae" stop-opacity="0.03"/>
+      <stop offset="100%" stop-color="#0550ae" stop-opacity="0"/>
+      <animate attributeName="cx" values="0.2;0.5;0.8;0.5;0.2" dur="16s" repeatCount="indefinite"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="0" y="0" width="720" height="200" fill="url(#glow)"/>
+
+  <g opacity="0.08" stroke="#1f2328" stroke-width="1">
+    <line x1="160" y1="0" x2="160" y2="200"/><line x1="180" y1="0" x2="180" y2="200"/>
+    <line x1="200" y1="0" x2="200" y2="200"/><line x1="220" y1="0" x2="220" y2="200"/>
+    <line x1="240" y1="0" x2="240" y2="200"/><line x1="260" y1="0" x2="260" y2="200"/>
+    <line x1="280" y1="0" x2="280" y2="200"/><line x1="300" y1="0" x2="300" y2="200"/>
+    <line x1="320" y1="0" x2="320" y2="200"/><line x1="340" y1="0" x2="340" y2="200"/>
+    <line x1="360" y1="0" x2="360" y2="200"/><line x1="380" y1="0" x2="380" y2="200"/>
+    <line x1="400" y1="0" x2="400" y2="200"/><line x1="420" y1="0" x2="420" y2="200"/>
+    <line x1="440" y1="0" x2="440" y2="200"/><line x1="460" y1="0" x2="460" y2="200"/>
+    <line x1="480" y1="0" x2="480" y2="200"/><line x1="500" y1="0" x2="500" y2="200"/>
+    <line x1="520" y1="0" x2="520" y2="200"/><line x1="540" y1="0" x2="540" y2="200"/>
+    <line x1="560" y1="0" x2="560" y2="200"/>
+  </g>
+
+  <!-- Above title -->
+  <line x1="100" y1="10" x2="620" y2="10" stroke="#1a7f37" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 30" opacity="0.25">
+    <animate attributeName="stroke-dashoffset" from="0" to="-36" dur="10s" repeatCount="indefinite"/>
+  </line>
+  <line x1="80" y1="22" x2="640" y2="22" stroke="#0550ae" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="12 24" opacity="0.20">
+    <animate attributeName="stroke-dashoffset" from="0" to="36" dur="14s" repeatCount="indefinite"/>
+  </line>
+  <line x1="110" y1="35" x2="610" y2="35" stroke="#8250df" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4 12 8 24" opacity="0.25">
+    <animate attributeName="stroke-dashoffset" from="0" to="-48" dur="12s" repeatCount="indefinite"/>
+  </line>
+  <line x1="80" y1="48" x2="640" y2="48" stroke="#1a7f37" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="8 28" opacity="0.20">
+    <animate attributeName="stroke-dashoffset" from="0" to="36" dur="16s" repeatCount="indefinite"/>
+  </line>
+  <line x1="100" y1="60" x2="620" y2="60" stroke="#0550ae" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="5 25" opacity="0.22">
+    <animate attributeName="stroke-dashoffset" from="0" to="-30" dur="9s" repeatCount="indefinite"/>
+  </line>
+  <line x1="150" y1="72" x2="570" y2="72" stroke="#8250df" stroke-width="1" stroke-linecap="round" stroke-dasharray="6 30" opacity="0.10">
+    <animate attributeName="stroke-dashoffset" from="0" to="36" dur="18s" repeatCount="indefinite"/>
+  </line>
+  <line x1="150" y1="130" x2="570" y2="130" stroke="#1a7f37" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 15 10 20" opacity="0.10">
+    <animate attributeName="stroke-dashoffset" from="0" to="-48" dur="15s" repeatCount="indefinite"/>
+  </line>
+  <line x1="100" y1="142" x2="620" y2="142" stroke="#0550ae" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="10 22" opacity="0.22">
+    <animate attributeName="stroke-dashoffset" from="0" to="32" dur="11s" repeatCount="indefinite"/>
+  </line>
+  <line x1="110" y1="155" x2="610" y2="155" stroke="#8250df" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="14 34" opacity="0.25">
+    <animate attributeName="stroke-dashoffset" from="0" to="-48" dur="18s" repeatCount="indefinite"/>
+  </line>
+  <line x1="80" y1="168" x2="640" y2="168" stroke="#1a7f37" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="8 24" opacity="0.20">
+    <animate attributeName="stroke-dashoffset" from="0" to="32" dur="13s" repeatCount="indefinite"/>
+  </line>
+  <line x1="100" y1="180" x2="620" y2="180" stroke="#0550ae" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 18 3 21" opacity="0.25">
+    <animate attributeName="stroke-dashoffset" from="0" to="-48" dur="10s" repeatCount="indefinite"/>
+  </line>
+  <line x1="110" y1="192" x2="610" y2="192" stroke="#8250df" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="4 20" opacity="0.20">
+    <animate attributeName="stroke-dashoffset" from="0" to="24" dur="8s" repeatCount="indefinite"/>
+  </line>
+
+  <!-- Intersection nodes — upper -->
+  <path d="M200,7.5 L202.5,10 L200,12.5 L197.5,10Z" fill="#1a7f37" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="4.5s" begin="0s" repeatCount="indefinite"/>
+  </path>
+  <path d="M400,7.5 L402.5,10 L400,12.5 L397.5,10Z" fill="#1a7f37" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.30;0.08" dur="5.2s" begin="2.1s" repeatCount="indefinite"/>
+  </path>
+  <circle cx="260" cy="22" r="2" fill="#0550ae" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.32;0.08" dur="5.0s" begin="0.5s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="480" cy="22" r="2" fill="#0550ae" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.30;0.08" dur="4.3s" begin="3.2s" repeatCount="indefinite"/>
+  </circle>
+  <path d="M180,32.5 L182.5,35 L180,37.5 L177.5,35Z" fill="#8250df" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="4.0s" begin="1.2s" repeatCount="indefinite"/>
+  </path>
+  <path d="M360,32.5 L362.5,35 L360,37.5 L357.5,35Z" fill="#8250df" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.30;0.08" dur="5.4s" begin="3.8s" repeatCount="indefinite"/>
+  </path>
+  <path d="M520,32.5 L522.5,35 L520,37.5 L517.5,35Z" fill="#8250df" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.32;0.08" dur="3.6s" begin="0.8s" repeatCount="indefinite"/>
+  </path>
+  <circle cx="300" cy="48" r="2" fill="#1a7f37" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="4.8s" begin="2.5s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="500" cy="48" r="2" fill="#1a7f37" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.30;0.08" dur="5.6s" begin="4.3s" repeatCount="indefinite"/>
+  </circle>
+  <path d="M220,57.5 L222.5,60 L220,62.5 L217.5,60Z" fill="#0550ae" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.32;0.08" dur="3.8s" begin="1.6s" repeatCount="indefinite"/>
+  </path>
+  <path d="M440,57.5 L442.5,60 L440,62.5 L437.5,60Z" fill="#0550ae" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.30;0.08" dur="5.1s" begin="3.4s" repeatCount="indefinite"/>
+  </path>
+
+  <!-- Intersection nodes — lower -->
+  <circle cx="240" cy="142" r="2" fill="#0550ae" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="4.6s" begin="0.3s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="460" cy="142" r="2" fill="#0550ae" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.30;0.08" dur="5.3s" begin="2.8s" repeatCount="indefinite"/>
+  </circle>
+  <path d="M320,152.5 L322.5,155 L320,157.5 L317.5,155Z" fill="#8250df" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.32;0.08" dur="4.2s" begin="1.4s" repeatCount="indefinite"/>
+  </path>
+  <path d="M540,152.5 L542.5,155 L540,157.5 L537.5,155Z" fill="#8250df" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="5.7s" begin="4.1s" repeatCount="indefinite"/>
+  </path>
+  <circle cx="200" cy="168" r="2" fill="#1a7f37" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.30;0.08" dur="5.0s" begin="0.7s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="420" cy="168" r="2" fill="#1a7f37" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="4.4s" begin="3.0s" repeatCount="indefinite"/>
+  </circle>
+  <path d="M280,177.5 L282.5,180 L280,182.5 L277.5,180Z" fill="#0550ae" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.32;0.08" dur="3.9s" begin="2.0s" repeatCount="indefinite"/>
+  </path>
+  <path d="M500,177.5 L502.5,180 L500,182.5 L497.5,180Z" fill="#0550ae" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.30;0.08" dur="5.5s" begin="4.6s" repeatCount="indefinite"/>
+  </path>
+  <circle cx="340" cy="192" r="2" fill="#8250df" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.35;0.08" dur="4.7s" begin="1.8s" repeatCount="indefinite"/>
+  </circle>
+  <circle cx="520" cy="192" r="2" fill="#8250df" opacity="0.08">
+    <animate attributeName="opacity" values="0.08;0.30;0.08" dur="5.2s" begin="3.6s" repeatCount="indefinite"/>
+  </circle>
+
+  <!-- Text -->
+  <text x="360" y="92" text-anchor="middle" font-family="ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace" font-size="48" font-weight="700" letter-spacing="-1"><tspan fill="#1f2328">Open</tspan><tspan fill="url(#ag)">Weft</tspan></text>
+  <text x="360" y="122" text-anchor="middle" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" fill="#656d76" letter-spacing="3">FIRE-AND-FORGET AGENT ORCHESTRATION</text>
+</svg>

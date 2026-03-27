@@ -1,0 +1,106 @@
+import { describe, expect, it } from 'vitest';
+
+import { assignPriorityTier, classifyFilePath, scoreQueue, scoreQueueFeatures, smoothPriority } from '../../src/domain/scoring.js';
+
+describe('scoring', () => {
+  const repoContext = {
+    fanInByPath: {
+      'src/shared/utils.ts': 10,
+      'src/features/a.ts': 1,
+      'src/features/b.ts': 0
+    },
+    totalDirectories: 8,
+    medianFanIn: 2,
+    maxFanIn: 10
+  };
+
+  it('classifies file paths conservatively', () => {
+    expect(classifyFilePath('src/shared/utils.ts')).toBe('shared-lib');
+    expect(classifyFilePath('src/routes/auth.ts')).toBe('route-controller');
+    expect(classifyFilePath('docs/notes.md')).toBe('docs');
+  });
+
+  it('scores and ranks queue features', () => {
+    const scored = scoreQueueFeatures(
+      [
+        {
+          featureId: '001',
+          title: 'Small feature',
+          manifest: {
+            create: ['src/features/b.ts'],
+            modify: [],
+            delete: []
+          },
+          previousRank: 0
+        },
+        {
+          featureId: '002',
+          title: 'Shared refactor',
+          manifest: {
+            create: [],
+            modify: ['src/shared/utils.ts'],
+            delete: []
+          },
+          previousRank: 1
+        }
+      ],
+      repoContext
+    );
+
+    expect(scored[0]?.featureId).toBe('001');
+    expect(scored[0]?.smoothedPriority).toBeGreaterThan(scored[1]?.smoothedPriority ?? 0);
+  });
+
+  it('assigns tiers with hysteresis support', () => {
+    expect(assignPriorityTier(0.85)).toBe('critical');
+    expect(assignPriorityTier(0.54, 'high')).toBe('high');
+    expect(assignPriorityTier(0.5, 'high')).toBe('medium');
+  });
+
+  it('treats a single-feature queue as having non-zero normalized blast radius', () => {
+    const scored = scoreQueueFeatures(
+      [
+        {
+          featureId: '001',
+          title: 'Only feature',
+          manifest: {
+            create: ['src/features/b.ts'],
+            modify: [],
+            delete: []
+          }
+        }
+      ],
+      repoContext
+    );
+
+    expect(scored[0]?.normalizedBlastRadius).toBe(1);
+    expect(scored[0]?.rawPriority).toBeLessThan(1);
+  });
+
+  it('keeps smoothing fully responsive for the first two revisits before applying EWMA damping', () => {
+    expect(smoothPriority(0.9, 0.1, 0)).toBe(0.9);
+    expect(smoothPriority(0.9, 0.1, 1)).toBe(0.9);
+    expect(smoothPriority(0.9, 0.1, 2)).toBeCloseTo(0.3);
+  });
+
+  it('treats NaN previousSmoothedPriority as first visit', () => {
+    expect(smoothPriority(0.7, NaN, 5)).toBe(0.7);
+  });
+
+  it('propagates cyclesSeen through scoreQueue so EWMA damping activates', () => {
+    const feature = {
+      id: '001',
+      request: 'test',
+      manifest: { create: ['src/a.ts'], modify: [], delete: [] },
+      previousSmoothedPriority: 0.1,
+      cyclesSeen: 3
+    };
+
+    const withCycles = scoreQueue([feature], repoContext);
+    const withoutCycles = scoreQueue([{ ...feature, cyclesSeen: 0 }], repoContext);
+
+    // With cyclesSeen >= 2, EWMA damping pulls smoothed priority toward previous (0.1)
+    // With cyclesSeen < 2, lambda=1.0 so smoothed = raw (ignores previous)
+    expect(withCycles[0]!.smoothedPriority).toBeLessThan(withoutCycles[0]!.smoothedPriority);
+  });
+});
