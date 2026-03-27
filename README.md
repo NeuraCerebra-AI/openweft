@@ -7,8 +7,12 @@ OpenWeft orchestrates [Claude Code](https://docs.anthropic.com/en/docs/claude-co
 **It runs on your existing subscription. No API keys, no per-token billing.**
 
 <p align="center">
-  <a href="https://www.npmjs.com/package/openweft"><img src="https://img.shields.io/npm/v/openweft?style=for-the-badge&color=cb3837" alt="npm"></a>
-  <a href="https://github.com/NeuraCerebra-AI/openweft/actions"><img src="https://img.shields.io/github/actions/workflow/status/NeuraCerebra-AI/openweft/ci.yml?branch=main&style=for-the-badge" alt="CI"></a>
+  <picture>
+    <img alt="OpenWeft" src="./docs/banner-dark.svg" width="100%">
+  </picture>
+</p>
+
+<p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT"></a>
 </p>
 
@@ -40,6 +44,12 @@ Completed:
 ```
 
 Features 1 and 2 ran in parallel — no file overlap. Feature 3 touched the same auth files, so OpenWeft queued it for the next batch and re-planned against the merged code. Three features, two batches, zero babysitting. (Cost shown is an estimate — OpenWeft uses your existing Claude or Codex subscription, not a separate API bill.)
+
+<p align="center">
+  <picture>
+    <img alt="OpenWeft setup wizard" src="./docs/wizard-dark.svg" width="100%">
+  </picture>
+</p>
 
 <p align="center">
   <picture>
