@@ -126,9 +126,9 @@ OpenWeft doesn't send your feature request directly to an agent. It compiles it 
 │                      │     Tells the agent HOW to plan:
 │  • 5-approach        │     - investigate codebase first
 │    brainstorming     │     - brainstorm 5 high-level approaches
-│  • Living Plan       │     - score by blast radius, reversibility
-│    Ledger creation   │     - build structured execution plan
-│  • Downstream        │     - maintain a Living Plan Ledger
+│  • Structured brief  │     - score by blast radius, reversibility
+│    generation        │     - build structured execution plan
+│  • Downstream        │     - require a durable plan + ledger
 │    Impact Reviews    │     - validate incrementally
 │  • 4-phase debug     │     - review downstream impact
 │    protocol          │
@@ -140,23 +140,22 @@ OpenWeft doesn't send your feature request directly to an agent. It compiles it 
 │                      │     Persisted to feature_requests/briefs/
 │  Contains:           │     Inspectable, durable, recoverable
 │  • Codebase context  │
-│  • Execution plan    │     This is what the agent runs.
-│  • ## Manifest       │     Not a one-liner. A full operating document.
-│  • ## Ledger         │
+│  • Execution brief   │     This is what Stage 2 runs.
+│  • Planning rubric   │     Not a one-liner. A full operating document.
 │  • Safety boundaries │
 └─────────────────────┘
 ```
 
-**Stage 1 (S1):** Prompt A runs against your request. Output: a planning prompt for the next agent.
+**Stage 1 (S1):** Prompt A runs against your request. Output: Prompt B — the detailed worker brief persisted under `feature_requests/briefs/`.
 
-**Stage 2 (S2):** That output runs against the codebase. Output: Prompt B — a full Markdown plan with a `## Manifest` block (files to create/modify/delete) and a `## Ledger` (constraints, assumptions, watchpoints, validation).
+**Stage 2 (S2):** Prompt B runs against the codebase. Output: a full Markdown plan persisted under `feature_requests/*.md` with a `## Manifest` block (files to create/modify/delete) and a `## Ledger` (constraints, assumptions, watchpoints, validation).
 
-Both `## Manifest` and `## Ledger` are validated:
+The Stage 2 plan is what gets validated and resumed from:
 
 - **Manifest** must parse as `{ create: string[], modify: string[], delete: string[] }`. If JSON is malformed, OpenWeft tries `jsonrepair`, then `JSON5.parse`, then falls back to the last known good manifest.
 - **Ledger** must contain four required h3 subheadings: `Constraints`, `Assumptions`, `Watchpoints`, `Validation`. Enforced by `assertLedgerSection()`.
 
-The Prompt B artifact is saved to `feature_requests/briefs/` and tied to the feature ID. If a session degrades or the process crashes, the brief survives. A fresh session can resume from it.
+The Prompt B artifact is saved to `feature_requests/briefs/` and the validated plan is saved to `feature_requests/*.md`. If a session degrades or the process crashes, both survive. Recovery resumes from the plan plus checkpoint state, not from transient model memory.
 
 ---
 
@@ -308,9 +307,9 @@ Each feature executes in its own git worktree under `.openweft/worktrees/`. This
 your-repo/
 ├── .openweft/
 │   └── worktrees/
-│       ├── feature-0001-add-password-reset/    ◄── Agent A works here
-│       ├── feature-0002-refactor-auth/         ◄── Agent B works here
-│       └── feature-0003-audit-log-export/      ◄── Agent C works here
+│       ├── 001/                                ◄── Agent A works here
+│       ├── 002/                                ◄── Agent B works here
+│       └── 003/                                ◄── Agent C works here
 ├── src/                                        ◄── Main repo (merge target)
 └── ...
 ```
@@ -335,16 +334,18 @@ mergeBranchIntoCurrent(repoRoot, branch):
   conflict:
     → git merge --abort
     → { status: 'conflict', conflicts: [{ file, reason }] }
-    → OpenWeft merges main INTO the worktree
+    → OpenWeft stages base branch INTO the feature worktree
+    → Preserve conflicted merge state in that worktree
     → Agent resolves conflicts in worktree context
-    → Retry merge to base
+    → Commit resolution on feature branch
+    → Retry merge to base (up to 3 reconciliation rounds)
 ```
 
 The `--no-ff` flag ensures every feature merge is a visible merge commit, even if it could fast-forward. This preserves per-feature history.
 
 ### Reuse detection
 
-On resume, OpenWeft checks if a worktree already has a completion commit (`openweft: complete feature <id>`). If so, it skips re-execution and goes straight to merge. No wasted compute on work that already succeeded.
+On resume, OpenWeft checks whether a managed worktree already has a reusable completion commit (`openweft: complete feature <id>`) or whether that feature was already merged. Reusable completions are queued for merge recovery instead of re-execution; already-merged features are marked complete and can still restore deferred re-analysis state. No wasted compute on work that already succeeded.
 
 ### Cleanup
 
@@ -494,8 +495,8 @@ When `openweft start` resumes from a checkpoint:
 For each feature:
   status === 'executing':
     → Check if worktree exists and has completion commit
-      → yes (already-merged): mark 'completed'
-      → yes (reusable):       skip to merge phase
+      → yes (already-merged): mark 'completed' and restore deferred re-analysis if needed
+      → yes (reusable):       queue for merge recovery instead of re-execution
       → missing:              reset to 'planned', re-run
 
   status === 'failed' + rerunEligible:
@@ -581,13 +582,13 @@ New writes always use v1 JSON.
 
 ---
 
-## The Living Plan Ledger
+## The plan `## Ledger` section
 
 This is what makes execution inspectable, not just observable.
 
-Every agent writes a Living Plan Ledger to `project_ledgers/` — a structured Markdown file that captures the full execution narrative. Not a log dump. A narrative.
+Every validated plan contains a `## Ledger` section — a structured Markdown record of constraints, assumptions, watchpoints, validation, and execution notes. OpenWeft persists that plan in `feature_requests/*.md`, mirrors it in `.openweft/shadow-plans/`, and syncs copies into worktrees during execution. Not a log dump. A narrative.
 
-A real ledger from this codebase (`13.frontend-backend-stability-hardening.md`) includes:
+A representative ledger section looks like:
 
 ```
 ## Executive Outcome
@@ -627,7 +628,7 @@ Each step in the plan uses a required schema:
 - Status (pending → in-progress → completed)
 ```
 
-The ledger survives context loss. If a long-running session hits a context window limit and the LLM compacts, the instruction at the top of every ledger says: *reread the full ledger before continuing*. The ledger is the source of truth, not the model's memory.
+The plan ledger survives context loss because the canonical plan file is persisted on disk and promoted forward after successful execution/merge. Recovery uses the checkpoint plus the saved plan, not the model's memory.
 
 ---
 
@@ -717,10 +718,6 @@ your-repo/
 │       ├── 0001-add-password-reset.md   Prompt B artifact
 │       └── 0002-refactor-auth.md
 │
-├── project_ledgers/
-│   ├── 1.add-password-reset.md      Living Plan Ledger (full execution narrative)
-│   └── 2.refactor-auth.md
-│
 ├── prompts/
 │   ├── prompt-a.md                  Your Prompt A template
 │   └── plan-adjustment.md           Your plan adjustment template
@@ -729,17 +726,18 @@ your-repo/
 │   ├── checkpoint.json              Orchestrator state (Zod-validated)
 │   ├── checkpoint.json.backup       Backup sibling (atomic)
 │   ├── costs.jsonl                  Token usage + USD per call
-│   ├── audit-trail.jsonl            Every orchestrator event
+│   ├── audit-trail.jsonl            Append-only audit entries for real runs
 │   ├── output.log                   --bg mode output
 │   ├── pid                          Background process ID
-│   ├── worktrees/                   Git worktrees (one per feature)
-│   ├── shadow-plans/                Internal plan copies
-│   └── evolved-plans/               Post-merge adjusted plans
+│   ├── worktrees/                   Git worktrees (one numeric dir per feature)
+│   ├── shadow-plans/                Canonical internal plan mirrors
+│   ├── evolved-plans/               Worktree-promoted plan copies awaiting promotion or cleanup
+│   └── dry-run-workspaces/          Scratch workspaces for --dry-run
 │
 └── .openweftrc.json                 Configuration
 ```
 
-Everything is inspectable. No hidden state.
+Everything important to runtime and recovery is inspectable on disk.
 
 ---
 
@@ -767,9 +765,9 @@ openweft start          run the queue with interactive dashboard
 openweft start --bg     detach — PID tracked, logs to .openweft/output.log
 openweft start --stream stream raw agent output to terminal
 openweft start --tmux   launch in a tmux session
-openweft start --dry-run full pipeline with mock adapter, zero cost
+openweft start --dry-run planning/phasing/execution simulation with mock adapter, zero cost
 openweft status         queue state, tokens, cost, feature breakdown
-openweft stop           finish current phase, then stop
+openweft stop           ask a background run to finish the current phase, then stop
 ```
 
 ---

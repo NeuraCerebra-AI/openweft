@@ -3520,6 +3520,108 @@ describe('runRealOrchestration', () => {
     }
   });
 
+  it('resets the worktree to a clean baseline before retrying a later conflict-resolution round', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['update shared module']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const inner = new MockAgentAdapter();
+    const adapter = new RecordingAdapter(inner);
+    const innerRunTurn = inner.runTurn.bind(inner);
+
+    adapter.runTurn = async (request) => {
+      adapter.requests.push(request);
+      return innerRunTurn(request);
+    };
+
+    const mergedEditSummary = {
+      merge_commit: 'merge-commit',
+      branch: 'openweft-001-update-shared-module',
+      pre_merge_commit: 'pre-merge-commit',
+      total_files_changed: 1,
+      total_lines_added: 2,
+      total_lines_removed: 1,
+      files: [
+        {
+          path: 'src/features/001-runtime-generated-prompt-b-for-001.ts',
+          change_type: 'modified' as const,
+          lines_added: 2,
+          lines_removed: 1,
+          old_path: null
+        }
+      ]
+    };
+
+    vi.resetModules();
+    vi.doMock('../../src/git/index.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
+        '../../src/git/index.js'
+      );
+      const abortMerge = vi.fn(async () => {});
+      const resetWorktreeToHead = vi.fn(async () => {});
+      let mergeAttempts = 0;
+
+      return {
+        ...actual,
+        abortMerge,
+        resetWorktreeToHead,
+        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
+          mergeAttempts += 1;
+          if (mergeAttempts <= 2) {
+            return {
+              status: 'conflict' as const,
+              branch,
+              preMergeCommit: 'pre-merge-commit',
+              conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+            };
+          }
+
+          return {
+            status: 'merged' as const,
+            branch,
+            preMergeCommit: 'pre-merge-commit',
+            mergeCommit: 'merge-commit',
+            editSummary: mergedEditSummary
+          };
+        }),
+        mergeBranchIntoWorktree: vi.fn(async (_worktreePath: string, branch: string) => ({
+          status: 'conflicted' as const,
+          branch,
+          preMergeCommit: 'pre-merge-commit',
+          mergeHeadCommit: 'merge-head-commit',
+          conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+        }))
+      };
+    });
+
+    try {
+      const gitModule = await import('../../src/git/index.js');
+      const resetWorktreeToHeadMock = vi.mocked(gitModule.resetWorktreeToHead);
+      const { runRealOrchestration: runRealOrchestrationWithConflictMocks } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithConflictMocks({
+        config,
+        configHash,
+        adapter,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('completed');
+      expect(resetWorktreeToHeadMock).toHaveBeenCalledWith(
+        result.checkpoint.features['001']?.worktreePath ?? expect.any(String)
+      );
+    } finally {
+      vi.doUnmock('../../src/git/index.js');
+      vi.resetModules();
+    }
+  });
+
   it('fails truthfully after exhausting all merge conflict reconciliation rounds', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
@@ -3837,6 +3939,182 @@ describe('runRealOrchestration', () => {
     expect(result.checkpoint.features['001']).toMatchObject({
       status: 'completed'
     });
+  });
+
+  it('recovers a reusable completed commit even when the checkpoint already marked the feature failed', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      status: 'executing'
+    });
+
+    const loaded = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+    const checkpoint = loaded.checkpoint;
+    if (!checkpoint) {
+      throw new Error('Expected seeded checkpoint.');
+    }
+
+    const feature001 = checkpoint.features['001'];
+    if (!feature001) {
+      throw new Error('Expected seeded feature 001.');
+    }
+
+    checkpoint.features['001'] = {
+      ...feature001,
+      status: 'failed',
+      rerunEligible: true,
+      lastError: 'merge cleanup probe'
+    };
+    checkpoint.currentState = 'idle';
+    checkpoint.currentPhase = null;
+
+    await saveCheckpoint({
+      checkpoint,
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+
+    const result = await runRealOrchestration({
+      config,
+      configHash: 'test-config-hash',
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.mergedCount).toBe(1);
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'completed',
+      rerunEligible: false
+    });
+    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(false);
+  });
+
+  it('replays deferred re-analysis after recovering an already-merged feature', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      featureId: '001',
+      request: 'first change',
+      status: 'planned'
+    });
+
+    await simpleGit(repoRoot).merge(['--no-ff', '--no-edit', 'openweft-001-resume-test']);
+
+    const featureTwoPlanFile = path.join(config.paths.featureRequestsDir, '002.plan.md');
+    const featureTwoPromptBFile = path.join(config.paths.promptBArtifactsDir, '002.prompt-b.md');
+    await mkdir(config.paths.featureRequestsDir, { recursive: true });
+    await mkdir(config.paths.promptBArtifactsDir, { recursive: true });
+    await writeFile(
+      featureTwoPlanFile,
+      `# Feature Plan: 002
+
+${TEST_LEDGER_SECTION}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/target.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`,
+      'utf8'
+    );
+    await writeFile(featureTwoPromptBFile, 'Prompt B for second change.\n', 'utf8');
+
+    const loaded = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+    const checkpoint = loaded.checkpoint;
+    if (!checkpoint) {
+      throw new Error('Expected seeded checkpoint.');
+    }
+
+    checkpoint.features['002'] = {
+      id: '002',
+      request: 'second change',
+      status: 'planned',
+      attempts: 0,
+      planFile: featureTwoPlanFile,
+      evolvedPlanFile: null,
+      promptBFile: featureTwoPromptBFile,
+      branchName: null,
+      worktreePath: null,
+      sessionId: 'repo-session-002',
+      sessionScope: 'repo',
+      manifest: {
+        create: ['src/target.ts'],
+        modify: [],
+        delete: []
+      },
+      rerunEligible: false,
+      mergeResolutionAttempts: 0,
+      updatedAt: new Date().toISOString()
+    };
+    checkpoint.queue = {
+      orderedFeatureIds: ['001', '002'],
+      totalCount: 2
+    };
+    checkpoint.currentState = 'idle';
+    checkpoint.currentPhase = null;
+
+    await saveCheckpoint({
+      checkpoint,
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    const adapter = new RecordingAdapter(
+      new DeterministicManifestAdapter({
+        '002': ['src/target.ts']
+      })
+    );
+
+    const result = await runRealOrchestration({
+      config,
+      configHash: 'test-config-hash',
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    const adjustmentIndex = adapter.requests.findIndex(
+      (request) => request.featureId === '002' && request.stage === 'adjustment'
+    );
+    const executionIndex = adapter.requests.findIndex(
+      (request) => request.featureId === '002' && request.stage === 'execution'
+    );
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'completed'
+    });
+    expect(adjustmentIndex).toBeGreaterThanOrEqual(0);
+    expect(executionIndex).toBeGreaterThan(adjustmentIndex);
   });
 
   it('reuses a completed feature commit after main advances on an unrelated file', async () => {

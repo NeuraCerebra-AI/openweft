@@ -800,7 +800,9 @@ const loadOrCreateCheckpoint = async (
   const checkpoint = cloneCheckpoint(existing.checkpoint);
   let needsCheckpointSave = false;
   const recoveredExecutions = new Map<string, RecoveredExecutionResult>();
-  const baseBranch = (await simpleGit(input.config.repoRoot).revparse(['--abbrev-ref', 'HEAD'])).trim();
+  const repoGit = simpleGit(input.config.repoRoot);
+  const baseBranch = (await repoGit.revparse(['--abbrev-ref', 'HEAD'])).trim();
+  const repoHeadCommit = (await repoGit.revparse(['HEAD'])).trim();
   const resumeReanalysisPhaseIndex =
     checkpoint.pendingMergeSummaries.length > 0 ? (checkpoint.currentPhase?.index ?? 0) : null;
 
@@ -842,8 +844,18 @@ const loadOrCreateCheckpoint = async (
       if (recovered) {
         if (recovered.kind === 'already-merged') {
           alreadyMerged = true;
+          if (!checkpoint.pendingMergeSummaries.some((entry) => entry.featureId === feature.id)) {
+            checkpoint.pendingMergeSummaries = [
+              ...checkpoint.pendingMergeSummaries,
+              {
+                featureId: feature.id,
+                summary: buildRecoveredMergeSummary(feature, feature.mergeCommit ?? repoHeadCommit)
+              }
+            ];
+          }
           updateFeatureCheckpoint(checkpoint, feature.id, {
             status: 'completed',
+            mergeCommit: feature.mergeCommit ?? repoHeadCommit,
             evolvedPlanFile: null,
             branchName: feature.branchName,
             worktreePath: feature.worktreePath,
@@ -854,9 +866,21 @@ const loadOrCreateCheckpoint = async (
           });
           needsCheckpointSave = true;
         } else if (feature.status === 'failed') {
+          recoveredExecutions.set(feature.id, {
+            featureId: feature.id,
+            status: 'completed',
+            allowFullRerun: false,
+            branchName: recovered.branchName,
+            worktreePath: recovered.worktreePath,
+            sessionId: null,
+            baselineCommit: null,
+            evolvedPlanFile: null
+          });
           updateFeatureCheckpoint(checkpoint, feature.id, {
+            status: 'planned',
             sessionId: null,
             sessionScope: null,
+            lastError: null,
             rerunEligible: false
           });
           needsCheckpointSave = true;
@@ -1813,6 +1837,47 @@ const createOrResetFeatureWorktree = async (
 const getManifestPaths = (feature: FeatureCheckpoint): string[] => {
   const manifest = feature.manifest ?? { create: [], modify: [], delete: [] };
   return [...manifest.create, ...manifest.modify, ...manifest.delete];
+};
+
+const buildRecoveredMergeSummary = (
+  feature: Pick<FeatureCheckpoint, 'id' | 'branchName' | 'manifest' | 'mergeCommit'>,
+  mergeCommit: string
+): EditSummary => {
+  const manifest = feature.manifest ?? { create: [], modify: [], delete: [] };
+  const files = [
+    ...manifest.create.map((filePath) => ({
+      path: filePath,
+      change_type: 'added' as const,
+      lines_added: 0,
+      lines_removed: 0,
+      old_path: null
+    })),
+    ...manifest.modify.map((filePath) => ({
+      path: filePath,
+      change_type: 'modified' as const,
+      lines_added: 0,
+      lines_removed: 0,
+      old_path: null
+    })),
+    ...manifest.delete.map((filePath) => ({
+      path: filePath,
+      change_type: 'deleted' as const,
+      lines_added: 0,
+      lines_removed: 0,
+      old_path: null
+    }))
+  ];
+  const branch = feature.branchName ?? `recovered-${feature.id}`;
+
+  return {
+    merge_commit: mergeCommit,
+    branch,
+    pre_merge_commit: feature.mergeCommit ?? mergeCommit,
+    total_files_changed: files.length,
+    total_lines_added: 0,
+    total_lines_removed: 0,
+    files
+  };
 };
 
 const normalizeRepoRelativePath = (value: string): string => value.replace(/\\/g, '/');
@@ -2795,6 +2860,9 @@ const executePhases = async (
 
             for (let round = 1; round <= MAX_MERGE_RESOLUTION_ROUNDS; round += 1) {
               await abortMerge(feature.worktreePath).catch(() => {});
+              if (round > 1) {
+                await resetWorktreeToHead(feature.worktreePath);
+              }
               updateFeatureCheckpoint(checkpoint, featureId, {
                 mergeResolutionAttempts: round
               });

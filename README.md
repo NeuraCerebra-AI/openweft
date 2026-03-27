@@ -142,7 +142,7 @@ openweft status
 
 **Results merge in priority order.** When agents finish, OpenWeft merges their work back using `--no-ff` commits. If there's a conflict, it merges main into the worktree and lets the agent resolve it.
 
-**Every step is recorded.** Each agent writes a Living Plan Ledger — a structured markdown file that captures what was investigated, what changed (with before/after code), what was deferred and why. When it's done, you can read exactly what happened. Not a log dump — a narrative.
+**Every step is recorded.** Each generated plan includes a structured `## Ledger` section, and OpenWeft persists the plan, shadow copies, checkpoint, audit trail, and worktree artifacts needed to inspect or resume the run. When it's done, you can read what was investigated, what changed, and what got deferred. Not a log dump — a narrative.
 
 **Then the cycle repeats.** After merges land, the codebase has changed. OpenWeft re-evaluates whatever remains against the new state, re-scores, re-phases, and runs the next batch. This continues until the queue is empty.
 
@@ -157,7 +157,7 @@ Most orchestrators send the agent a sentence and hope for the best. OpenWeft shi
 | What | Why it matters |
 |---|---|
 | **5-approach brainstorming** | The agent evaluates 5 high-level approaches by blast radius, reversibility, and complexity — then 5 implementation strategies within the winner. Not first-idea execution. |
-| **Living Plan Ledger** | A structured execution record — step ID, dependencies, risk level, rollback notes, validation criteria, status, before/after code — written to `project_ledgers/` as a readable markdown file. Survives context loss. If the session restarts, the ledger is the source of truth. When a feature finishes, you can open the ledger and see exactly what the agent investigated, changed, and chose not to change. |
+| **Plan `## Ledger` section** | A structured execution record embedded in each generated plan — constraints, assumptions, watchpoints, validation, and step-by-step execution notes. The plan file, its shadow copy, and the checkpoint together survive context loss and make the run inspectable. |
 | **Downstream Impact Reviews** | Before completing a major step, the agent launches 1–2 verification agents to check whether the edits broke assumptions in later steps. The plan updates before moving on. |
 | **4-phase debugging protocol** | Bug-fix requests trigger error sequence analysis → root cause hypothesis scoring → fix strategy with rollback planning → iterative implementation to 95%+ confidence. |
 | **Context grounding** | The agent investigates the codebase before planning — file paths, line numbers, code snippets, live documentation via Context7 — so reasoning starts from reality, not assumptions. |
@@ -176,9 +176,9 @@ openweft start                 run the queue with interactive dashboard
 openweft start --bg            detach — PID tracked, logs to .openweft/output.log
 openweft start --stream        stream raw agent output to your terminal
 openweft start --tmux          launch in a tmux session
-openweft start --dry-run       full pipeline with mock adapter, zero cost
+openweft start --dry-run       planning/phasing/execution simulation with mock adapter, zero cost
 openweft status                queue state, tokens, cost, feature breakdown
-openweft stop                  finish current phase, then stop
+openweft stop                  ask a background run to finish the current phase, then stop
 ```
 
 ```
@@ -314,18 +314,21 @@ OpenWeft uses a two-stage prompt system internally called **Prompt A** and **Pro
 
 ## What gets written to disk
 
-Everything OpenWeft creates. No hidden state.
+Key runtime artifacts OpenWeft writes and relies on.
 
 | Path | Purpose |
 |---|---|
 | `feature_requests/queue.txt` | Your requests — pending and processed, with feature IDs |
-| `feature_requests/*.md` | Generated plans with `## Manifest` blocks |
+| `feature_requests/*.md` | Generated plans with `## Manifest` and `## Ledger` sections |
 | `feature_requests/briefs/*.md` | Generated worker briefs, tied to feature IDs |
-| `project_ledgers/*.md` | Living Plan Ledgers — one per feature, full execution narrative with before/after code |
 | `.openweft/checkpoint.json` | Orchestrator state — Zod-validated, atomically written with `.backup` sibling |
 | `.openweft/costs.jsonl` | Token usage + estimated USD per feature |
-| `.openweft/audit-trail.jsonl` | Every orchestrator event, append-only |
+| `.openweft/audit-trail.jsonl` | Append-only orchestrator audit entries for real runs |
 | `.openweft/output.log` | `--bg` mode output |
+| `.openweft/worktrees/` | Real-run git worktrees — one per active feature |
+| `.openweft/shadow-plans/` | Internal copies of the canonical plan files |
+| `.openweft/evolved-plans/` | Staged post-execution plan copies waiting for promotion or cleanup |
+| `.openweft/dry-run-workspaces/` | Scratch workspaces used only by `--dry-run` |
 | `prompts/prompt-a.md` | Your Prompt A template (must contain `{{USER_REQUEST}}`) |
 | `prompts/plan-adjustment.md` | Your plan adjustment template (must contain `{{CODE_EDIT_SUMMARY}}`) |
 
