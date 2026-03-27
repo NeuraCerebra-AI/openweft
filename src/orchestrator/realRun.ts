@@ -1817,6 +1817,7 @@ const createOrResetFeatureWorktree = async (
         throw error;
       }
     }
+    await simpleGit(input.config.repoRoot).raw(['worktree', 'prune']);
   }
 
   const created = await createWorktree({

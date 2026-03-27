@@ -933,6 +933,10 @@ describe('TTY start handler', () => {
         return await new Promise<StartResult>((resolve) => {
           resolveRun = resolve;
         });
+      },
+      handlerOverrides: {
+        detectCodex: async () => ({ installed: true, authenticated: true }),
+        detectClaude: async () => ({ installed: true, authenticated: true })
       }
     });
 
@@ -997,6 +1001,10 @@ describe('TTY start handler', () => {
         return await new Promise<StartResult>((resolve) => {
           resolveRun = resolve;
         });
+      },
+      handlerOverrides: {
+        detectCodex: async () => ({ installed: true, authenticated: true }),
+        detectClaude: async () => ({ installed: true, authenticated: true })
       }
     });
 
@@ -1186,7 +1194,11 @@ describe('TTY start handler', () => {
           }
           return actualFs.writeTextFileAtomic(filePath, content);
         })
-      })
+      }),
+      handlerOverrides: {
+        detectCodex: async () => ({ installed: true, authenticated: true }),
+        detectClaude: async () => ({ installed: true, authenticated: true })
+      }
     });
 
     const launchPromise = harness.handlers.launch();
@@ -1488,6 +1500,10 @@ describe('TTY start handler', () => {
           mergedCount: 0,
           plannedCount: 1
         };
+      },
+      handlerOverrides: {
+        detectCodex: async () => ({ installed: true, authenticated: true }),
+        detectClaude: async () => ({ installed: true, authenticated: true })
       }
     });
 

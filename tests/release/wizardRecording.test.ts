@@ -2,8 +2,19 @@ import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises
 import os from 'node:os';
 import path from 'node:path';
 
+import { execFileSync } from 'node:child_process';
+
 import { execa } from 'execa';
 import { afterEach, describe, expect, it } from 'vitest';
+
+const expectBinaryAvailable = (() => {
+  try {
+    execFileSync('which', ['expect'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 const repoRoot = path.resolve(import.meta.dirname, '..', '..');
 const wizardInputScript = path.join(repoRoot, 'scripts', 'wizard-input.exp');
@@ -65,7 +76,7 @@ describe('wizard recording pipeline', () => {
     expect(script).toContain('rm -f "$CAST_PATH" "$RAW_CAST_PATH"');
   });
 
-  it(
+  it.skipIf(!expectBinaryAvailable)(
     'drives the full wizard flow and dashboard against a fake interactive CLI',
     async () => {
       const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-wizard-recording-'));
