@@ -1810,6 +1810,7 @@ const createOrResetFeatureWorktree = async (
       force: true
     });
   } else if (feature.branchName) {
+    await simpleGit(input.config.repoRoot).raw(['worktree', 'prune']);
     try {
       await simpleGit(input.config.repoRoot).deleteLocalBranch(branchName, true);
     } catch (error) {
@@ -1817,7 +1818,6 @@ const createOrResetFeatureWorktree = async (
         throw error;
       }
     }
-    await simpleGit(input.config.repoRoot).raw(['worktree', 'prune']);
   }
 
   const created = await createWorktree({

@@ -127,6 +127,8 @@ const createTtyHarness = async (input: {
       getCwd: () => input.repoRoot,
       writeLine: () => {},
       sleep: input.sleep ?? (async () => {}),
+      detectCodex: async () => ({ installed: true, authenticated: true }),
+      detectClaude: async () => ({ installed: true, authenticated: true }),
       ...(input.handlerOverrides ?? {})
     }),
     getAppProps: () => appProps,
