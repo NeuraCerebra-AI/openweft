@@ -74,6 +74,7 @@ export const renderStatusReport = (input: {
   checkpoint: OrchestratorCheckpoint | null;
   checkpointSource?: 'primary' | 'backup' | 'none';
   queueContent: string;
+  usageDisplay?: 'tokens' | 'estimated-cost';
   background?: {
     pid: number;
     alive: boolean;
@@ -87,6 +88,10 @@ export const renderStatusReport = (input: {
   const planned = features.filter((feature) => feature.status === 'planned');
   const failed = features.filter((feature) => feature.status === 'failed');
   const completed = features.filter((feature) => feature.status === 'completed');
+  const usageDisplay = input.usageDisplay ?? 'tokens';
+  const usageLine = usageDisplay === 'estimated-cost'
+    ? `Cost: $${cost.totalEstimatedUsd.toFixed(6)} (${cost.totalInputTokens} input / ${cost.totalOutputTokens} output tokens)`
+    : `Tokens: ${cost.totalInputTokens} input / ${cost.totalOutputTokens} output`;
 
   const lines = [
     `Status: ${checkpoint?.status ?? 'idle'}`,
@@ -95,7 +100,7 @@ export const renderStatusReport = (input: {
     `Pending Queue: ${queue.pending.length}`,
     `Processed Queue Entries: ${queue.processed.length}`,
     `Features: ${summarizeFeatureStatuses(checkpoint)}`,
-    `Cost: $${cost.totalEstimatedUsd.toFixed(6)} (${cost.totalInputTokens} input / ${cost.totalOutputTokens} output tokens)`,
+    usageLine,
     ...formatFeatureList(checkpoint, 'Executing', executing),
     ...formatFeatureList(checkpoint, 'Planned', planned),
     ...formatFeatureList(checkpoint, 'Failed', failed),

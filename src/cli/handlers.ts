@@ -1503,7 +1503,14 @@ export const createCommandHandlers = (
         const phase = cp?.currentPhase
           ? `${cp.currentPhase.name} (${cp.currentPhase.featureIds.length} feature${cp.currentPhase.featureIds.length === 1 ? '' : 's'})`
           : cp?.status ?? 'idle';
-        const cost = cp ? `$${cp.cost.totalEstimatedUsd.toFixed(4)}` : '$0.0000';
+        const usageLabel = config.status.usageDisplay === 'estimated-cost' ? 'Cost' : 'Tokens';
+        const usageValue = cp
+          ? config.status.usageDisplay === 'estimated-cost'
+            ? `$${cp.cost.totalEstimatedUsd.toFixed(4)}`
+            : `${cp.cost.totalInputTokens} input / ${cp.cost.totalOutputTokens} output`
+          : config.status.usageDisplay === 'estimated-cost'
+            ? '$0.0000'
+            : '0 input / 0 output';
         const agents = cp
           ? Object.values(cp.features).map((f) => ({
               name: `${f.id} ${f.title ?? summarizeQueueRequest(f.request)}`,
@@ -1514,7 +1521,8 @@ export const createCommandHandlers = (
           React.createElement(StatusCard, {
             appName: 'OpenWeft',
             phase,
-            cost,
+            usageLabel,
+            usageValue,
             agents,
             pendingRequests: pendingQueue,
           })
@@ -1527,6 +1535,7 @@ export const createCommandHandlers = (
           checkpoint: checkpointResult.checkpoint,
           checkpointSource: checkpointResult.source,
           queueContent,
+          usageDisplay: config.status.usageDisplay,
           background
         }).trimEnd()
       );

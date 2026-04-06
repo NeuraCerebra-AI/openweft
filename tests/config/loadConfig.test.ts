@@ -18,6 +18,9 @@ describe('loadOpenWeftConfig', () => {
       claude: 'medium'
     });
     expect(config.approval).toBe('always');
+    expect(config.status).toEqual({
+      usageDisplay: 'tokens'
+    });
     expect(config.paths.openweftDir).toBe(path.join(tempDirectory, '.openweft'));
     expect(config.paths.queueFile).toBe(path.join(tempDirectory, 'feature_requests', 'queue.txt'));
     expect(configHash).toBe(createConfigHash(config));
@@ -90,7 +93,26 @@ describe('loadOpenWeftConfig', () => {
     });
   });
 
-  it('changes the config hash when effort or approval changes', async () => {
+  it('loads an explicit status usage display override', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-status-display-'));
+    await writeFile(
+      path.join(tempDirectory, '.openweftrc.json'),
+      JSON.stringify({
+        status: {
+          usageDisplay: 'estimated-cost'
+        }
+      }),
+      'utf8'
+    );
+
+    const { config } = await loadOpenWeftConfig(tempDirectory);
+
+    expect(config.status).toEqual({
+      usageDisplay: 'estimated-cost'
+    });
+  });
+
+  it('changes the config hash when effort, approval, or status usage display changes', async () => {
     const defaults = getDefaultConfig();
 
     const approvalHash = createConfigHash({
@@ -104,9 +126,16 @@ describe('loadOpenWeftConfig', () => {
         codex: 'high'
       }
     });
+    const statusHash = createConfigHash({
+      ...defaults,
+      status: {
+        usageDisplay: 'estimated-cost'
+      }
+    });
 
     expect(approvalHash).not.toBe(createConfigHash(defaults));
     expect(effortHash).not.toBe(createConfigHash(defaults));
+    expect(statusHash).not.toBe(createConfigHash(defaults));
   });
 
   it('formats invalid config schema errors with the config file path', async () => {
@@ -187,5 +216,21 @@ describe('loadOpenWeftConfig', () => {
     );
 
     await expect(loadOpenWeftConfig(tempDirectory)).rejects.toThrow(/audio/);
+  });
+
+  it('rejects invalid status usage display values', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-invalid-status-display-'));
+    await writeFile(
+      path.join(tempDirectory, '.openweftrc.json'),
+      JSON.stringify({
+        ...getDefaultConfig(),
+        status: {
+          usageDisplay: 'money'
+        }
+      }),
+      'utf8'
+    );
+
+    await expect(loadOpenWeftConfig(tempDirectory)).rejects.toThrow(/status\.usageDisplay/);
   });
 });

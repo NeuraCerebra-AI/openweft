@@ -35,6 +35,14 @@ export const BudgetConfigSchema = z
   })
   .strict();
 
+export const StatusUsageDisplaySchema = z.enum(['tokens', 'estimated-cost']);
+
+export const StatusConfigSchema = z
+  .object({
+    usageDisplay: StatusUsageDisplaySchema
+  })
+  .strict();
+
 export const CodexEffortLevelSchema = z.enum(CODEX_EFFORT_OPTIONS);
 export const ClaudeEffortLevelSchema = z.enum(CLAUDE_EFFORT_OPTIONS);
 export const ApprovalModeSchema = z.enum(APPROVAL_MODE_OPTIONS);
@@ -81,6 +89,7 @@ export const OpenWeftConfigSchema = z
         claude: RateLimitConfigSchema
       })
       .strict(),
+    status: StatusConfigSchema,
     budget: BudgetConfigSchema
   })
   .strict();
@@ -125,6 +134,9 @@ export const DEFAULT_OPENWEFT_CONFIG: OpenWeftConfig = {
       retryBackoffMs: 5000,
       retryMaxAttempts: 5
     }
+  },
+  status: {
+    usageDisplay: 'tokens'
   },
   budget: {
     warnAtUsd: null,
