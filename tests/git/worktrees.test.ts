@@ -3,7 +3,7 @@ import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { simpleGit } from 'simple-git';
 
 import {
@@ -58,6 +58,23 @@ const commitChange = async (
   await writeFile(path.join(repoPath, fileName), fileContents, 'utf8');
   await git.add([fileName]);
   await git.commit(message);
+};
+
+const listStashEntries = async (repoPath: string): Promise<string[]> => {
+  const output = await simpleGit(repoPath).raw(['stash', 'list']);
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+};
+
+const hasMergeHead = async (repoPath: string): Promise<boolean> => {
+  try {
+    await simpleGit(repoPath).revparse(['--verify', 'MERGE_HEAD']);
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 describe('git worktree infrastructure', () => {
@@ -257,6 +274,119 @@ describe('git worktree infrastructure', () => {
 
     expect(result.status).toBe('merged');
     expect(await getHeadCommit(repoRoot)).not.toBe(before);
+  });
+
+  it('merges cleanly when main has uncommitted changes to a different file', async () => {
+    const branchName = 'agent-dirty-different-file';
+    const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-dirty-different-file');
+
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName
+    });
+
+    await commitChange(worktreePath, 'value = 2\n', 'agent dirty different file');
+    await writeFile(path.join(repoRoot, 'secondary.txt'), 'secondary = dirty\n', 'utf8');
+
+    const result = await mergeBranchIntoCurrent(repoRoot, branchName);
+
+    expect(result.status).toBe('merged');
+    expect(await readFile(path.join(repoRoot, 'secondary.txt'), 'utf8')).toBe('secondary = dirty\n');
+    expect(await readFile(path.join(repoRoot, 'src.txt'), 'utf8')).toBe('value = 2\n');
+  });
+
+  it('merges cleanly when main has untracked files', async () => {
+    const branchName = 'agent-dirty-untracked';
+    const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-dirty-untracked');
+
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName
+    });
+
+    await commitChange(worktreePath, 'value = 2\n', 'agent dirty untracked');
+    await writeFile(path.join(repoRoot, 'scratch.txt'), 'scratch = dirty\n', 'utf8');
+
+    const result = await mergeBranchIntoCurrent(repoRoot, branchName);
+
+    expect(result.status).toBe('merged');
+    expect(await readFile(path.join(repoRoot, 'scratch.txt'), 'utf8')).toBe('scratch = dirty\n');
+
+    const status = await simpleGit(repoRoot).status();
+    expect(status.not_added).toContain('scratch.txt');
+  });
+
+  it('returns conflict and restores uncommitted changes when merge conflicts', async () => {
+    const branchName = 'agent-dirty-conflict';
+    const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-dirty-conflict');
+
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName
+    });
+
+    await commitChange(worktreePath, 'value = 2\n', 'agent dirty conflict');
+    await commitChange(repoRoot, 'value = 3\n', 'main dirty conflict');
+    await writeFile(path.join(repoRoot, 'secondary.txt'), 'secondary = dirty\n', 'utf8');
+
+    const result = await mergeBranchIntoCurrent(repoRoot, branchName);
+
+    expect(result.status).toBe('conflict');
+    expect(await readFile(path.join(repoRoot, 'secondary.txt'), 'utf8')).toBe('secondary = dirty\n');
+    expect(await hasMergeHead(repoRoot)).toBe(false);
+  });
+
+  it('does not stash when working tree is clean', async () => {
+    const branchName = 'agent-clean-no-stash';
+    const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-clean-no-stash');
+
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName
+    });
+
+    await commitChange(worktreePath, 'value = 2\n', 'agent clean no stash');
+
+    const result = await mergeBranchIntoCurrent(repoRoot, branchName);
+
+    expect(result.status).toBe('merged');
+    expect(await listStashEntries(repoRoot)).toEqual([]);
+  });
+
+  it('leaves stash in list when pop conflicts with merge result', async () => {
+    const branchName = 'agent-stash-pop-conflict';
+    const stashMessage = `openweft: auto-stash before merging ${branchName}`;
+    const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-stash-pop-conflict');
+
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName
+    });
+
+    await commitChange(worktreePath, 'value = 2\n', 'agent stash pop conflict');
+    await writeFile(path.join(repoRoot, 'src.txt'), 'value = 1\n// local scratch\n', 'utf8');
+
+    const result = await mergeBranchIntoCurrent(repoRoot, branchName);
+    const stashEntries = await listStashEntries(repoRoot);
+    const srcContents = await readFile(path.join(repoRoot, 'src.txt'), 'utf8');
+    const matchingStashes = stashEntries.filter((entry) => entry.includes(stashMessage));
+
+    expect(result.status).toBe('merged');
+    if (result.status === 'merged') {
+      expect(result.autoStash?.created).toBe(true);
+    }
+
+    if (result.status === 'merged' && result.autoStash?.restored === false) {
+      expect(matchingStashes).toHaveLength(1);
+      expect(result.autoStash.recoveryMessage).toContain('git stash');
+    } else {
+      expect(srcContents).toContain('// local scratch\n');
+    }
   });
 
   it('throws for non-conflict merge failures', async () => {
@@ -497,5 +627,108 @@ describe('git worktree infrastructure', () => {
 
     const status = await simpleGit(worktreePath).status();
     expect(status.files).toHaveLength(0);
+  });
+
+  it('restores the exact auto-stash entry when a newer stash appears before restore', async () => {
+    const commandLog: string[] = [];
+    const stashEntries = [
+      {
+        ref: 'stash@{0}',
+        oid: 'oid-auto',
+        subject: 'On main: openweft: auto-stash before merging agent-precise [token-auto]'
+      }
+    ];
+    let mergeCompleted = false;
+
+    const updateStashRefs = (): void => {
+      stashEntries.forEach((entry, index) => {
+        entry.ref = `stash@{${index}}`;
+      });
+    };
+
+    const fakeGit = {
+      status: vi.fn(async () => ({
+        files: [{ path: 'secondary.txt', index: ' ', working_dir: 'M' }]
+      })),
+      stash: vi.fn(async (args: string[]) => {
+        commandLog.push(`stash ${args.join(' ')}`);
+        if (args[0] === 'push') {
+          return 'Saved working directory and index state';
+        }
+        if (args[0] === 'drop') {
+          const entryIndex = stashEntries.findIndex((entry) => entry.ref === args[1]);
+          if (entryIndex >= 0) {
+            stashEntries.splice(entryIndex, 1);
+            updateStashRefs();
+          }
+          return 'Dropped';
+        }
+        if (args[0] === 'pop') {
+          throw new Error('plain stash pop should not be used when an exact stash is tracked');
+        }
+        throw new Error(`Unexpected stash command: ${args.join(' ')}`);
+      }),
+      merge: vi.fn(async (_args: string[]) => {
+        mergeCompleted = true;
+        stashEntries.unshift({
+          ref: 'stash@{0}',
+          oid: 'oid-external',
+          subject: 'On main: external hook stash'
+        });
+        updateStashRefs();
+      }),
+      revparse: vi.fn(async (args: string[]) => {
+        if (args[0] === 'HEAD') {
+          return mergeCompleted ? 'merge-commit' : 'pre-merge-commit';
+        }
+        throw new Error(`Unexpected revparse: ${args.join(' ')}`);
+      }),
+      raw: vi.fn(async (args: string[]) => {
+        commandLog.push(`raw ${args.join(' ')}`);
+        if (args[0] === 'stash' && args[1] === 'list') {
+          return stashEntries.map((entry) => `${entry.ref}\0${entry.oid}\0${entry.subject}`).join('\n');
+        }
+        if (args[0] === 'stash' && args[1] === 'apply') {
+          expect(args[2]).toBe('oid-auto');
+          return 'Applied';
+        }
+        if (args[0] === 'diff-tree' && args.includes('--name-status')) {
+          return 'M\tsrc.txt\n';
+        }
+        if (args[0] === 'diff-tree' && args.includes('--numstat')) {
+          return '1\t1\tsrc.txt\n';
+        }
+        throw new Error(`Unexpected raw command: ${args.join(' ')}`);
+      })
+    };
+
+    vi.resetModules();
+    vi.doMock('node:crypto', () => ({
+      randomUUID: () => 'token-auto'
+    }));
+    vi.doMock('simple-git', () => ({
+      simpleGit: vi.fn(() => fakeGit)
+    }));
+
+    try {
+      const worktreesModule = await import('../../src/git/worktrees.js');
+      const result = await worktreesModule.mergeBranchIntoCurrent('/fake/repo', 'agent-precise');
+
+      expect(result.status).toBe('merged');
+      if (result.status === 'merged') {
+        expect(result.autoStash).toMatchObject({
+          created: true,
+          restored: true,
+          recoveryMessage: null
+        });
+      }
+      expect(commandLog).toContain('raw stash apply oid-auto');
+      expect(commandLog).toContain('stash drop stash@{1}');
+      expect(commandLog).not.toContain('stash pop');
+    } finally {
+      vi.doUnmock('node:crypto');
+      vi.doUnmock('simple-git');
+      vi.resetModules();
+    }
   });
 });

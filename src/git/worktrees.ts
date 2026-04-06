@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { readdir, realpath, rm } from 'node:fs/promises';
 
 import { simpleGit, type GitResponseError, type MergeSummary, type SimpleGit } from 'simple-git';
@@ -25,12 +26,19 @@ export interface MergeConflictDetail {
   reason: string;
 }
 
+export interface AutoStashResult {
+  created: boolean;
+  restored: boolean;
+  recoveryMessage: string | null;
+}
+
 export interface MergeSuccess {
   status: 'merged';
   branch: string;
   preMergeCommit: string;
   mergeCommit: string;
   editSummary: EditSummary;
+  autoStash?: AutoStashResult;
 }
 
 export interface StagedMergeSuccess {
@@ -54,6 +62,7 @@ export interface MergeConflict {
   branch: string;
   preMergeCommit: string;
   conflicts: MergeConflictDetail[];
+  autoStash?: AutoStashResult;
 }
 
 export type MergeBranchResult = MergeSuccess | MergeConflict;
@@ -91,7 +100,134 @@ export interface ReusableExecutionCommit {
   worktreePath: string;
 }
 
+interface ManagedStashEntry {
+  oid: string;
+  message: string;
+}
+
+interface StashListEntry {
+  ref: string;
+  oid: string;
+  subject: string;
+}
+
 const createGit = (baseDir: string): SimpleGit => simpleGit(baseDir);
+const createNoAutoStashResult = (): AutoStashResult => ({
+  created: false,
+  restored: true,
+  recoveryMessage: null
+});
+
+const listStashEntries = async (git: SimpleGit): Promise<StashListEntry[]> => {
+  const output = await git.raw(['stash', 'list', '--format=%gd%x00%H%x00%gs']);
+
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      const [ref, oid, subject] = line.split('\0');
+      if (!ref || !oid || subject === undefined) {
+        return [];
+      }
+
+      return [{
+        ref,
+        oid,
+        subject
+      }];
+    });
+};
+
+const createAutoStash = async (git: SimpleGit, branch: string): Promise<ManagedStashEntry | null> => {
+  const message = `openweft: auto-stash before merging ${branch} [${randomUUID()}]`;
+  await git.stash(['push', '-u', '-m', message]);
+
+  const matchingEntry = (await listStashEntries(git)).find((entry) => entry.subject.includes(message));
+  if (!matchingEntry) {
+    return null;
+  }
+
+  return {
+    oid: matchingEntry.oid,
+    message
+  };
+};
+
+const buildAutoStashRecoveryMessage = (
+  managedStash: ManagedStashEntry,
+  restored: boolean
+): string => {
+  const action = restored
+    ? 'restored your auto-stashed changes but could not remove the stash entry'
+    : 'could not restore your auto-stashed changes cleanly after merging';
+
+  return `OpenWeft ${action}. Look for "${managedStash.message}" in \`git stash list\` and recover it manually if needed.`;
+};
+
+const restoreAutoStash = async (
+  git: SimpleGit,
+  managedStash: ManagedStashEntry | null
+): Promise<AutoStashResult> => {
+  if (!managedStash) {
+    return createNoAutoStashResult();
+  }
+
+  try {
+    await git.raw(['stash', 'apply', managedStash.oid]);
+  } catch {
+    return {
+      created: true,
+      restored: false,
+      recoveryMessage: buildAutoStashRecoveryMessage(managedStash, false)
+    };
+  }
+
+  const matchingEntry = (await listStashEntries(git)).find((entry) => entry.oid === managedStash.oid);
+  if (!matchingEntry) {
+    return {
+      created: true,
+      restored: true,
+      recoveryMessage: null
+    };
+  }
+
+  try {
+    await git.stash(['drop', matchingEntry.ref]);
+    return {
+      created: true,
+      restored: true,
+      recoveryMessage: null
+    };
+  } catch {
+    return {
+      created: true,
+      restored: true,
+      recoveryMessage: buildAutoStashRecoveryMessage(managedStash, true)
+    };
+  }
+};
+
+const toError = (error: unknown): Error => (
+  error instanceof Error
+    ? error
+    : new Error(String(error))
+);
+
+const appendAutoStashRecoveryToError = (
+  error: unknown,
+  autoStash: AutoStashResult
+): Error => {
+  const baseError = toError(error);
+  if (!autoStash.recoveryMessage) {
+    return baseError;
+  }
+
+  return new Error(`${baseError.message} ${autoStash.recoveryMessage}`, {
+    cause: baseError
+  });
+};
+
 const normalizePathForComparison = (value: string): string => {
   const normalized = value.replace(/\\/g, '/');
   return process.platform === 'win32'
@@ -615,24 +751,33 @@ export const mergeBranchIntoCurrent = async (
   branch: string
 ): Promise<MergeBranchResult> => {
   const git = createGit(repoRoot);
+
+  // Stash any uncommitted changes so the merge doesn't fail on a dirty tree.
+  const statusSummary = await git.status();
+  const autoStash = statusSummary.files.length > 0
+    ? await createAutoStash(git, branch)
+    : null;
+
   const preMergeCommit = await getHeadCommit(repoRoot);
 
   try {
     await git.merge(['--no-ff', '--no-edit', branch]);
     const mergeCommit = await getHeadCommit(repoRoot);
+    const autoStashResult = await restoreAutoStash(git, autoStash);
 
     return {
       status: 'merged',
       branch,
       preMergeCommit,
       mergeCommit,
-      editSummary: await buildEditSummaryForRange(repoRoot, branch, preMergeCommit, mergeCommit)
+      editSummary: await buildEditSummaryForRange(repoRoot, branch, preMergeCommit, mergeCommit),
+      autoStash: autoStashResult
     };
   } catch (error) {
     const conflicts = extractMergeConflicts(error);
 
     if (conflicts.length === 0) {
-      throw error;
+      throw appendAutoStashRecoveryToError(error, await restoreAutoStash(git, autoStash));
     }
 
     await abortMerge(repoRoot).catch(() => {
@@ -640,14 +785,19 @@ export const mergeBranchIntoCurrent = async (
     });
 
     if (await isMergeInProgress(repoRoot)) {
-      throw new Error(`Failed to clean up merge state in ${repoRoot} after conflict on branch ${branch}.`);
+      throw appendAutoStashRecoveryToError(
+        new Error(`Failed to clean up merge state in ${repoRoot} after conflict on branch ${branch}.`),
+        await restoreAutoStash(git, autoStash)
+      );
     }
+    const autoStashResult = await restoreAutoStash(git, autoStash);
 
     return {
       status: 'conflict',
       branch,
       preMergeCommit,
-      conflicts
+      conflicts,
+      autoStash: autoStashResult
     };
   }
 };
