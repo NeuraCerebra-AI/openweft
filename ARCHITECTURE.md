@@ -40,7 +40,8 @@ Everything OpenWeft does fits inside one loop:
                    │          Promise.allSettled barrier        │
                    ▼                                          │
               ┌──────────┐    Priority-order merge (--no-ff)   │
-              │  Merge    │    Conflicts? Agent resolves        │
+              │  Merge    │    Dirty tree? Auto-stash safely    │
+              │           │    Conflicts? Agent resolves        │
               └────┬─────┘                                    │
                    │                                          │
                    ▼                                          │
@@ -101,7 +102,7 @@ src/
 │   └── loadConfig.ts       cosmiconfig loader
 │
 ├── git/                    Git operations
-│   └── worktrees.ts        Worktree lifecycle, --no-ff merge, conflict handling, gc
+│   └── worktrees.ts        Worktree lifecycle, dirty-tree-safe --no-ff merge, conflict handling, gc
 │
 └── fs/                     File system utilities
     ├── paths.ts            RuntimePaths (all .openweft/ subdirectories)

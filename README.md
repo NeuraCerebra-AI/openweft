@@ -37,14 +37,14 @@ openweft start
 $ openweft status
 
 Status: completed · Features: 3 total (3 completed)
-Estimated cost: ~$0.74 (384K input / 4K output tokens)
+Tokens: 384000 input / 4000 output
 Completed:
   [001] Add password reset flow (high 0.891)
   [002] Add audit log export (high 0.912)
   [003] Refactor auth middleware (medium 0.544)
 ```
 
-Features 1 and 2 ran in parallel — no file overlap. Feature 3 touched the same auth files, so OpenWeft queued it for the next batch and re-planned against the merged code. Three features, two batches, zero babysitting. (Cost shown is an estimate — OpenWeft uses your existing Claude or Codex subscription, not a separate API bill.)
+Features 1 and 2 ran in parallel — no file overlap. Feature 3 touched the same auth files, so OpenWeft queued it for the next batch and re-planned against the merged code. Three features, two batches, zero babysitting. By default, status shows token counts instead of an estimated dollar figure. If you want the old estimate back, you can re-enable it in config.
 
 <p align="center">
   <picture>
@@ -82,6 +82,7 @@ For the full architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 - **Two-stage prompt system.** Your raw request compiles into a production-grade worker brief (Prompt A → Prompt B). Agents investigate the codebase, brainstorm 5 approaches, score by risk, and verify downstream impact — not first-idea execution.
 - **Conflict-aware phasing.** Features that touch high-fan-in files (shared configs, route registries, index barrels) get scored and phased into their own execution group. Deterministic XState v5 state machine, not a chain of promises.
+- **Dirty-tree-safe merges.** If your main branch has staged, unstaged, or untracked local changes, OpenWeft auto-stashes them before integrating a feature branch, restores them afterward, and keeps recovery possible if manual stash resolution is ever needed.
 - **Three backends, one interface.** Codex CLI, Claude Code, and a deterministic mock share the same adapter contract. The mock powers `--dry-run` — validate the full pipeline without spending a cent.
 - **Crash recovery.** Kill the process, reboot, `Ctrl+C` at the worst moment. Zod-validated checkpoints reset in-flight features to `planned` and re-run them.
 - **Budget controls.** `pauseAtUsd` halts after the current phase. `stopAtUsd` is a hard stop. Both enforced at runtime. (These track estimated API-equivalent cost for visibility — your subscription rate doesn't change.)
@@ -100,7 +101,7 @@ openweft start --bg            detach — PID tracked, logs to .openweft/output.
 openweft start --stream        stream raw agent output to your terminal
 openweft start --tmux          launch in a tmux session
 openweft start --dry-run       full pipeline simulation with mock adapter, zero cost
-openweft status                queue state, tokens, cost, feature breakdown
+openweft status                queue state, tokens, feature breakdown
 openweft stop                  finish the current phase, then stop
 ```
 
@@ -140,6 +141,9 @@ openweft stop                  finish the current phase, then stop
   "concurrency": {
     "maxParallelAgents": 3,
     "staggerDelayMs": 5000
+  },
+  "status": {
+    "usageDisplay": "tokens"
   },
   "budget": {
     "warnAtUsd": null,
