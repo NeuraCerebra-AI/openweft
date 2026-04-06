@@ -32,7 +32,11 @@ import type { StoreApi } from 'zustand/vanilla';
 import { ApprovalController, runDryRunOrchestration, runRealOrchestration, StopController } from '../orchestrator/index.js';
 import { createDefaultNotificationDependencies } from '../notifications/index.js';
 import { loadCheckpoint } from '../state/index.js';
-import { renderStatusReport } from '../status/renderStatus.js';
+import { buildStatusDiagnosticsLines, renderStatusReport } from '../status/renderStatus.js';
+import {
+  collectRuntimeDiagnostics,
+  summarizeMergeDurability
+} from '../status/runtimeDiagnostics.js';
 import {
   buildTmuxSessionName,
   readTmuxMonitorEnv,
@@ -628,6 +632,21 @@ const cleanupBackgroundPidIfOwned = async (pidFile: string): Promise<void> => {
   }
 };
 
+const formatCleanupSummary = (
+  action: 'cleaned' | 'preserved' | 'nothing-to-clean' | 'cleanup-failed'
+): string => {
+  switch (action) {
+    case 'cleaned':
+      return 'codex-home cleaned';
+    case 'preserved':
+      return 'codex-home preserved';
+    case 'cleanup-failed':
+      return 'codex-home cleanup failed';
+    default:
+      return 'codex-home already absent';
+  }
+};
+
 const waitForBackgroundChildReady = async (input: {
   pidFile: string;
   spawnedPid: number;
@@ -871,6 +890,13 @@ export const createCommandHandlers = (
         status: result.checkpoint.status,
         plannedCount: result.plannedCount,
         mergedCount: result.mergedCount,
+        ...(result.finalizationSummary
+          ? {
+              finalHead: result.finalizationSummary.finalHead,
+              durabilitySummary: summarizeMergeDurability(result.finalizationSummary.mergeDurability),
+              cleanupSummary: formatCleanupSummary(result.finalizationSummary.runtimeCleanup.action)
+            }
+          : {})
       });
 
       // Wait for user to dismiss the completion screen (or timeout after 60s)
@@ -1474,7 +1500,9 @@ export const createCommandHandlers = (
         });
 
         resolvedDependencies.writeLine(
-          `Run complete: planned ${result.plannedCount}, merged ${result.mergedCount}, status ${result.checkpoint.status}.`
+          result.finalizationSummary
+            ? `Run complete: planned ${result.plannedCount}, merged ${result.mergedCount}, status ${result.checkpoint.status}, head ${result.finalizationSummary.finalHead ?? 'unknown'}, durability ${summarizeMergeDurability(result.finalizationSummary.mergeDurability)}, ${formatCleanupSummary(result.finalizationSummary.runtimeCleanup.action)}.`
+            : `Run complete: planned ${result.plannedCount}, merged ${result.mergedCount}, status ${result.checkpoint.status}.`
         );
       } finally {
         process.off('SIGINT', signalHandler);
@@ -1496,6 +1524,15 @@ export const createCommandHandlers = (
       const checkpointResult = await loadCheckpoint({
         checkpointFile: config.paths.checkpointFile,
         checkpointBackupFile: config.paths.checkpointBackupFile
+      });
+      const diagnostics = await collectRuntimeDiagnostics({
+        repoRoot: config.repoRoot,
+        checkpointFile: config.paths.checkpointFile,
+        checkpointBackupFile: config.paths.checkpointBackupFile,
+        codexHomeDir: config.paths.codexHomeDir,
+        completedFeatures: Object.values(checkpointResult.checkpoint?.features ?? {}).filter(
+          (feature) => feature.status === 'completed'
+        )
       });
       const background = await readBackgroundPid(
         config.paths.pidFile,
@@ -1531,6 +1568,11 @@ export const createCommandHandlers = (
             usageLabel,
             usageValue,
             agents,
+            checkpointSource: checkpointResult.source,
+            diagnosticLines: buildStatusDiagnosticsLines({
+              checkpointSource: checkpointResult.source,
+              diagnostics
+            }),
             pendingRequests: pendingQueue,
           })
         );
@@ -1543,6 +1585,7 @@ export const createCommandHandlers = (
           checkpointSource: checkpointResult.source,
           queueContent,
           usageDisplay: config.status.usageDisplay,
+          diagnostics,
           background
         }).trimEnd()
       );

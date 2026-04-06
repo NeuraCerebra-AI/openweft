@@ -2,6 +2,11 @@ import { createEmptyCostTotals } from '../domain/costs.js';
 import { parseQueueFile, summarizeQueueRequest } from '../domain/queue.js';
 import type { PriorityTier } from '../domain/primitives.js';
 import type { OrchestratorCheckpoint, FeatureCheckpoint } from '../state/checkpoint.js';
+import {
+  summarizeCurrentHeadCheck,
+  summarizeRuntimeArtifacts,
+  type RuntimeDiagnostics
+} from './runtimeDiagnostics.js';
 
 const formatPriority = (score: number | null | undefined, tier: PriorityTier | null | undefined): string => {
   if (score === null || score === undefined || tier === null || tier === undefined) {
@@ -75,6 +80,7 @@ export const renderStatusReport = (input: {
   checkpointSource?: 'primary' | 'backup' | 'none';
   queueContent: string;
   usageDisplay?: 'tokens' | 'estimated-cost';
+  diagnostics?: RuntimeDiagnostics;
   background?: {
     pid: number;
     alive: boolean;
@@ -119,5 +125,36 @@ export const renderStatusReport = (input: {
     );
   }
 
+  lines.push(
+    ...buildStatusDiagnosticsLines({
+      checkpointSource: input.checkpointSource,
+      diagnostics: input.diagnostics
+    })
+  );
+
   return `${lines.join('\n')}\n`;
+};
+
+export const buildStatusDiagnosticsLines = (input: {
+  checkpointSource: 'primary' | 'backup' | 'none' | undefined;
+  diagnostics: RuntimeDiagnostics | undefined;
+}): string[] => {
+  if (!input.diagnostics) {
+    return [];
+  }
+
+  const lines = [
+    `Primary Checkpoint Updated: ${input.diagnostics.checkpointTimestamps.primaryUpdatedAt ?? 'unknown'}`,
+    `Backup Checkpoint Updated: ${input.diagnostics.checkpointTimestamps.backupUpdatedAt ?? 'missing'}`
+  ];
+
+  if (input.checkpointSource === 'backup') {
+    lines.push('Backup Semantics: previous snapshot by design');
+  }
+
+  lines.push(`Current HEAD: ${input.diagnostics.headCommit ?? 'unknown'}`);
+  lines.push(`Current HEAD Check: ${summarizeCurrentHeadCheck(input.diagnostics)}`);
+  lines.push(`Runtime Artifacts: ${summarizeRuntimeArtifacts(input.diagnostics)}`);
+
+  return lines;
 };

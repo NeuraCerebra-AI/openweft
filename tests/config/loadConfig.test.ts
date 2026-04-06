@@ -21,7 +21,11 @@ describe('loadOpenWeftConfig', () => {
     expect(config.status).toEqual({
       usageDisplay: 'tokens'
     });
+    expect(config.runtime).toEqual({
+      codexHomeRetention: 'on-success-clean'
+    });
     expect(config.paths.openweftDir).toBe(path.join(tempDirectory, '.openweft'));
+    expect(config.paths.codexHomeDir).toBe(path.join(tempDirectory, '.openweft', 'codex-home'));
     expect(config.paths.queueFile).toBe(path.join(tempDirectory, 'feature_requests', 'queue.txt'));
     expect(configHash).toBe(createConfigHash(config));
   });
@@ -112,7 +116,26 @@ describe('loadOpenWeftConfig', () => {
     });
   });
 
-  it('changes the config hash when effort, approval, or status usage display changes', async () => {
+  it('loads an explicit runtime codex-home retention override', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-runtime-'));
+    await writeFile(
+      path.join(tempDirectory, '.openweftrc.json'),
+      JSON.stringify({
+        runtime: {
+          codexHomeRetention: 'preserve'
+        }
+      }),
+      'utf8'
+    );
+
+    const { config } = await loadOpenWeftConfig(tempDirectory);
+
+    expect(config.runtime).toEqual({
+      codexHomeRetention: 'preserve'
+    });
+  });
+
+  it('changes the config hash when effort, approval, status usage display, or runtime policy changes', async () => {
     const defaults = getDefaultConfig();
 
     const approvalHash = createConfigHash({
@@ -132,10 +155,17 @@ describe('loadOpenWeftConfig', () => {
         usageDisplay: 'estimated-cost'
       }
     });
+    const runtimeHash = createConfigHash({
+      ...defaults,
+      runtime: {
+        codexHomeRetention: 'preserve'
+      }
+    });
 
     expect(approvalHash).not.toBe(createConfigHash(defaults));
     expect(effortHash).not.toBe(createConfigHash(defaults));
     expect(statusHash).not.toBe(createConfigHash(defaults));
+    expect(runtimeHash).not.toBe(createConfigHash(defaults));
   });
 
   it('formats invalid config schema errors with the config file path', async () => {
@@ -232,5 +262,21 @@ describe('loadOpenWeftConfig', () => {
     );
 
     await expect(loadOpenWeftConfig(tempDirectory)).rejects.toThrow(/status\.usageDisplay/);
+  });
+
+  it('rejects invalid runtime codex-home retention values', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-invalid-runtime-'));
+    await writeFile(
+      path.join(tempDirectory, '.openweftrc.json'),
+      JSON.stringify({
+        ...getDefaultConfig(),
+        runtime: {
+          codexHomeRetention: 'delete-it'
+        }
+      }),
+      'utf8'
+    );
+
+    await expect(loadOpenWeftConfig(tempDirectory)).rejects.toThrow(/runtime\.codexHomeRetention/);
   });
 });

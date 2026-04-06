@@ -250,10 +250,40 @@ export const App: React.FC<AppProps> = ({
   }
 
   if (state.completion !== null) {
-    const completionLabel = state.completion.status === 'completed' ? 'Run complete' : 'Run finished';
-    const completionColor = state.completion.status === 'completed'
-      ? catppuccinMocha.colors.green
-      : catppuccinMocha.colors.yellow;
+    const completionPresentation = (() => {
+      switch (state.completion.status) {
+        case 'completed':
+          return {
+            label: 'Run complete',
+            statusDetail: 'Status completed',
+            color: catppuccinMocha.colors.green
+          };
+        case 'failed':
+          return {
+            label: 'Run failed',
+            statusDetail: 'Status failed',
+            color: catppuccinMocha.colors.red
+          };
+        case 'paused':
+          return {
+            label: 'Run paused',
+            statusDetail: 'Status paused',
+            color: catppuccinMocha.colors.yellow
+          };
+        case 'stopped':
+          return {
+            label: 'Run stopped',
+            statusDetail: 'Status stopped',
+            color: catppuccinMocha.colors.yellow
+          };
+        default:
+          return {
+            label: 'Run finished',
+            statusDetail: `Status ${state.completion.status}`,
+            color: catppuccinMocha.colors.yellow
+          };
+      }
+    })();
     const hasHistory = state.completedFeatures.length > 0;
 
     return (
@@ -274,10 +304,20 @@ export const App: React.FC<AppProps> = ({
             justifyContent="center"
             alignItems="center"
             borderStyle={catppuccinMocha.borders.panelActive}
-            borderColor={completionColor}
+            borderColor={completionPresentation.color}
           >
-            <Text bold color={completionColor}>{completionLabel}</Text>
+            <Text bold color={completionPresentation.color}>{completionPresentation.label}</Text>
+            <Text color={catppuccinMocha.colors.subtext}>{completionPresentation.statusDetail}</Text>
             <Text>{`Planned ${state.completion.plannedCount} · Merged ${state.completion.mergedCount}`}</Text>
+            {state.completion.finalHead !== undefined ? (
+              <Text>{`HEAD ${state.completion.finalHead ?? 'unknown'}`}</Text>
+            ) : null}
+            {state.completion.durabilitySummary ? (
+              <Text>{`Durability ${state.completion.durabilitySummary}`}</Text>
+            ) : null}
+            {state.completion.cleanupSummary ? (
+              <Text color={catppuccinMocha.colors.subtext}>{state.completion.cleanupSummary}</Text>
+            ) : null}
             <Text>{''}</Text>
             {hasHistory ? (
               <Text color={catppuccinMocha.colors.subtext}>{'Press h for history · q to exit'}</Text>

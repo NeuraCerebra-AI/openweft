@@ -56,7 +56,39 @@ describe('stream start behavior', () => {
     (runRealOrchestration as MockedFunction<typeof runRealOrchestration>).mockResolvedValue({
       checkpoint,
       plannedCount: 0,
-      mergedCount: 0
+      mergedCount: 0,
+      finalizationSummary: {
+        event: 'run.completed',
+        status: 'completed',
+        finalHead: 'abc123',
+        unresolvedFailedFeatureIds: [],
+        mergeDurability: {
+          totalCompletedFeatures: 0,
+          verifiedCount: 0,
+          checks: []
+        },
+        runtimeCleanup: {
+          policy: 'on-success-clean',
+          action: 'nothing-to-clean',
+          error: null
+        },
+        diagnostics: {
+          checkpointTimestamps: {
+            primaryUpdatedAt: '2026-03-24T00:00:00.000Z',
+            backupUpdatedAt: null
+          },
+          headCommit: 'abc123',
+          mergeDurability: {
+            totalCompletedFeatures: 0,
+            verifiedCount: 0,
+            checks: []
+          },
+          runtimeArtifacts: {
+            codexHomePresent: false,
+            residueFileCount: 0
+          }
+        }
+      }
     });
 
     const initProgram = buildProgram(
@@ -104,6 +136,6 @@ describe('stream start behavior', () => {
 
     await expect(program.parseAsync(['start', '--stream'], { from: 'user' })).resolves.toBeDefined();
     expect(runRealOrchestration).toHaveBeenCalledOnce();
-    expect(output.some((line) => line.includes('Run complete: planned 0, merged 0, status completed.'))).toBe(true);
+    expect(output.some((line) => line.includes('Run complete: planned 0, merged 0, status completed, head abc123, durability verified (0/0 completed features), codex-home already absent.'))).toBe(true);
   });
 });

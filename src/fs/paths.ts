@@ -3,6 +3,7 @@ import path from 'node:path';
 export interface RuntimePaths {
   repoRoot: string;
   openweftDir: string;
+  codexHomeDir: string;
   featureRequestsDir: string;
   queueFile: string;
   promptA: string;
@@ -37,11 +38,13 @@ export const buildRuntimePaths = (input: {
 }): RuntimePaths => {
   const repoRoot = path.resolve(input.repoRoot);
   const openweftDir = path.join(repoRoot, '.openweft');
+  const codexHomeDir = path.join(openweftDir, 'codex-home');
   const featureRequestsDir = resolveRelativePath(input.configDirectory, input.featureRequestsDir);
 
   return {
     repoRoot,
     openweftDir,
+    codexHomeDir,
     featureRequestsDir,
     queueFile: resolveRelativePath(input.configDirectory, input.queueFile),
     promptA: resolveRelativePath(input.configDirectory, input.promptA),

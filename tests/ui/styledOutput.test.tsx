@@ -41,6 +41,35 @@ describe('StatusCard', () => {
     expect(frame).toContain('Refactor auth middleware');
   });
 
+  it('renders checkpoint source and diagnostics summary when provided', () => {
+    const { lastFrame } = render(
+      <StatusCard
+        appName="OpenWeft"
+        phase="completed"
+        usageLabel="Tokens"
+        usageValue="10 input / 5 output"
+        checkpointSource="backup"
+        diagnosticLines={[
+          'Primary Checkpoint Updated: 2026-04-06T14:08:49.618Z',
+          'Backup Checkpoint Updated: 2026-04-06T14:08:49.547Z',
+          'Backup Semantics: previous snapshot by design',
+          'Current HEAD: abc123',
+          'Current HEAD Check: verified (1/1 completed features)',
+          'Runtime Artifacts: codex-home missing'
+        ]}
+        agents={[]}
+      />
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Checkpoint source: backup');
+    expect(frame).toContain('Primary Checkpoint Updated: 2026-04-06T14:08:49.618Z');
+    expect(frame).toContain('Backup Semantics: previous snapshot by design');
+    expect(frame).toContain('Current HEAD: abc123');
+    expect(frame).toContain('Current HEAD Check: verified (1/1 completed features)');
+    expect(frame).toContain('Runtime Artifacts: codex-home missing');
+  });
+
   it('registers the exit promise before unmounting static styled output', async () => {
     const events: string[] = [];
     let resolveExit: (() => void) | null = null;

@@ -61,6 +61,9 @@ export interface UIStore {
     status: string;
     plannedCount: number;
     mergedCount: number;
+    finalHead?: string | null;
+    durabilitySummary?: string;
+    cleanupSummary?: string;
   } | null;
   completionDismissed: boolean;
   completedFeatures: readonly CompletedFeature[];

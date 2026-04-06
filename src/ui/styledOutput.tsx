@@ -24,6 +24,8 @@ interface StatusCardProps {
   readonly usageValue: string;
   readonly agents: readonly { name: string; status: string }[];
   readonly pendingRequests?: readonly string[];
+  readonly checkpointSource?: 'primary' | 'backup' | 'none';
+  readonly diagnosticLines?: readonly string[];
 }
 
 export const StatusCard: React.FC<StatusCardProps> = ({
@@ -32,13 +34,21 @@ export const StatusCard: React.FC<StatusCardProps> = ({
   usageLabel,
   usageValue,
   agents,
-  pendingRequests = []
+  pendingRequests = [],
+  checkpointSource,
+  diagnosticLines = []
 }) => {
   const colors = catppuccinMocha.colors;
   return (
     <StyledCard borderColor={colors.blue}>
       <Text bold color={colors.blue}>{appName}</Text>
       <Text color={colors.subtext}>{`Phase: ${phase}  ${usageLabel}: ${usageValue}`}</Text>
+      {checkpointSource === 'backup' && (
+        <Text color={colors.yellow}>Checkpoint source: backup</Text>
+      )}
+      {diagnosticLines.map((line, index) => (
+        <Text key={`diagnostic-${index}`} color={colors.subtext}>{line}</Text>
+      ))}
       {pendingRequests.length > 0 && (
         <Text color={colors.yellow}>{`Pending queue: ${pendingRequests.length}`}</Text>
       )}

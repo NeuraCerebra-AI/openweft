@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -960,6 +960,16 @@ const createNotificationRecorder = () => {
   };
 };
 
+const readAuditEntries = async (
+  auditLogFile: string
+): Promise<Array<{ event: string; data?: Record<string, unknown> }>> => {
+  return (await readFile(auditLogFile, 'utf8'))
+    .trim()
+    .split('\n')
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as { event: string; data?: Record<string, unknown> });
+};
+
 describe('runRealOrchestration', () => {
   it('injects the current plan context into adjustment prompts and emits phase progress', async () => {
     const repoRoot = await createTempRepo();
@@ -1215,6 +1225,9 @@ describe('runRealOrchestration', () => {
 
     const { config, configHash } = await loadOpenWeftConfig(repoRoot);
     const adapter = new RecordingClaudeFailureAdapter();
+    const residueFile = path.join(config.paths.codexHomeDir, 'state.sqlite');
+    await mkdir(config.paths.codexHomeDir, { recursive: true });
+    await writeFile(residueFile, 'test\n', 'utf8');
 
     await expect(
       runRealOrchestration({
@@ -1228,6 +1241,17 @@ describe('runRealOrchestration', () => {
 
     expect(adapter.requests[0]?.stage).toBe('planning-s1');
     expect(adapter.requests[0]?.claudePermissionMode).toBe('plan');
+    await expect(access(residueFile)).resolves.toBeUndefined();
+
+    const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+    const terminalAudit = auditEntries.find((entry) => entry.event === 'run.failed');
+
+    expect(terminalAudit?.data).toEqual(expect.objectContaining({
+      status: 'failed',
+      runtimeCleanup: expect.objectContaining({
+        action: 'preserved'
+      })
+    }));
   });
 
   it('uses read-only repo-scoped turns for Codex planning and adjustment stages', async () => {
@@ -1346,8 +1370,8 @@ describe('runRealOrchestration', () => {
     const savedFeature = saved.checkpoint?.features['001'];
 
     expect(saved.source).toBe('primary');
-    expect(saved.checkpoint?.status).toBe('in-progress');
-    expect(saved.checkpoint?.currentState).toBe('planning');
+    expect(saved.checkpoint?.status).toBe('failed');
+    expect(saved.checkpoint?.currentState).toBe('idle');
     expect(savedFeature).toMatchObject({
       id: '001',
       request: 'add dashboard filters',
@@ -2877,8 +2901,15 @@ describe('runRealOrchestration', () => {
           entry.event === 'feature.execution.failed' &&
           entry.data?.featureId === '001'
       );
+      const terminalAudit = auditEntries.find((entry) => entry.event === 'run.failed');
 
       expect(executionFailureAudit?.data?.error).toBe('simulated worktree creation failure');
+      expect(terminalAudit?.data).toEqual(expect.objectContaining({
+        status: 'failed',
+        finalHead: expect.any(String),
+        mergeDurability: expect.any(Object),
+        runtimeCleanup: expect.any(Object)
+      }));
     } finally {
       vi.doUnmock('../../src/git/index.js');
       vi.resetModules();
@@ -3455,6 +3486,9 @@ describe('runRealOrchestration', () => {
 
       return {
         ...actual,
+        isCommitAncestor: vi.fn(async (_repoRoot: string, ancestorCommit: string) => {
+          return ancestorCommit === 'merge-commit';
+        }),
         mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
           mergeAttempts += 1;
           if (mergeAttempts === 1) {
@@ -3572,6 +3606,9 @@ describe('runRealOrchestration', () => {
       return {
         ...actual,
         abortMerge,
+        isCommitAncestor: vi.fn(async (_repoRoot: string, ancestorCommit: string) => {
+          return ancestorCommit === 'merge-commit';
+        }),
         mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
           mergeAttempts += 1;
           if (mergeAttempts <= 2) {
@@ -3676,6 +3713,9 @@ describe('runRealOrchestration', () => {
       return {
         ...actual,
         abortMerge,
+        isCommitAncestor: vi.fn(async (_repoRoot: string, ancestorCommit: string) => {
+          return ancestorCommit === 'merge-commit';
+        }),
         resetWorktreeToHead,
         mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
           mergeAttempts += 1;
@@ -3905,6 +3945,9 @@ describe('runRealOrchestration', () => {
     });
 
     const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const residueFile = path.join(config.paths.codexHomeDir, 'state.sqlite');
+    await mkdir(config.paths.codexHomeDir, { recursive: true });
+    await writeFile(residueFile, 'test\n', 'utf8');
 
     vi.resetModules();
     vi.doMock('../../src/git/index.js', async () => {
@@ -3944,9 +3987,337 @@ describe('runRealOrchestration', () => {
       checkpointBackupFile: config.paths.checkpointBackupFile
     });
 
+    expect(saved.checkpoint?.status).toBe('failed');
     expect(saved.checkpoint?.features['001']).toMatchObject({
       status: 'completed'
     });
+    await expect(access(residueFile)).resolves.toBeUndefined();
+
+    const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+    const terminalAudit = auditEntries.find((entry) => entry.event === 'run.failed');
+
+    expect(terminalAudit?.data).toEqual(expect.objectContaining({
+      status: 'failed',
+      runtimeCleanup: expect.objectContaining({
+        action: 'preserved'
+      })
+    }));
+  });
+
+  it('writes a terminal run.completed audit and cleans codex-home on success', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    await mkdir(config.paths.codexHomeDir, { recursive: true });
+    await writeFile(path.join(config.paths.codexHomeDir, 'state.sqlite'), 'test\n', 'utf8');
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new DeterministicScoringAdapter(),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    await expect(access(config.paths.codexHomeDir)).rejects.toThrow();
+
+    const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+    const terminalAudit = auditEntries.find((entry) => entry.event === 'run.completed');
+
+    expect(terminalAudit?.data).toEqual(expect.objectContaining({
+      status: 'completed',
+      plannedCount: 1,
+      mergedCount: 1,
+      finalHead: expect.any(String),
+      queue: expect.any(Object),
+      unresolvedFailedFeatureIds: [],
+      mergeDurability: expect.any(Object),
+      runtimeCleanup: expect.objectContaining({
+        action: 'cleaned'
+      })
+    }));
+  });
+
+  it('preserves codex-home on success when runtime policy is preserve', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      configOverrides: {
+        runtime: {
+          codexHomeRetention: 'preserve'
+        }
+      },
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const residueFile = path.join(config.paths.codexHomeDir, 'state.sqlite');
+    await mkdir(config.paths.codexHomeDir, { recursive: true });
+    await writeFile(residueFile, 'test\n', 'utf8');
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new DeterministicScoringAdapter(),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    await expect(access(residueFile)).resolves.toBeUndefined();
+
+    const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+    const terminalAudit = auditEntries.find((entry) => entry.event === 'run.completed');
+
+    expect(terminalAudit?.data).toEqual(expect.objectContaining({
+      runtimeCleanup: expect.objectContaining({
+        action: 'preserved'
+      })
+    }));
+  });
+
+  it('downgrades a completed run to failed when a completed feature has no merge commit', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+
+    vi.resetModules();
+    vi.doMock('../../src/status/runtimeDiagnostics.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/status/runtimeDiagnostics.js')>(
+        '../../src/status/runtimeDiagnostics.js'
+      );
+
+      return {
+        ...actual,
+        collectRuntimeDiagnostics: vi.fn(async () => ({
+          checkpointTimestamps: {
+            primaryUpdatedAt: '2026-04-06T14:08:49.618Z',
+            backupUpdatedAt: '2026-04-06T14:08:49.547Z'
+          },
+          headCommit: 'abc123',
+          mergeDurability: {
+            totalCompletedFeatures: 1,
+            verifiedCount: 0,
+            checks: [
+              {
+                featureId: '001',
+                mergeCommit: null,
+                result: 'missing-merge-commit'
+              }
+            ]
+          },
+          runtimeArtifacts: {
+            codexHomePresent: false,
+            residueFileCount: 0
+          }
+        }))
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runRealOrchestrationWithMissingMergeCommit } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithMissingMergeCommit({
+        config,
+        configHash,
+        adapter: new DeterministicScoringAdapter(),
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('failed');
+      expect(result.checkpoint.features['001']).toMatchObject({
+        status: 'failed',
+        lastError: expect.stringContaining('missing recorded merge commit')
+      });
+
+      const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+      const terminalAudit = auditEntries.find((entry) => entry.event === 'run.failed');
+
+      expect(terminalAudit?.data).toEqual(expect.objectContaining({
+        status: 'failed',
+        unresolvedFailedFeatureIds: ['001'],
+        mergeDurability: expect.objectContaining({
+          checks: expect.arrayContaining([
+            expect.objectContaining({
+              featureId: '001',
+              result: 'missing-merge-commit'
+            })
+          ])
+        })
+      }));
+    } finally {
+      vi.doUnmock('../../src/status/runtimeDiagnostics.js');
+      vi.resetModules();
+    }
+  });
+
+  it('downgrades a completed run to failed when final head no longer contains the completed merge commit', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+
+    vi.resetModules();
+    vi.doMock('../../src/status/runtimeDiagnostics.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/status/runtimeDiagnostics.js')>(
+        '../../src/status/runtimeDiagnostics.js'
+      );
+
+      return {
+        ...actual,
+        collectRuntimeDiagnostics: vi.fn(async () => ({
+          checkpointTimestamps: {
+            primaryUpdatedAt: '2026-04-06T14:08:49.618Z',
+            backupUpdatedAt: '2026-04-06T14:08:49.547Z'
+          },
+          headCommit: '86059188acacb2475a5bad1e3634f6f51f9b8062',
+          mergeDurability: {
+            totalCompletedFeatures: 1,
+            verifiedCount: 0,
+            checks: [
+              {
+                featureId: '001',
+                mergeCommit: 'ef7e12b2e42315b746794b4955a6f287e52ca1f3',
+                result: 'not-reachable'
+              }
+            ]
+          },
+          runtimeArtifacts: {
+            codexHomePresent: false,
+            residueFileCount: 0
+          }
+        }))
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runRealOrchestrationWithHeadDrift } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithHeadDrift({
+        config,
+        configHash,
+        adapter: new DeterministicScoringAdapter(),
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('failed');
+      expect(result.checkpoint.features['001']).toMatchObject({
+        status: 'failed',
+        lastError: expect.stringContaining('not reachable from final HEAD')
+      });
+
+      const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+      const terminalAudit = auditEntries.find((entry) => entry.event === 'run.failed');
+
+      expect(terminalAudit?.data).toEqual(expect.objectContaining({
+        status: 'failed',
+        finalHead: '86059188acacb2475a5bad1e3634f6f51f9b8062',
+        unresolvedFailedFeatureIds: ['001'],
+        mergeDurability: expect.objectContaining({
+          checks: expect.arrayContaining([
+            expect.objectContaining({
+              featureId: '001',
+              result: 'not-reachable'
+            })
+          ])
+        })
+      }));
+    } finally {
+      vi.doUnmock('../../src/status/runtimeDiagnostics.js');
+      vi.resetModules();
+    }
+  });
+
+  it('downgrades a completed run to failed when codex-home cleanup does not stick', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    await mkdir(config.paths.codexHomeDir, { recursive: true });
+    await writeFile(path.join(config.paths.codexHomeDir, 'state.sqlite'), 'test\n', 'utf8');
+
+    vi.resetModules();
+    vi.doMock('../../src/status/runtimeDiagnostics.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/status/runtimeDiagnostics.js')>(
+        '../../src/status/runtimeDiagnostics.js'
+      );
+
+      return {
+        ...actual,
+        collectRuntimeDiagnostics: vi.fn(async () => ({
+          checkpointTimestamps: {
+            primaryUpdatedAt: '2026-04-06T14:08:49.618Z',
+            backupUpdatedAt: '2026-04-06T14:08:49.547Z'
+          },
+          headCommit: 'abc123',
+          mergeDurability: {
+            totalCompletedFeatures: 1,
+            verifiedCount: 1,
+            checks: [
+              {
+                featureId: '001',
+                mergeCommit: 'abc123',
+                result: 'verified'
+              }
+            ]
+          },
+          runtimeArtifacts: {
+            codexHomePresent: true,
+            residueFileCount: 1
+          }
+        }))
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runRealOrchestrationWithStickyCleanupProbe } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithStickyCleanupProbe({
+        config,
+        configHash,
+        adapter: new DeterministicScoringAdapter(),
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('failed');
+
+      const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+      const terminalAudit = auditEntries.find((entry) => entry.event === 'run.failed');
+
+      expect(terminalAudit?.data).toEqual(expect.objectContaining({
+        status: 'failed',
+        runtimeCleanup: expect.objectContaining({
+          action: 'cleanup-failed'
+        })
+      }));
+    } finally {
+      vi.doUnmock('../../src/status/runtimeDiagnostics.js');
+      vi.resetModules();
+    }
   });
 
   it('recreates execution cleanly when a stale branch ref exists but the old worktree is gone', async () => {
@@ -4607,5 +4978,90 @@ ${TEST_LEDGER_SECTION}
       attempts: 0,
       lastError: null
     });
+  });
+
+  it('writes a terminal run.paused audit when the budget pause threshold is reached', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      configOverrides: {
+        budget: {
+          warnAtUsd: null,
+          pauseAtUsd: 0,
+          stopAtUsd: null
+        }
+      },
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new DeterministicScoringAdapter(),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('paused');
+
+    const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+    const terminalAudit = auditEntries.find((entry) => entry.event === 'run.paused');
+
+    expect(terminalAudit?.data).toEqual(expect.objectContaining({
+      status: 'paused',
+      mergedCount: 1,
+      plannedCount: 1,
+      runtimeCleanup: expect.objectContaining({
+        action: 'preserved'
+      })
+    }));
+  });
+
+  it('writes a terminal run.stopped audit and preserves codex-home on stop', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters', 'add export controls']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const stopController = new StopController();
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+    const residueFile = path.join(config.paths.codexHomeDir, 'state.sqlite');
+    await mkdir(config.paths.codexHomeDir, { recursive: true });
+    await writeFile(residueFile, 'test\n', 'utf8');
+
+    adapter.runTurn = async (request) => {
+      const result = await originalRunTurn(request);
+      if (request.stage === 'planning-s2' && request.featureId === '001') {
+        stopController.request('keyboard');
+      }
+      return result;
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      stopController,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('stopped');
+    await expect(access(residueFile)).resolves.toBeUndefined();
+
+    const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+    const terminalAudit = auditEntries.find((entry) => entry.event === 'run.stopped');
+
+    expect(terminalAudit?.data).toEqual(expect.objectContaining({
+      status: 'stopped',
+      runtimeCleanup: expect.objectContaining({
+        action: 'preserved'
+      })
+    }));
   });
 });

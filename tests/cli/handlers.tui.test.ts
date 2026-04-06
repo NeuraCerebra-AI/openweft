@@ -13,6 +13,21 @@ type StartResult = {
   checkpoint: { status: string };
   mergedCount: number;
   plannedCount: number;
+  finalizationSummary?: {
+    finalHead: string | null;
+    mergeDurability: {
+      totalCompletedFeatures: number;
+      verifiedCount: number;
+      checks: readonly {
+        featureId: string;
+        mergeCommit: string | null;
+        result: 'verified' | 'missing-merge-commit' | 'not-reachable';
+      }[];
+    };
+    runtimeCleanup: {
+      action: 'cleaned' | 'preserved' | 'nothing-to-clean' | 'cleanup-failed';
+    };
+  };
 };
 
 interface CapturedRuntimeInput {
@@ -318,7 +333,24 @@ describe('TTY start handler', () => {
     finishRun({
       checkpoint: { status: 'completed' },
       mergedCount: 1,
-      plannedCount: 1
+      plannedCount: 1,
+      finalizationSummary: {
+        finalHead: 'abc123',
+        mergeDurability: {
+          totalCompletedFeatures: 1,
+          verifiedCount: 1,
+          checks: [
+            {
+              featureId: '001',
+              mergeCommit: 'abc123',
+              result: 'verified'
+            }
+          ]
+        },
+        runtimeCleanup: {
+          action: 'cleaned'
+        }
+      }
     });
 
     const store = harness.getStore();
@@ -331,6 +363,9 @@ describe('TTY start handler', () => {
       status: 'completed',
       mergedCount: 1,
       plannedCount: 1,
+      finalHead: 'abc123',
+      durabilitySummary: 'verified (1/1 completed features)',
+      cleanupSummary: 'codex-home cleaned'
     });
     expect(harness.unmount).not.toHaveBeenCalled();
 

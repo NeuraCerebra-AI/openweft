@@ -140,6 +140,9 @@ describe('command handlers', () => {
     await handlers.launch();
 
     expect(await readFile(path.join(repoRoot, '.openweftrc.json'), 'utf8')).toContain('"backend"');
+    expect(await readFile(path.join(repoRoot, '.openweftrc.json'), 'utf8')).toContain(
+      '"codexHomeRetention": "on-success-clean"'
+    );
     expect(await readFile(path.join(repoRoot, 'prompts', 'prompt-a.md'), 'utf8')).toContain(
       '{{USER_REQUEST}}'
     );
@@ -194,6 +197,41 @@ describe('command handlers', () => {
     }).launch();
 
     expect(output.join('\n')).toContain('Background: running (PID 4242)');
+  });
+
+  it('renders shutdown diagnostics in the plain-text status command output', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-status-diagnostics-'));
+    const output: string[] = [];
+    const program = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        })
+      })
+    );
+
+    await program.parseAsync(['init'], { from: 'user' });
+
+    output.length = 0;
+    await program.parseAsync(['status'], { from: 'user' });
+
+    const report = output.join('\n');
+    expect(report).toContain('Status: idle');
+    expect(report).toContain('Primary Checkpoint Updated:');
+    expect(report).toContain('Backup Checkpoint Updated:');
+    expect(report).toContain('Current HEAD: unknown');
+    expect(report).toContain('Current HEAD Check: verified (0/0 completed features)');
+    expect(report).toContain('Runtime Artifacts: codex-home missing');
   });
 
   it('scaffolds starter prompt files on init without overwriting existing prompts', async () => {

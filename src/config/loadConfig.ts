@@ -41,6 +41,7 @@ export const createConfigHash = (config: OpenWeftConfig | ResolvedOpenWeftConfig
     concurrency: config.concurrency,
     rateLimits: config.rateLimits,
     status: config.status,
+    runtime: config.runtime,
     budget: config.budget
   });
 
@@ -119,6 +120,10 @@ const mergeConfigWithDefaults = (rawConfig: unknown): OpenWeftConfig => {
     status: {
       ...DEFAULT_OPENWEFT_CONFIG.status,
       ...input.status
+    },
+    runtime: {
+      ...DEFAULT_OPENWEFT_CONFIG.runtime,
+      ...input.runtime
     },
     budget: {
       ...DEFAULT_OPENWEFT_CONFIG.budget,

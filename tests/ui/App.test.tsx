@@ -77,15 +77,47 @@ describe('App', () => {
 
   it('renders a completion summary when the run finishes', () => {
     const store = createUIStore();
-    store.getState().setCompletion({ status: 'completed', plannedCount: 2, mergedCount: 2 });
+    store.getState().setCompletion({
+      status: 'completed',
+      plannedCount: 2,
+      mergedCount: 2,
+      finalHead: 'abc123',
+      durabilitySummary: 'verified (2/2 completed features)',
+      cleanupSummary: 'codex-home cleaned'
+    });
 
     const { lastFrame } = render(<App store={store} />);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('Run complete');
+    expect(frame).toContain('Status completed');
     expect(frame).toContain('Planned 2');
     expect(frame).toContain('Merged 2');
+    expect(frame).toContain('HEAD abc123');
+    expect(frame).toContain('Durability verified (2/2 completed features)');
+    expect(frame).toContain('codex-home cleaned');
     expect(frame).toContain('Press q to exit');
+  });
+
+  it('renders an explicit failed completion summary when the run ends unsuccessfully', () => {
+    const store = createUIStore();
+    store.getState().setCompletion({
+      status: 'failed',
+      plannedCount: 2,
+      mergedCount: 1,
+      finalHead: 'def456',
+      durabilitySummary: 'FAILED (001 not reachable from current HEAD)',
+      cleanupSummary: 'codex-home preserved for inspection'
+    });
+
+    const { lastFrame } = render(<App store={store} />);
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('Run failed');
+    expect(frame).toContain('Status failed');
+    expect(frame).toContain('HEAD def456');
+    expect(frame).toContain('FAILED (001 not reachable from current HEAD)');
+    expect(frame).toContain('codex-home preserved for inspection');
   });
 
   it('shows the active backend, model, and effort in the dashboard status bar', () => {

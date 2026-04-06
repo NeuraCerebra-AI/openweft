@@ -296,6 +296,25 @@ export const getHeadCommit = async (repoRoot: string): Promise<string> => {
   return createGit(repoRoot).revparse(['HEAD']);
 };
 
+export const isCommitAncestor = async (
+  repoRoot: string,
+  ancestorCommit: string,
+  descendantCommit: string
+): Promise<boolean> => {
+  const normalizedAncestor = ancestorCommit.trim();
+  const normalizedDescendant = descendantCommit.trim();
+  if (!normalizedAncestor || !normalizedDescendant) {
+    return false;
+  }
+
+  try {
+    await createGit(repoRoot).raw(['merge-base', '--is-ancestor', normalizedAncestor, normalizedDescendant]);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const listWorktrees = async (repoRoot: string): Promise<WorktreeRecord[]> => {
   const output = await createGit(repoRoot).raw(['worktree', 'list', '--porcelain']);
   return parsePorcelainWorktrees(output);

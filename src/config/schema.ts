@@ -36,10 +36,17 @@ export const BudgetConfigSchema = z
   .strict();
 
 export const StatusUsageDisplaySchema = z.enum(['tokens', 'estimated-cost']);
+export const CodexHomeRetentionSchema = z.enum(['on-success-clean', 'preserve']);
 
 export const StatusConfigSchema = z
   .object({
     usageDisplay: StatusUsageDisplaySchema
+  })
+  .strict();
+
+export const RuntimeConfigSchema = z
+  .object({
+    codexHomeRetention: CodexHomeRetentionSchema
   })
   .strict();
 
@@ -90,6 +97,7 @@ export const OpenWeftConfigSchema = z
       })
       .strict(),
     status: StatusConfigSchema,
+    runtime: RuntimeConfigSchema,
     budget: BudgetConfigSchema
   })
   .strict();
@@ -137,6 +145,9 @@ export const DEFAULT_OPENWEFT_CONFIG: OpenWeftConfig = {
   },
   status: {
     usageDisplay: 'tokens'
+  },
+  runtime: {
+    codexHomeRetention: 'on-success-clean'
   },
   budget: {
     warnAtUsd: null,

@@ -69,6 +69,7 @@ import { getTmuxSlotLogFile, type TmuxMonitor } from '../tmux/index.js';
 import { OPENWEFT_VERSION } from '../version.js';
 import { appendAuditEntry } from './audit.js';
 import { TurnApprovalError } from './approval.js';
+import { finalizeRun, type TerminalRunSummary } from './finalization.js';
 import { repairPlanMarkdownIfNeeded } from './planMarkdown.js';
 import type { ApprovalController } from './approval.js';
 import type { StopController } from './stop.js';
@@ -163,6 +164,7 @@ interface OrchestratorOutput {
   checkpoint: OrchestratorCheckpoint;
   mergedCount: number;
   plannedCount: number;
+  finalizationSummary?: TerminalRunSummary;
 }
 
 interface RealRunInput {
@@ -485,7 +487,7 @@ const buildCodexHomeDir = (
   featureId: string,
   scope: 'planning-s1' | 'planning-s2' | 'session'
 ): string => {
-  return path.join(config.paths.openweftDir, 'codex-home', `${featureId}-${scope}`);
+  return path.join(config.paths.codexHomeDir, `${featureId}-${scope}`);
 };
 
 const shouldPauseForBudget = (config: ResolvedOpenWeftConfig, checkpoint: OrchestratorCheckpoint): boolean => {
@@ -807,6 +809,21 @@ const loadOrCreateCheckpoint = async (
   const repoHeadCommit = (await repoGit.revparse(['HEAD'])).trim();
   const resumeReanalysisPhaseIndex =
     checkpoint.pendingMergeSummaries.length > 0 ? (checkpoint.currentPhase?.index ?? 0) : null;
+  const hasResumableFailures = Object.values(checkpoint.features).some(
+    (feature) => feature.status === 'failed' && feature.rerunEligible
+  );
+
+  if (
+    checkpoint.status === 'failed' &&
+    (
+      checkpoint.pendingMergeSummaries.length > 0 ||
+      countFeatureStatuses(checkpoint, ['planned', 'executing']) > 0 ||
+      hasResumableFailures
+    )
+  ) {
+    checkpoint.status = 'in-progress';
+    needsCheckpointSave = true;
+  }
 
   if (existing.checkpoint.currentState === 'planning') {
     const existingQueueContent = (await readTextFileIfExists(input.config.paths.queueFile)) ?? '';
@@ -3525,7 +3542,41 @@ export const runRealOrchestration = async (
     }
   });
   emitProgress(input, `OpenWeft run starting with backend ${input.adapter.backend}.`);
-  return runRealWorkflow(input);
+  try {
+    const workflowResult = await runRealWorkflow(input);
+    const finalizationSummary = await finalizeRun({
+      config: input.config,
+      checkpoint: workflowResult.checkpoint,
+      plannedCount: workflowResult.plannedCount,
+      mergedCount: workflowResult.mergedCount
+    });
+
+    workflowResult.checkpoint.status = finalizationSummary.status;
+
+    return {
+      ...workflowResult,
+      finalizationSummary
+    };
+  } catch (error) {
+    const restoredCheckpoint = await loadCheckpoint({
+      checkpointFile: input.config.paths.checkpointFile,
+      checkpointBackupFile: input.config.paths.checkpointBackupFile
+    });
+    const checkpoint = restoredCheckpoint.checkpoint ?? createFreshCheckpoint(input.configHash);
+    checkpoint.status = 'failed';
+    checkpoint.currentState = 'idle';
+    checkpoint.currentPhase = null;
+    await saveCheckpointSnapshot(input.config, checkpoint);
+
+    await finalizeRun({
+      config: input.config,
+      checkpoint,
+      plannedCount: Object.keys(checkpoint.features).length,
+      mergedCount: Object.values(checkpoint.features).filter((feature) => feature.status === 'completed').length
+    });
+
+    throw error;
+  }
 };
 
 export { buildPlanAdjustmentPrompt };

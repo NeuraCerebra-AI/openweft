@@ -111,7 +111,9 @@ describe('openweft CLI real mock flow', () => {
     await runCli(repoRoot, ['add', 'add export controls']);
 
     const startOutput = await runCli(repoRoot, ['start']);
-    expect(startOutput).toContain('Run complete: planned 2, merged 2, status completed.');
+    expect(startOutput.join('\n')).toMatch(
+      /Run complete: planned 2, merged 2, status completed, head [0-9a-f]{40}, durability verified \(2\/2 completed features\), codex-home already absent\./
+    );
 
     const queueContent = await readFile(path.join(repoRoot, 'feature_requests', 'queue.txt'), 'utf8');
     expect(queueContent).toContain('# openweft queue format: v1');
@@ -167,7 +169,9 @@ describe('openweft CLI real mock flow', () => {
 
     await runCli(repoRoot, ['add', 'add planner ledger coverage']);
     const startOutput = await runCli(repoRoot, ['start']);
-    expect(startOutput).toContain('Run complete: planned 1, merged 1, status completed.');
+    expect(startOutput.join('\n')).toMatch(
+      /Run complete: planned 1, merged 1, status completed, head [0-9a-f]{40}, durability verified \(1\/1 completed features\), codex-home already absent\./
+    );
 
     const checkpoint = JSON.parse(
       await readFile(path.join(repoRoot, '.openweft', 'checkpoint.json'), 'utf8')
