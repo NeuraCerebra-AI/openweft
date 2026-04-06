@@ -32,7 +32,7 @@ export interface WizardCallbacks {
   }) => Promise<void>;
   onQueueRequest: (request: string) => Promise<void>;
   onRedetectBackends: () => Promise<{ codex: BackendDetection; claude: BackendDetection }>;
-  onOpenSuperpowersRepo: () => Promise<void>;
+  onOpenSuperpowersRepo: (backend: 'codex' | 'claude') => Promise<void>;
 }
 
 /**

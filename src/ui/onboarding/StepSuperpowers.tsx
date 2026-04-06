@@ -17,6 +17,20 @@ export interface StepSuperpowersProps {
 type SuperpowersAction = 'skip' | 'open-repo';
 
 const SUPERPOWERS_REPO_URL = 'github.com/obra/superpowers';
+const SUPERPOWERS_CONTENT = {
+  codex: {
+    supportLine: 'Codex supports it through native skill discovery.',
+    installLine: 'It installs in your local Codex setup, not this repo.',
+    nextStepLine: 'After installing, restart Codex, then start OpenWeft again.',
+    actionLabel: 'Open Codex install guide',
+  },
+  claude: {
+    supportLine: 'Claude supports it through the plugin marketplace.',
+    installLine: 'It installs in your local Claude setup, not this repo.',
+    nextStepLine: 'After installing, start a new OpenWeft/Claude session.',
+    actionLabel: 'Open Superpowers install guide',
+  },
+} as const;
 
 export const StepSuperpowers: React.FC<StepSuperpowersProps> = ({
   selectedBackend,
@@ -26,8 +40,7 @@ export const StepSuperpowers: React.FC<StepSuperpowersProps> = ({
   onOpenRepo,
 }) => {
   const { colors } = useTheme();
-  const backendLabel = selectedBackend === 'codex' ? 'Codex' : 'Claude';
-  const sessionLabel = selectedBackend === 'codex' ? 'OpenWeft/Codex' : 'OpenWeft/Claude';
+  const content = SUPERPOWERS_CONTENT[selectedBackend];
   const [status, setStatus] = useState<{ level: 'info' | 'error'; message: string } | null>(null);
   const [isOpening, setIsOpening] = useState(false);
   const [selectorKey, setSelectorKey] = useState(0);
@@ -58,7 +71,7 @@ export const StepSuperpowers: React.FC<StepSuperpowersProps> = ({
       await onOpenRepo();
       setStatus({
         level: 'info',
-        message: 'Opened the GitHub repo in your browser. Press Enter to skip or open it again.'
+        message: 'Opened the install guide in your browser. Press Enter to skip or open it again.'
       });
     } catch {
       setStatus({
@@ -80,14 +93,13 @@ export const StepSuperpowers: React.FC<StepSuperpowersProps> = ({
       </Text>
 
       <Box flexDirection="column" gap={0}>
-        <Text color={colors.text}>{`Popular workflow toolkit for ${backendLabel}, by Jesse Vincent.`}</Text>
+        <Text color={colors.text}>{'Popular workflow toolkit for Claude and Codex, by Jesse Vincent.'}</Text>
+        <Text color={colors.subtext}>{content.supportLine}</Text>
         <Text color={colors.subtext}>
-          {`It installs in your local ${backendLabel} agent/profile, not this repo.`}
+          {content.installLine}
         </Text>
         <Text color={colors.subtext}>{'OpenWeft works without it. Skip is the default.'}</Text>
-        <Text color={colors.subtext}>
-          {`After installing, start a new ${sessionLabel} session so it is recognized.`}
-        </Text>
+        <Text color={colors.subtext}>{content.nextStepLine}</Text>
         <Text color={colors.muted}>
           {`GitHub: ${SUPERPOWERS_REPO_URL} · If you already have it, ignore this note.`}
         </Text>
@@ -103,7 +115,7 @@ export const StepSuperpowers: React.FC<StepSuperpowersProps> = ({
         key={selectorKey}
         options={[
           { label: 'Skip — continue setup', value: 'skip' },
-          { label: 'Open GitHub repo in browser', value: 'open-repo' }
+          { label: content.actionLabel, value: 'open-repo' }
         ]}
         onSelect={(value) => {
           if (value === 'skip') {

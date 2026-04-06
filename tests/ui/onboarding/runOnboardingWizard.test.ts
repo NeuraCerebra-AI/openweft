@@ -452,7 +452,7 @@ describe('runOnboardingWizard', () => {
       });
     });
 
-    it('onOpenSuperpowersRepo opens the upstream GitHub homepage', async () => {
+    it('onOpenSuperpowersRepo opens the Codex install guide when asked for codex', async () => {
       const openExternalUrl = vi.fn().mockResolvedValue(undefined);
       const deps = makeDeps({ openExternalUrl });
       const captured = captureWithFullScreenProps();
@@ -460,7 +460,30 @@ describe('runOnboardingWizard', () => {
       await runOnboardingWizard(deps);
 
       expect(captured.callbacks).not.toBeNull();
-      await captured.callbacks!.onOpenSuperpowersRepo();
+      await (
+        captured.callbacks!.onOpenSuperpowersRepo as unknown as (
+          backend: 'codex' | 'claude'
+        ) => Promise<void>
+      )('codex');
+
+      expect(openExternalUrl).toHaveBeenCalledWith(
+        'https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.codex/INSTALL.md'
+      );
+    });
+
+    it('onOpenSuperpowersRepo opens the upstream install docs when asked for claude', async () => {
+      const openExternalUrl = vi.fn().mockResolvedValue(undefined);
+      const deps = makeDeps({ openExternalUrl });
+      const captured = captureWithFullScreenProps();
+
+      await runOnboardingWizard(deps);
+
+      expect(captured.callbacks).not.toBeNull();
+      await (
+        captured.callbacks!.onOpenSuperpowersRepo as unknown as (
+          backend: 'codex' | 'claude'
+        ) => Promise<void>
+      )('claude');
 
       expect(openExternalUrl).toHaveBeenCalledWith('https://github.com/obra/superpowers');
     });

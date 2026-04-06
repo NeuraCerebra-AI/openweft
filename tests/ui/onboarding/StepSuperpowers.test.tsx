@@ -30,16 +30,19 @@ describe('StepSuperpowers', () => {
 
     expect(frame).toContain('Optional: Superpowers');
     expect(frame).toContain('Jesse Vincent');
+    expect(frame).toContain('Claude and Codex');
     expect(frame).toContain('not this repo');
     expect(frame).toContain('OpenWeft works without it');
   });
 
-  it('renders skip as the default action and browser-open as the secondary action', () => {
+  it('renders skip as the default action and a backend-specific doc action for Codex', () => {
     const { lastFrame } = renderWithTheme(<StepSuperpowers {...defaultProps} />);
     const frame = lastFrame() ?? '';
 
     expect(frame).toContain('› Skip');
-    expect(frame).toContain('Open GitHub repo in browser');
+    expect(frame).toContain('native skill discovery');
+    expect(frame).toContain('restart Codex');
+    expect(frame).toContain('Open Codex install guide');
     expect(frame).toContain('↑↓ select');
     expect(frame).toContain('Enter confirm');
   });
@@ -50,8 +53,10 @@ describe('StepSuperpowers', () => {
     );
     const frame = lastFrame() ?? '';
 
-    expect(frame).toContain('Claude');
+    expect(frame).toContain('plugin marketplace');
+    expect(frame).toContain('local Claude setup');
     expect(frame).toContain('new OpenWeft/Claude session');
+    expect(frame).toContain('Open Superpowers install guide');
   });
 
   it('advances when Skip is confirmed', async () => {
@@ -67,7 +72,7 @@ describe('StepSuperpowers', () => {
     expect(onAdvance).toHaveBeenCalledOnce();
   });
 
-  it('opens the GitHub repo in the browser and stays on the slide', async () => {
+  it('opens the backend-specific docs in the browser and stays on the slide', async () => {
     const onOpenRepo = vi.fn().mockResolvedValue(undefined);
     const onAdvance = vi.fn();
     const { stdin, lastFrame } = renderWithTheme(
@@ -87,7 +92,7 @@ describe('StepSuperpowers', () => {
 
     expect(onOpenRepo).toHaveBeenCalledOnce();
     expect(onAdvance).not.toHaveBeenCalled();
-    expect(lastFrame() ?? '').toContain('Opened the GitHub repo in your browser');
+    expect(lastFrame() ?? '').toContain('Opened the install guide in your browser');
     expect(lastFrame() ?? '').toContain('› Skip');
   });
 

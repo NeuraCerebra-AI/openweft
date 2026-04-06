@@ -18,6 +18,8 @@ import {
 import type { OnboardingState, WizardCallbacks, WizardDependencies } from './types.js';
 
 const SUPERPOWERS_REPO_URL = 'https://github.com/obra/superpowers';
+const SUPERPOWERS_CODEX_INSTALL_URL =
+  'https://raw.githubusercontent.com/obra/superpowers/refs/heads/main/.codex/INSTALL.md';
 
 /**
  * Run the interactive onboarding wizard.
@@ -115,8 +117,10 @@ export async function runOnboardingWizard(
       return { codex: redetectedCodex, claude: redetectedClaude };
     },
 
-    onOpenSuperpowersRepo: async () => {
-      await deps.openExternalUrl(SUPERPOWERS_REPO_URL);
+    onOpenSuperpowersRepo: async (backend) => {
+      await deps.openExternalUrl(
+        backend === 'codex' ? SUPERPOWERS_CODEX_INSTALL_URL : SUPERPOWERS_REPO_URL
+      );
     },
   };
 

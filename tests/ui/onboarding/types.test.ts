@@ -49,7 +49,7 @@ describe('onboarding types', () => {
       onGitInit: async () => undefined,
       onRunInit: async (_selection) => undefined,
       onQueueRequest: async (_request: string) => undefined,
-      onOpenSuperpowersRepo: async () => undefined,
+      onOpenSuperpowersRepo: async (_backend) => undefined,
       onRedetectBackends: async () => ({
         codex: { installed: true, authenticated: true },
         claude: { installed: false, authenticated: false },
@@ -62,7 +62,9 @@ describe('onboarding types', () => {
       effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     }) => Promise<void>>();
     expectTypeOf(callbacks.onQueueRequest).toEqualTypeOf<(request: string) => Promise<void>>();
-    expectTypeOf(callbacks.onOpenSuperpowersRepo).toEqualTypeOf<() => Promise<void>>();
+    expectTypeOf(callbacks.onOpenSuperpowersRepo).toEqualTypeOf<
+      (backend: 'codex' | 'claude') => Promise<void>
+    >();
     expectTypeOf(callbacks.onRedetectBackends).toEqualTypeOf<() => Promise<{ codex: BackendDetection; claude: BackendDetection }>>();
   });
 });

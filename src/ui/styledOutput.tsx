@@ -20,17 +20,25 @@ export const renderStyledOutput = async (element: React.ReactElement): Promise<v
 interface StatusCardProps {
   readonly appName: string;
   readonly phase: string;
-  readonly cost: string;
+  readonly usageLabel: string;
+  readonly usageValue: string;
   readonly agents: readonly { name: string; status: string }[];
   readonly pendingRequests?: readonly string[];
 }
 
-export const StatusCard: React.FC<StatusCardProps> = ({ appName, phase, cost, agents, pendingRequests = [] }) => {
+export const StatusCard: React.FC<StatusCardProps> = ({
+  appName,
+  phase,
+  usageLabel,
+  usageValue,
+  agents,
+  pendingRequests = []
+}) => {
   const colors = catppuccinMocha.colors;
   return (
     <StyledCard borderColor={colors.blue}>
       <Text bold color={colors.blue}>{appName}</Text>
-      <Text color={colors.subtext}>{`Phase: ${phase}  Cost: ${cost}`}</Text>
+      <Text color={colors.subtext}>{`Phase: ${phase}  ${usageLabel}: ${usageValue}`}</Text>
       {pendingRequests.length > 0 && (
         <Text color={colors.yellow}>{`Pending queue: ${pendingRequests.length}`}</Text>
       )}

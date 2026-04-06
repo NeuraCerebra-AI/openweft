@@ -27,13 +27,15 @@ describe('StatusCard', () => {
       <StatusCard
         appName="OpenWeft"
         phase="planning"
-        cost="$0.0000"
+        usageLabel="Tokens"
+        usageValue="384000 input / 4000 output"
         pendingRequests={['Add dashboard filters include saved views', 'Refactor auth middleware']}
         agents={[]}
       />
     );
 
     const frame = lastFrame() ?? '';
+    expect(frame).toContain('Phase: planning  Tokens: 384000 input / 4000 output');
     expect(frame).toContain('Pending queue: 2');
     expect(frame).toContain('Add dashboard filters include saved views');
     expect(frame).toContain('Refactor auth middleware');
@@ -58,7 +60,15 @@ describe('StatusCard', () => {
       waitUntilExit,
     });
 
-    await renderStyledOutput(<StatusCard appName="OpenWeft" phase="completed" cost="$0.0000" agents={[]} />);
+    await renderStyledOutput(
+      <StatusCard
+        appName="OpenWeft"
+        phase="completed"
+        usageLabel="Cost"
+        usageValue="$0.0000"
+        agents={[]}
+      />
+    );
 
     expect(events).toEqual(['wait', 'unmount']);
     expect(unmount).toHaveBeenCalledTimes(1);

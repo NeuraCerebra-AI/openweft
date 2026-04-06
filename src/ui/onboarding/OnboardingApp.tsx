@@ -159,7 +159,7 @@ export const OnboardingApp: React.FC<OnboardingAppProps> = ({
             onAdvance={onAdvance}
             onBack={onBack}
             onExit={onExit}
-            onOpenRepo={callbacks.onOpenSuperpowersRepo}
+            onOpenRepo={async () => callbacks.onOpenSuperpowersRepo(backend)}
           />
         );
       }
