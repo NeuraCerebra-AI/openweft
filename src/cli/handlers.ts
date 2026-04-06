@@ -93,7 +93,7 @@ Write a **hyper-detailed, comprehensive, exhaustively verbose prompt** (saved in
 #### Codebase Investigation and Relevant Context Injection
 * In the prompt you create, you must instruct the model that **before any implementation planning or code changes**, it must first use a plethora of agents to analyze the relevant files in the codebase so its reasoning is grounded in the actual implementation rather than assumptions.
 * The prompt must be **densely grounded in relevant context** and should equip the target LLM with the information needed to reason accurately, plan effectively, and execute safely.
-* In the prompt's rules, explicitly instruct the target LLM to use **ULTRATHINK mode** for deep, careful, high-diligence reasoning.
+* In the prompt’s rules, explicitly instruct the target LLM to use **ULTRATHINK mode** for deep, careful, high-diligence reasoning.
 
 * The prompt must include:
   * relevant **file paths and line numbers**,
@@ -119,7 +119,7 @@ Write a **hyper-detailed, comprehensive, exhaustively verbose prompt** (saved in
 
 * The prompt should provide enough context to make the target LLM effective while still leaving the **core reasoning, diagnosis, planning, and implementation work** to the target LLM itself.
 
-#### 'Living Plan Ledger' Creation Directive
+#### ‘Living Plan Ledger’ Creation Directive
 <Living Plan Ledger>
 * In the prompt you create, you must instruct the model that **after completing the initial codebase research**, it must use the **Plan-Creation Brainstorming Instructions** below to determine the best implementation plan for accomplishing the goal.
 * It must then create a **Living Plan Ledger** Markdown file in \`./project_ledgers\`.
@@ -241,10 +241,16 @@ When in doubt for a sub-step, prefer launching **1 targeted verification agent**
 
 </Living Plan Ledger>
 
-### Debugging Request Trigger
-If the first draft prompt has a 75% confidence percentage it is a debugging request, include the following, adapting the wording contextually based on the request while retaining the spirit of the debugging execution workflow. You are INCLUDING this, while maintaining flexibility and intelligent creativity with the rest of the prompt. You will also use Context7 to saturate the prompt with relevant documentation code snippet quotes:
+### Debugging Guidelines
+Include the entire following as instruction guidelines when debugging, adapting the wording contextually based on the request while retaining the spirit of the debugging execution workflow. You are INCLUDING this, while maintaining flexibility and intelligent creativity with the rest of the prompt. You will also use Context7 to saturate the prompt with relevant documentation code snippet quotes:
+
+Keep the words in the ‘mandatory_wording’ xml exactly the same however.
 
 <debugging_guidelines>
+<mandatory_wording>
+If, during investigation or implementation, you encounter an integration failure, incorrect behavior, missing artifact, malformed output, broken downstream contract, failing test, or any situation where the correct implementation path is no longer obvious, switch into the following debugging workflow instead of making shallow guesses.
+</mandatory_wording>
+
 ### Phase 1: Error Sequence Analysis
 1. Trace the complete execution flow from initial input through all major components to the point where the error or incorrect behavior occurs.
 2. Identify each handoff point where data, control, or state passes between functions, modules, services, or external systems.
@@ -255,14 +261,14 @@ If the first draft prompt has a 75% confidence percentage it is a debugging requ
 7. Compare the current implementation against official documentation for any external APIs, libraries, frameworks, or protocols involved.
 8. Identify gaps between what the code expects to happen and what the system or dependencies actually guarantee or return.
 
-### Phase 2: Root Cause Hypothesis Formation
+### Phase 2: Root Cause Hypothesis Formation 
 1. Generate at least 5 distinct hypotheses for why the error or incorrect behavior is occurring.
 2. For each hypothesis, estimate probability (0–100%) based on evidence from logs, code inspection, and observed behavior.
 3. Rank hypotheses by likelihood × impact (how likely they are and how severely they affect the system).
 4. Identify which hypotheses can be tested immediately (e.g., via logging, small code changes, or reproduction steps) vs. those requiring more substantial changes or setup.
 5. Map dependencies between hypotheses (e.g., if H1 is true, H3 becomes more/less likely).
 
-### Phase 3: Fix Strategy Design
+### Phase 3: Fix Strategy Design 
 1. For the top 3 most likely hypotheses, design targeted fixes or mitigations.
 2. Identify potential side effects, regressions, or breaking changes associated with each fix.
 3. Design validation tests (unit, integration, end-to-end, or manual checks) that would conclusively demonstrate each fix works.
@@ -270,13 +276,13 @@ If the first draft prompt has a 75% confidence percentage it is a debugging requ
 5. Design or refine logging and telemetry that would make future diagnosis of similar issues faster and clearer.
 6. Identify opportunities to make the system more robust and resilient to variations in inputs, configuration, or external dependencies.
 
-### Phase 4: Implementation Planning
+### Phase 4: Implementation Planning 
 1. Break down the chosen fix (or set of fixes) into atomic, testable changes.
 2. Prioritize changes by risk and expected benefit (low-risk, high-value improvements first; higher-risk changes later).
 3. Identify which changes can be made and tested in parallel vs. those that must be applied sequentially.
 4. Plan targeted tests for each change, including what to test, how to test it, and the exact expected outcomes.
 5. Define explicit confidence thresholds: what evidence (passing tests, logs, metrics, user reports) will make you confident that the issue is resolved and no new critical bugs were introduced?
-6. Understand your eventual goal is to keep iteratively analyzing and debugging and testing and analyzing and debugging and testing until we reach ~95%+ confidence we have found the solution and it has been robustly implemented.
+6. Understand your eventual goal  is to keep iteratively analyzing and debugging and testing and analyzing and debugging and testing until we reach ~95%+ confidence we have found the solution and it has been robustly implemented. 
 </debugging_guidelines>
 
 ### Rules
@@ -285,6 +291,7 @@ If the first draft prompt has a 75% confidence percentage it is a debugging requ
 3. You must explicitly instruct the target LLM that workspace creation and git topology are owned by the orchestrator, not by the target LLM. The prompt you create must tell it to use the current assigned repository/worktree as its only workspace.
 4. You must explicitly instruct the target LLM that it must not create additional git worktrees, must not clone the repository elsewhere, must not create or switch to ad hoc branches unless explicitly instructed by the orchestrator, and must not relocate the task into another checkout or sibling repo.
 5. You must explicitly instruct the target LLM to treat workspace isolation as already solved and to focus instead on investigation, planning, ledger maintenance, implementation, validation, and safe completion within the provided workspace.
+6. You must explicitly instruct the target LLM that any file path required by the active task, workflow, config, prompt, plan, established repository convention, or direct user instruction is authoritative and must take priority over any generic fallback rule about where Markdown files or prompts should be written.
 ### First Draft Prompt
 <first_draft_prompt>
 {{USER_REQUEST}}

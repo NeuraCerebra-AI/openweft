@@ -1672,6 +1672,72 @@ describe('runRealOrchestration', () => {
     );
   });
 
+  it('rejects complaint-only stage-one output that contains no extractable Prompt B content', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['build the simulation engine']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'planning-s1') {
+        return {
+          ok: true,
+          backend: 'codex',
+          sessionId: 'complaint-only-prompt-b',
+          finalMessage:
+            'I drafted the full prompt and grounded it in the repo contract and live implementation, ' +
+            'but I could not save it because this session is running with a read-only filesystem. ' +
+            'Two `apply_patch` attempts to create `prompts/example.md` were rejected by the environment.\n\n' +
+            'Next options:\n' +
+            '1. If you switch this session to allow writes, I can save the `.md` file directly in `./prompts`.\n' +
+            '2. If you want to keep this session as-is, I can paste the full markdown body in my next reply.',
+          model: request.model,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cachedInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            totalCostUsd: 0,
+            raw: null
+          },
+          costRecord: {
+            featureId: request.featureId,
+            stage: request.stage,
+            model: request.model,
+            inputTokens: 10,
+            outputTokens: 5,
+            estimatedCostUsd: 0,
+            timestamp: new Date().toISOString()
+          },
+          artifacts: {
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+            command: adapter.buildCommand(request)
+          }
+        };
+      }
+
+      return originalRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.features['001']?.status).toBe('skipped');
+  });
+
   it('skips a malformed stage-two planning result and keeps the rest of the queue moving', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {

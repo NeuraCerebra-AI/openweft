@@ -6,7 +6,7 @@ import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildProgram } from '../../src/cli/buildProgram.js';
-import { createCommandHandlers } from '../../src/cli/handlers.js';
+import { DEFAULT_PROMPT_A_TEMPLATE, createCommandHandlers } from '../../src/cli/handlers.js';
 import { parseQueueFile } from '../../src/domain/queue.js';
 import { createEmptyCheckpoint, saveCheckpoint } from '../../src/state/checkpoint.js';
 import type { TmuxSpawnInput } from '../../src/tmux/index.js';
@@ -229,6 +229,7 @@ describe('command handlers', () => {
     const promptA = await readFile(promptAPath, 'utf8');
     const planAdjustment = await readFile(planAdjustmentPath, 'utf8');
 
+    expect(promptA).toBe(DEFAULT_PROMPT_A_TEMPLATE);
     expect(promptA).toContain('{{USER_REQUEST}}');
     expect(promptA).toContain('### Instructions for Prompt Creation');
     expect(promptA).toContain('Living Plan Ledger');

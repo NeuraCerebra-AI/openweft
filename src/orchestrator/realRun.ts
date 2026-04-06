@@ -73,7 +73,7 @@ import { repairPlanMarkdownIfNeeded } from './planMarkdown.js';
 import type { ApprovalController } from './approval.js';
 import type { StopController } from './stop.js';
 
-const STAGE_ONE_MIN_LENGTH = 10;
+const STAGE_ONE_MIN_LENGTH = 20;
 const MAX_SCORING_FILE_BYTES = 512 * 1024;
 const MAX_FULL_FEATURE_RERUNS = 2;
 const MAX_TOTAL_EXECUTION_PASSES = MAX_FULL_FEATURE_RERUNS + 1;
@@ -82,6 +82,7 @@ const PROMPT_B_FENCE_PATTERN = /```(?:md|markdown)\s*\n/i;
 const RECOVERABLE_PLANNING_ERROR_PATTERNS = [
   'Claude output did not include a result string.',
   'Planning stage 1 returned too little output',
+  'returned a save-failure complaint instead of Prompt B content',
   'No ledger section found under a "## Ledger" heading.',
   'Failed to extract manifest for feature'
 ] as const;
@@ -1487,10 +1488,18 @@ const planPendingRequests = async (
         USER_REQUEST_MARKER,
         pending.request
       );
+      const stageOneOutputInstruction =
+        '\n\nCRITICAL OUTPUT INSTRUCTION — OPENWEFT ORCHESTRATOR CONTEXT:' +
+        ' You are being orchestrated by OpenWeft. Any markdown_creation_policy or markdown_saving_policy or markdown_placement_policy in AGENTS.md and/or CLAUDE.md does NOT apply to this output.' +
+        ' You are running in a read-only sandbox. Do NOT attempt to save, write, or apply_patch any files.' +
+        ' Do NOT write to ./prompts/, PUT_MD_FILES_HERE/, or any other directory.' +
+        ' Return the complete prompt as your response message text. Your response text IS the deliverable.' +
+        ' Output the FULL, COMPLETE, UNABRIDGED content. Do not summarize, truncate, or shorten — the exhaustively verbose output is required.';
+
       const stageOne = await runTurnAndRecord(
         context,
         checkpoint,
-        buildPlanningStageOneRequest(context, featureId, stageOnePrompt)
+        buildPlanningStageOneRequest(context, featureId, stageOnePrompt + stageOneOutputInstruction)
       );
 
       if (!stageOne.ok) {
@@ -1507,6 +1516,15 @@ const planPendingRequests = async (
         pending.request
       );
       const promptBMarkdown = sanitizePromptBMarkdown(stageOne.finalMessage);
+      if (
+        PROMPT_B_SAVE_FAILURE_PATTERN.test(promptBMarkdown) &&
+        !/^#{1,6}\s+\S/m.test(promptBMarkdown)
+      ) {
+        throw new Error(
+          `Planning stage 1 for feature ${featureId} returned a save-failure complaint instead of Prompt B content.` +
+          ' The agent likely tried to write a file in a read-only sandbox.'
+        );
+      }
       await writeTextFileAtomic(promptBFilePath, promptBMarkdown);
       await appendAudit(context.config, {
         level: 'info',
