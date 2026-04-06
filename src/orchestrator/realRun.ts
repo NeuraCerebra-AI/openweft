@@ -79,6 +79,7 @@ const MAX_FULL_FEATURE_RERUNS = 2;
 const MAX_TOTAL_EXECUTION_PASSES = MAX_FULL_FEATURE_RERUNS + 1;
 const MAX_MERGE_RESOLUTION_ROUNDS = 3;
 const PROMPT_B_FENCE_PATTERN = /```(?:md|markdown)\s*\n/i;
+const PROMPT_B_HEADING_PATTERN = /^#{1,6}\s+\S/m;
 const RECOVERABLE_PLANNING_ERROR_PATTERNS = [
   'Claude output did not include a result string.',
   'Planning stage 1 returned too little output',
@@ -1495,8 +1496,15 @@ const planPendingRequests = async (
         ' Do NOT write to ./prompts/, PUT_MD_FILES_HERE/, or any other directory.' +
         ' Return the complete prompt as your response message text. Your response text IS the deliverable.' +
         ' Output the FULL, COMPLETE, UNABRIDGED content. Do not summarize, truncate, or shorten — the exhaustively verbose output is required.';
+      const stageOneRetryInstruction = [
+        'CRITICAL FOLLOW-UP:',
+        'Your previous response was invalid because it described a save or write failure instead of returning Prompt B content.',
+        'Do NOT explain the failure again.',
+        'Do NOT mention filesystem limits, markdown placement policies, or file-writing attempts.',
+        'Return the FULL Prompt B markdown as response text only.'
+      ].join(' ');
 
-      const stageOne = await runTurnAndRecord(
+      let stageOne = await runTurnAndRecord(
         context,
         checkpoint,
         buildPlanningStageOneRequest(context, featureId, stageOnePrompt + stageOneOutputInstruction)
@@ -1515,15 +1523,42 @@ const planPendingRequests = async (
         featureId,
         pending.request
       );
-      const promptBMarkdown = sanitizePromptBMarkdown(stageOne.finalMessage);
-      if (
-        PROMPT_B_SAVE_FAILURE_PATTERN.test(promptBMarkdown) &&
-        !/^#{1,6}\s+\S/m.test(promptBMarkdown)
-      ) {
-        throw new Error(
-          `Planning stage 1 for feature ${featureId} returned a save-failure complaint instead of Prompt B content.` +
-          ' The agent likely tried to write a file in a read-only sandbox.'
+      let promptBMarkdown = sanitizePromptBMarkdown(stageOne.finalMessage);
+      if (PROMPT_B_SAVE_FAILURE_PATTERN.test(promptBMarkdown) && !PROMPT_B_HEADING_PATTERN.test(promptBMarkdown)) {
+        await appendAudit(context.config, {
+          level: 'warn',
+          event: 'planner.prompt-b.retrying',
+          message: `Retrying Prompt B generation for feature ${featureId} after complaint-only stage-one output.`,
+          data: {
+            featureId,
+            promptBFile: promptBFilePath
+          }
+        });
+        stageOne = await runTurnAndRecord(
+          context,
+          checkpoint,
+          buildPlanningStageOneRequest(
+            context,
+            featureId,
+            [stageOnePrompt + stageOneOutputInstruction, stageOneRetryInstruction].join('\n\n')
+          )
         );
+
+        if (!stageOne.ok) {
+          throw new Error(stageOne.error);
+        }
+
+        if (stageOne.finalMessage.trim().length < STAGE_ONE_MIN_LENGTH) {
+          throw new Error(`Planning stage 1 returned too little output for feature ${featureId}.`);
+        }
+
+        promptBMarkdown = sanitizePromptBMarkdown(stageOne.finalMessage);
+        if (PROMPT_B_SAVE_FAILURE_PATTERN.test(promptBMarkdown) && !PROMPT_B_HEADING_PATTERN.test(promptBMarkdown)) {
+          throw new Error(
+            `Planning stage 1 for feature ${featureId} returned a save-failure complaint instead of Prompt B content.` +
+            ' The agent likely tried to write a file in a read-only sandbox.'
+          );
+        }
       }
       await writeTextFileAtomic(promptBFilePath, promptBMarkdown);
       await appendAudit(context.config, {

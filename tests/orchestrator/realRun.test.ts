@@ -1672,7 +1672,7 @@ describe('runRealOrchestration', () => {
     );
   });
 
-  it('rejects complaint-only stage-one output that contains no extractable Prompt B content', async () => {
+  it('retries complaint-only stage-one output once and continues when the follow-up returns Prompt B content', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -1682,9 +1682,45 @@ describe('runRealOrchestration', () => {
     const { config, configHash } = await loadOpenWeftConfig(repoRoot);
     const adapter = new RecordingAdapter(new MockAgentAdapter());
     const originalRunTurn = adapter.runTurn.bind(adapter);
+    let stageOneAttempts = 0;
 
     adapter.runTurn = async (request) => {
       if (request.stage === 'planning-s1') {
+        stageOneAttempts += 1;
+        if (stageOneAttempts === 2) {
+          return {
+            ok: true,
+            backend: 'codex',
+            sessionId: 'recovered-prompt-b',
+            finalMessage: '## Role\nRecovered Prompt B body.\n',
+            model: request.model,
+            usage: {
+              inputTokens: 10,
+              outputTokens: 5,
+              cachedInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              cacheReadInputTokens: 0,
+              totalCostUsd: 0,
+              raw: null
+            },
+            costRecord: {
+              featureId: request.featureId,
+              stage: request.stage,
+              model: request.model,
+              inputTokens: 10,
+              outputTokens: 5,
+              estimatedCostUsd: 0,
+              timestamp: new Date().toISOString()
+            },
+            artifacts: {
+              stdout: '',
+              stderr: '',
+              exitCode: 0,
+              command: adapter.buildCommand(request)
+            }
+          };
+        }
+
         return {
           ok: true,
           backend: 'codex',
@@ -1735,7 +1771,14 @@ describe('runRealOrchestration', () => {
       sleep: async () => {}
     });
 
-    expect(result.checkpoint.features['001']?.status).toBe('skipped');
+    const feature = result.checkpoint.features['001'];
+    expect(stageOneAttempts).toBe(2);
+    expect(feature?.status).toBe('completed');
+    const promptBFile = feature?.promptBFile;
+    expect(promptBFile).toBeTruthy();
+    await expect(readFile(promptBFile ?? '', 'utf8')).resolves.toBe(
+      '## Role\nRecovered Prompt B body.\n'
+    );
   });
 
   it('skips a malformed stage-two planning result and keeps the rest of the queue moving', async () => {
