@@ -10,6 +10,7 @@ const renderWithTheme = (el: React.ReactElement) =>
 
 const waitForMount = () => new Promise<void>((r) => setTimeout(r, 50));
 const waitForUpdate = () => new Promise<void>((r) => setTimeout(r, 50));
+const waitForPasteFlush = () => new Promise<void>((r) => setTimeout(r, 120));
 
 const defaultProps = {
   queuedRequests: ['Add user authentication'],
@@ -480,6 +481,33 @@ describe('StepAddMore', () => {
       const frame = lastFrame() ?? '';
       expect(frame).toContain('[Pasted text #1]');
       expect(frame).not.toContain('[Pasted text #2]');
+    });
+
+    it('submits a rapid multi-chunk paste in input mode as one full request', async () => {
+      const chunks = Array.from({ length: 100 }, (_, index) => `follow-up-${String(index).padStart(3, '0')}-` + 'x'.repeat(94));
+      const expected = chunks.join('');
+      const onQueueRequest = vi.fn().mockResolvedValue(undefined);
+      const { stdin, lastFrame } = renderWithTheme(
+        <StepAddMore {...defaultProps} onQueueRequest={onQueueRequest} />,
+      );
+
+      await waitForMount();
+      await enterInputMode(stdin);
+      for (const chunk of chunks) {
+        stdin.write(chunk);
+      }
+      await waitForPasteFlush();
+
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('[Pasted text #1]');
+      expect(frame).not.toContain('[Pasted text #2]');
+
+      stdin.write('\r');
+      await waitForUpdate();
+      await waitForUpdate();
+
+      expect(onQueueRequest).toHaveBeenCalledOnce();
+      expect(onQueueRequest).toHaveBeenCalledWith(expected);
     });
   });
 });

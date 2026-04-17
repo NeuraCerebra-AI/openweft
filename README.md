@@ -44,7 +44,7 @@ Completed:
   [003] Refactor auth middleware (medium 0.544)
 ```
 
-Features 1 and 2 ran in parallel — no file overlap. Feature 3 touched the same auth files, so OpenWeft queued it for the next batch and re-planned against the merged code. Three features, two batches, zero babysitting. By default, status shows token counts instead of an estimated dollar figure. If you want the old estimate back, you can re-enable it in config.
+Features 1 and 2 ran in parallel — no file overlap. Feature 3 touched the same auth files, so OpenWeft queued it for the next batch and re-planned against the merged code. Three features, two batches, zero babysitting. Status reports token counts only.
 
 <p align="center">
   <picture>
@@ -72,7 +72,7 @@ You queue a request. OpenWeft compiles it into a detailed worker brief — not a
 
 OpenWeft analyzes which features would touch the same files using file-level manifest analysis with coupling weights. Non-overlapping work runs simultaneously. Everything else gets queued for the next batch. When agents finish, results merge in priority order. If there's a conflict, the agent resolves it. Then the cycle repeats — re-score, re-phase, re-plan — until the queue is empty.
 
-Every step is recorded. Plans, checkpoints, audit trails, and cost tracking persist on disk. If the process crashes, `openweft start` recovers from the last checkpoint automatically.
+Every step is recorded. Plans, checkpoints, audit trails, and token usage persist on disk. If the process crashes, `openweft start` recovers from the last checkpoint automatically.
 
 For the full architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
@@ -83,9 +83,9 @@ For the full architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 - **Two-stage prompt system.** Your raw request compiles into a production-grade worker brief (Prompt A → Prompt B). Agents investigate the codebase, brainstorm 5 approaches, score by risk, and verify downstream impact — not first-idea execution.
 - **Conflict-aware phasing.** Features that touch high-fan-in files (shared configs, route registries, index barrels) get scored and phased into their own execution group. Deterministic XState v5 state machine, not a chain of promises.
 - **Dirty-tree-safe merges.** If your main branch has staged, unstaged, or untracked local changes, OpenWeft auto-stashes them before integrating a feature branch, restores them afterward, and keeps recovery possible if manual stash resolution is ever needed.
-- **Three backends, one interface.** Codex CLI, Claude Code, and a deterministic mock share the same adapter contract. The mock powers `--dry-run` — validate the full pipeline without spending a cent.
+- **Three backends, one interface.** Codex CLI, Claude Code, and a deterministic mock share the same adapter contract. The mock powers `--dry-run` — validate the full pipeline without calling live agents.
 - **Crash recovery.** Kill the process, reboot, `Ctrl+C` at the worst moment. Zod-validated checkpoints reset in-flight features to `planned` and re-run them.
-- **Budget controls.** `pauseAtUsd` halts after the current phase. `stopAtUsd` is a hard stop. Both enforced at runtime. (These track estimated API-equivalent cost for visibility — your subscription rate doesn't change.)
+- **Token-first usage.** Status reports input and output tokens, with no subscription-price guesses or dollar estimates in the normal flow.
 - **Full auditability.** Each plan includes a structured Ledger section. When it's done, you can read what was investigated, what changed, and what got deferred — a narrative, not a log dump.
 
 ---
@@ -100,7 +100,7 @@ openweft start                 run the queue with interactive dashboard
 openweft start --bg            detach — PID tracked, logs to .openweft/output.log
 openweft start --stream        stream raw agent output to your terminal
 openweft start --tmux          launch in a tmux session
-openweft start --dry-run       full pipeline simulation with mock adapter, zero cost
+openweft start --dry-run       full pipeline simulation with mock adapter
 openweft status                queue state, tokens, feature breakdown
 openweft stop                  finish the current phase, then stop
 ```
@@ -144,11 +144,6 @@ openweft stop                  finish the current phase, then stop
   },
   "status": {
     "usageDisplay": "tokens"
-  },
-  "budget": {
-    "warnAtUsd": null,
-    "pauseAtUsd": null,
-    "stopAtUsd": null
   }
 }
 ```

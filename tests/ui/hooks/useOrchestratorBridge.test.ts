@@ -33,14 +33,13 @@ describe('createEventHandler', () => {
     expect(agent?.outputLines[0]?.type).toBe('tool');
   });
 
-  it('handles agent:completed by updating status and cost', () => {
+  it('handles agent:completed by updating status only', () => {
     const store = createUIStore();
     const handler = createEventHandler(store);
     handler({ type: 'agent:started', agentId: 'a1', name: 'Alpha', feature: 'auth', stage: 'execution' });
-    handler({ type: 'agent:completed', agentId: 'a1', cost: 0.12 });
+    handler({ type: 'agent:completed', agentId: 'a1' });
     const agent = store.getState().agents[0];
     expect(agent?.status).toBe('completed');
-    expect(agent?.cost).toBe(0.12);
   });
 
   it('handles agent:approval by setting mode to approval', () => {
@@ -87,13 +86,6 @@ describe('createEventHandler', () => {
       total: 4,
       label: 'Re-analyzing after phase 2/4'
     });
-  });
-
-  it('handles session:cost-update by updating totalCost', () => {
-    const store = createUIStore();
-    const handler = createEventHandler(store);
-    handler({ type: 'session:cost-update', totalCost: 1.50 });
-    expect(store.getState().totalCost).toBe(1.50);
   });
 
   it('adopts the next queued placeholder when a planning stage 1 agent appears', () => {

@@ -1087,7 +1087,8 @@ describe('runRealOrchestration', () => {
     expect(events).toContain('agent:started');
     expect(events).toContain('agent:text');
     expect(events).toContain('agent:completed');
-    expect(events).toContain('session:cost-update');
+    expect(events).toContain('session:token-update');
+    expect(events).not.toContain('session:cost-update');
   });
 
   it('copies back an evolved worktree plan ledger after successful execution', async () => {
@@ -4980,14 +4981,14 @@ ${TEST_LEDGER_SECTION}
     });
   });
 
-  it('writes a terminal run.paused audit when the budget pause threshold is reached', async () => {
+  it('ignores legacy USD budget pause thresholds during token-first runs', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       configOverrides: {
         budget: {
           warnAtUsd: null,
           pauseAtUsd: 0,
-          stopAtUsd: null
+          stopAtUsd: 0
         }
       },
       maxParallelAgents: 1,
@@ -5004,19 +5005,12 @@ ${TEST_LEDGER_SECTION}
       sleep: async () => {}
     });
 
-    expect(result.checkpoint.status).toBe('paused');
+    expect(result.checkpoint.status).toBe('completed');
 
     const auditEntries = await readAuditEntries(config.paths.auditLogFile);
     const terminalAudit = auditEntries.find((entry) => entry.event === 'run.paused');
 
-    expect(terminalAudit?.data).toEqual(expect.objectContaining({
-      status: 'paused',
-      mergedCount: 1,
-      plannedCount: 1,
-      runtimeCleanup: expect.objectContaining({
-        action: 'preserved'
-      })
-    }));
+    expect(terminalAudit).toBeUndefined();
   });
 
   it('writes a terminal run.stopped audit and preserves codex-home on stop', async () => {

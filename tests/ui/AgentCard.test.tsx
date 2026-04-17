@@ -13,7 +13,6 @@ const defaults: AgentCardProps = {
   focused: false,
   files: [],
   tokens: 0,
-  cost: 0,
   elapsed: 83,
   currentTool: null,
   approvalRequest: null,

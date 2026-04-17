@@ -6,7 +6,8 @@ import {
   extractRequestsFromInput,
   removePendingQueueLine,
   markQueueLineProcessed,
-  parseQueueFile
+  parseQueueFile,
+  summarizeQueueRequest
 } from '../../src/domain/queue.js';
 
 describe('queue', () => {
@@ -22,6 +23,16 @@ describe('queue', () => {
     expect(extractRequestsFromInput('add one\n# keep this line\n\nadd two')).toEqual([
       'add one\n# keep this line\n\nadd two'
     ]);
+  });
+
+  it('summarizes huge requests with a bounded display label without changing stored text', () => {
+    const request = `build this ${'very '.repeat(80)}carefully`;
+    const normalized = request.trim().replace(/\s+/g, ' ');
+    const summary = summarizeQueueRequest(request);
+
+    expect(summary).toHaveLength(163);
+    expect(summary).toBe(`${normalized.slice(0, 160)}...`);
+    expect(summary).not.toContain('\n');
   });
 
   it('appends requests to queue content', () => {

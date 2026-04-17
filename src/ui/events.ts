@@ -21,12 +21,11 @@ export type OrchestratorEvent =
   | { readonly type: 'agent:code-block'; readonly agentId: string; readonly filename: string; readonly content: string; readonly language: string }
   | { readonly type: 'agent:approval'; readonly agentId: string; readonly request: ApprovalRequest }
   | { readonly type: 'agent:approval-resolved'; readonly agentId: string; readonly decision: 'approve' | 'deny' | 'skip' }
-  | { readonly type: 'agent:completed'; readonly agentId: string; readonly cost: number }
+  | { readonly type: 'agent:completed'; readonly agentId: string }
   | { readonly type: 'agent:failed'; readonly agentId: string; readonly error: string }
   | { readonly type: 'phase:started'; readonly phase: number; readonly total: number; readonly featureIds: string[] }
   | { readonly type: 'phase:re-analyzing'; readonly phase: number; readonly total: number }
   | { readonly type: 'phase:completed'; readonly phase: number }
-  | { readonly type: 'session:cost-update'; readonly totalCost: number }
   | { readonly type: 'session:token-update'; readonly agentId: string; readonly tokens: number; readonly totalTokens: number };
 
 export type OrchestratorEventHandler = (event: OrchestratorEvent) => void;

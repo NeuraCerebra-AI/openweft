@@ -91,7 +91,7 @@ src/
 │   ├── phases.ts           Manifest overlap → conflict-safe execution groups
 │   ├── manifest.ts         Parse/repair ## Manifest JSON + assert ## Ledger
 │   ├── queue.ts            Queue parsing, v1 JSON format, line rewriting
-│   ├── costs.ts            Token usage tracking + USD estimation
+│   ├── costs.ts            Token usage tracking (legacy cost-shaped schema)
 │   └── featureIds.ts       ID formatting, plan/brief filenames, slugification
 │
 ├── state/                  Persistence
@@ -402,7 +402,6 @@ AdapterTurnRequest {
   sessionId?:   string     // persist across turns
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
   effortLevel?: string     // 'low'|'medium'|'high'|'xhigh' (codex) or 'max' (claude)
-  maxBudgetUsd?: number
   // ...
 }
 ```
@@ -415,7 +414,7 @@ AdapterSuccess {
   finalMessage: string           // agent output
   usage: {
     inputTokens, outputTokens,
-    totalCostUsd: number | null
+    totalCostUsd: number | null  // legacy adapter field, not displayed
   }
   sessionId: string | null
 }
@@ -458,6 +457,7 @@ OrchestratorCheckpoint {
   pendingMergeSummaries: Array<{ featureId, summary }>
   cost:             { totalInputTokens, totalOutputTokens,
                       totalEstimatedUsd, perFeature: Record<...> }
+                    // legacy field name; UI/status render tokens only
 }
 ```
 
@@ -511,11 +511,11 @@ In-flight features that died mid-execution get reset to `planned`. They re-run f
 
 ---
 
-## Cost tracking
+## Usage tracking
 
-Every agent call logs token usage and estimated cost.
+Every agent call records input and output token counts. The normal CLI and TUI render token usage only.
 
-### Cost stages
+### Usage stages
 
 ```
 planning-s1          Prompt A generation
@@ -525,26 +525,9 @@ adjustment           Plan re-evaluation after merges
 conflict-resolution  Resolving merge conflicts
 ```
 
-### Model pricing
+Unknown model names are quiet: token counts still accumulate, and no pricing warning is emitted.
 
-```
-gpt-5.3-codex:       $1.75 / M input   $14.00 / M output
-claude-sonnet-4-6:    $3.00 / M input   $15.00 / M output
-```
-
-Unknown models log a warning (once) and return `$0` — no silent cost blindness.
-
-### Budget enforcement
-
-```
-pauseAtUsd:  halts after the current phase completes
-stopAtUsd:   hard stop, checked before each phase
-
-Both enforced in the orchestration loop.
-All null by default — your money, your call.
-```
-
-Cost data accumulates in `.openweft/costs.jsonl` (append-only, one JSON line per agent call) and in the checkpoint's `cost` field (totals + per-feature breakdown).
+Usage data accumulates in `.openweft/costs.jsonl` (append-only, one JSON line per agent call) and in the checkpoint's `cost` field (totals + per-feature breakdown). Those names are retained for compatibility with older checkpoints and configs; user-facing output treats the data as token usage.
 
 ---
 
@@ -660,7 +643,7 @@ Run statuses:
 ```
   idle ──► in-progress ──► completed
                │
-               ├──► paused (budget threshold hit)
+               ├──► paused (legacy threshold hit)
                ├──► stopped (user requested)
                └──► failed (unrecoverable)
 ```
@@ -699,10 +682,6 @@ rateLimits:
     maxConcurrentRequests: positive int (codex: 3, claude: 2)
     retryBackoffMs:      non-negative int (default: 5000)
     retryMaxAttempts:    positive int (default: 5)
-budget:
-  warnAtUsd:     number | null (defined but not yet enforced at runtime)
-  pauseAtUsd:    number | null (halts after current phase)
-  stopAtUsd:     number | null (hard stop)
 ```
 
 ---
@@ -726,7 +705,7 @@ your-repo/
 ├── .openweft/
 │   ├── checkpoint.json              Orchestrator state (Zod-validated)
 │   ├── checkpoint.json.backup       Backup sibling (atomic)
-│   ├── costs.jsonl                  Token usage + USD per call
+│   ├── costs.jsonl                  Token usage per call (legacy filename)
 │   ├── audit-trail.jsonl            Append-only audit entries for real runs
 │   ├── output.log                   --bg mode output
 │   ├── pid                          Background process ID
@@ -766,8 +745,8 @@ openweft start          run the queue with interactive dashboard
 openweft start --bg     detach — PID tracked, logs to .openweft/output.log
 openweft start --stream stream raw agent output to terminal
 openweft start --tmux   launch in a tmux session
-openweft start --dry-run planning/phasing/execution simulation with mock adapter, zero cost
-openweft status         queue state, tokens, cost, feature breakdown
+openweft start --dry-run planning/phasing/execution simulation with mock adapter
+openweft status         queue state, tokens, feature breakdown
 openweft stop           ask a background run to finish the current phase, then stop
 ```
 

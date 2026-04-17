@@ -14,7 +14,7 @@ describe('UIStore', () => {
     expect(state.focusedAgentId).toBeNull();
     expect(state.mode).toBe('normal');
     expect(state.phase).toBeNull();
-    expect(state.totalCost).toBe(0);
+    expect(state.totalTokens).toBe(0);
     expect(state.spinnerFrame).toBe(0);
     expect(state.completion).toBeNull();
     expect(state.showHelp).toBe(false);
@@ -32,10 +32,10 @@ describe('UIStore', () => {
 
   it('updates an agent via updateAgent', () => {
     store.getState().addAgent({ id: 'alpha', name: 'Alpha', feature: 'auth' });
-    store.getState().updateAgent('alpha', { status: 'completed', cost: 0.12 });
+    store.getState().updateAgent('alpha', { status: 'completed', tokens: 1200 });
     const agent = store.getState().agents[0];
     expect(agent?.status).toBe('completed');
-    expect(agent?.cost).toBe(0.12);
+    expect(agent?.tokens).toBe(1200);
   });
 
   it('appends output lines and caps at MAX_LINES', () => {

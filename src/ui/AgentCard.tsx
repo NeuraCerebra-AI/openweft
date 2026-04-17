@@ -14,7 +14,6 @@ export interface AgentCardProps {
   readonly focused: boolean;
   readonly files: readonly string[];
   readonly tokens: number;
-  readonly cost: number;
   readonly elapsed: number;
   readonly currentTool: string | null;
   readonly approvalRequest: ApprovalRequest | null;
@@ -43,7 +42,6 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(({
   focused,
   files,
   tokens,
-  cost,
   elapsed,
   currentTool,
   approvalRequest,

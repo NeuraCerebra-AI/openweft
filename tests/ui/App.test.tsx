@@ -4,6 +4,9 @@ import { render } from 'ink-testing-library';
 import { App } from '../../src/ui/App.js';
 import { createUIStore } from '../../src/ui/store.js';
 
+const waitForInput = () => new Promise<void>((resolve) => setTimeout(resolve, 50));
+const waitForPasteFlush = () => new Promise<void>((resolve) => setTimeout(resolve, 120));
+
 describe('App', () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -203,6 +206,34 @@ describe('App', () => {
 
     expect(store.getState().addInputText).toBe('hello ');
     expect(store.getState().addInputCursorOffset).toBe(6);
+  });
+
+  it('collapses a rapid multi-chunk dashboard add paste into one token and submits the full text', async () => {
+    const store = createUIStore();
+    store.getState().addAgent({ id: 'queued-1', name: 'Existing', feature: 'existing', status: 'queued' });
+    const onAddRequest = vi.fn();
+    const chunks = Array.from({ length: 100 }, (_, index) => `dashboard-${String(index).padStart(3, '0')}-` + 'z'.repeat(92));
+    const expected = chunks.join('');
+
+    const { stdin, lastFrame } = render(<App store={store} onAddRequest={onAddRequest} />);
+    await waitForInput();
+
+    stdin.write('a');
+    await waitForInput();
+    for (const chunk of chunks) {
+      stdin.write(chunk);
+    }
+    await waitForPasteFlush();
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('[Pasted text #1]');
+    expect(frame).not.toContain('[Pasted text #2]');
+
+    stdin.write('\r');
+    await waitForInput();
+
+    expect(onAddRequest).toHaveBeenCalledOnce();
+    expect(onAddRequest).toHaveBeenCalledWith(expected);
   });
 
   it('renders the filter cursor at the insertion point in INPUT mode', () => {

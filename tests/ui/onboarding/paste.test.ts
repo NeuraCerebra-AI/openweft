@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   COLLAPSE_CHAR_THRESHOLD,
   LINE_THRESHOLD,
-  MAX_PASTE_CHARS,
   countNewlines,
   deleteTokenBefore,
   formatPasteToken,
@@ -15,7 +14,6 @@ describe('constants', () => {
   it('has correct thresholds', () => {
     expect(COLLAPSE_CHAR_THRESHOLD).toBe(800);
     expect(LINE_THRESHOLD).toBe(2);
-    expect(MAX_PASTE_CHARS).toBe(10_000);
   });
 });
 
@@ -38,12 +36,12 @@ describe('formatPasteToken', () => {
     expect(formatPasteToken(1, 0)).toBe('[Pasted text #1]');
   });
 
-  it('formats multi-line paste', () => {
-    expect(formatPasteToken(2, 15)).toBe('[Pasted text #2 +15 lines]');
+  it('formats multi-line paste as a single token without line-count suffix', () => {
+    expect(formatPasteToken(2, 15)).toBe('[Pasted text #2]');
   });
 
-  it('formats 1-line paste', () => {
-    expect(formatPasteToken(3, 1)).toBe('[Pasted text #3 +1 lines]');
+  it('formats 1-line paste as a single token without line-count suffix', () => {
+    expect(formatPasteToken(3, 1)).toBe('[Pasted text #3]');
   });
 });
 

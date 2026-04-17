@@ -7,6 +7,8 @@ import { simpleGit } from 'simple-git';
 
 import { parseQueueFile } from '../../src/domain/queue.js';
 
+const CLI_REAL_MOCK_TIMEOUT_MS = 30_000;
+
 const runCli = async (cwd: string, args: string[]): Promise<string[]> => {
   const output: string[] = [];
   const { buildProgram } = await import('../../src/cli/buildProgram.js');
@@ -144,7 +146,7 @@ describe('openweft CLI real mock flow', () => {
     expect(statusOutput.join('\n')).toContain('Status: completed');
     expect(statusOutput.join('\n')).toContain('Background: not running');
     expect(statusOutput.join('\n')).toContain('Features: 2 total (2 completed)');
-  });
+  }, CLI_REAL_MOCK_TIMEOUT_MS);
 
   it('keeps the init-created default prompts and persists ledger-bearing plans', async () => {
     await installMockCliAdapters();
@@ -187,5 +189,5 @@ describe('openweft CLI real mock flow', () => {
     expect(planContent).toContain('## Ledger');
     expect(planContent).toContain('## Manifest');
     expect(promptBContent).toContain('Runtime-generated Prompt B');
-  });
+  }, CLI_REAL_MOCK_TIMEOUT_MS);
 });

@@ -30,7 +30,6 @@ export interface ThemeColors {
   readonly muted: string;
   // Semantic aliases
   readonly metricTokens: string;
-  readonly metricCost: string;
   readonly metricFiles: string;
   readonly statusGutter: StatusGutterColors;
 }
@@ -68,7 +67,6 @@ export const catppuccinMocha: Theme = {
     muted: '#585b70',
     // Semantic aliases
     metricTokens: '#fab387',  // = peach
-    metricCost: '#f9e2af',    // = yellow
     metricFiles: '#a6e3a1',   // = green
     statusGutter: {
       running: '#a6e3a1',     // = green

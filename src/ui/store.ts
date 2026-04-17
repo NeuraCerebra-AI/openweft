@@ -22,7 +22,6 @@ export interface AgentState {
   readonly status: AgentStatus;
   readonly removable: boolean;
   readonly currentTool: string | null;
-  readonly cost: number;
   readonly elapsed: number;
   readonly outputLines: OutputLine[];
   readonly files: readonly string[];
@@ -53,7 +52,6 @@ export type UIMode = 'normal' | 'approval' | 'input' | 'history' | 'history-deta
 
 export interface UIStore {
   phase: { current: number; total: number; label?: string } | null;
-  totalCost: number;
   totalTokens: number;
   elapsed: number;
   spinnerFrame: number;
@@ -83,12 +81,11 @@ export interface UIStore {
   addInputCursorOffset: number;
   addAgent: (init: { id: string; name: string; feature: string; status?: AgentStatus; removable?: boolean; files?: readonly string[] }) => void;
   removeAgent: (id: string) => void;
-  updateAgent: (id: string, patch: Partial<Pick<AgentState, 'status' | 'cost' | 'elapsed' | 'currentTool' | 'approvalRequest' | 'tokens'>>) => void;
+  updateAgent: (id: string, patch: Partial<Pick<AgentState, 'status' | 'elapsed' | 'currentTool' | 'approvalRequest' | 'tokens'>>) => void;
   appendOutput: (agentId: string, line: OutputLine) => void;
   setFocusedAgent: (id: string | null) => void;
   setMode: (mode: UIMode) => void;
   setPhase: (phase: { current: number; total: number; label?: string } | null) => void;
-  setTotalCost: (cost: number) => void;
   setTotalTokens: (tokens: number) => void;
   setElapsed: (elapsed: number) => void;
   tickAgentElapsed: () => void;
@@ -118,7 +115,6 @@ const isQueuedPlaceholder = (agent: AgentState): boolean =>
 export const createUIStore = () =>
   createStore<UIStore>((set) => ({
     phase: null,
-    totalCost: 0,
     totalTokens: 0,
     elapsed: 0,
     spinnerFrame: 0,
@@ -149,7 +145,6 @@ export const createUIStore = () =>
             status: init.status ?? ('running' as const),
             removable: init.removable ?? false,
             currentTool: null,
-            cost: 0,
             elapsed: 0,
             outputLines: [],
             files: init.files ?? [],
@@ -191,7 +186,6 @@ export const createUIStore = () =>
     setFocusedAgent: (id) => set({ focusedAgentId: id }),
     setMode: (mode) => set({ mode }),
     setPhase: (phase) => set({ phase }),
-    setTotalCost: (cost) => set({ totalCost: cost }),
     setTotalTokens: (tokens) => set({ totalTokens: tokens }),
     setElapsed: (elapsed) => set({ elapsed }),
     tickAgentElapsed: () =>

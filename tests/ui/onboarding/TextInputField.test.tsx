@@ -4,7 +4,6 @@ import { render } from 'ink-testing-library';
 
 import { ThemeContext, catppuccinMocha } from '../../../src/ui/theme.js';
 import { TextInputField } from '../../../src/ui/onboarding/TextInputField.js';
-import { MAX_PASTE_CHARS } from '../../../src/ui/onboarding/paste.js';
 
 const renderWithTheme = (element: React.ReactElement) =>
   render(<ThemeContext.Provider value={catppuccinMocha}>{element}</ThemeContext.Provider>);
@@ -13,6 +12,7 @@ const renderWithTheme = (element: React.ReactElement) =>
 // We must wait for the effect to mount before sending key events.
 const waitForMount = () => new Promise<void>((r) => setTimeout(r, 50));
 const waitForUpdate = () => new Promise<void>((r) => setTimeout(r, 50));
+const waitForPasteFlush = () => new Promise<void>((r) => setTimeout(r, 120));
 
 describe('TextInputField', () => {
   it('renders the › prompt and cursor block', () => {
@@ -372,7 +372,7 @@ describe('paste handling', () => {
       expect(handleChange).toHaveBeenCalledWith('[Pasted text #1]');
     });
 
-    it('collapses paste with 3 newlines into token with line count (boundary)', async () => {
+    it('collapses paste with 3 newlines into a single token without a line-count suffix', async () => {
       const handleChange = vi.fn();
       const { stdin } = renderWithTheme(
         <TextInputField value="" onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
@@ -380,10 +380,10 @@ describe('paste handling', () => {
       await waitForMount();
       stdin.write('a\nb\nc\nd');
       await waitForUpdate();
-      expect(handleChange).toHaveBeenCalledWith('[Pasted text #1 +3 lines]');
+      expect(handleChange).toHaveBeenCalledWith('[Pasted text #1]');
     });
 
-    it('includes correct line count for multi-line paste', async () => {
+    it('keeps multi-line paste display to a single token', async () => {
       const handleChange = vi.fn();
       const { stdin } = renderWithTheme(
         <TextInputField value="" onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
@@ -392,18 +392,22 @@ describe('paste handling', () => {
       const lines = Array.from({ length: 11 }, (_, i) => 'line' + String(i)).join('\n');
       stdin.write(lines);
       await waitForUpdate();
-      expect(handleChange).toHaveBeenCalledWith('[Pasted text #1 +10 lines]');
+      expect(handleChange).toHaveBeenCalledWith('[Pasted text #1]');
     });
 
-    it('truncates paste exceeding MAX_PASTE_CHARS before collapsing', async () => {
-      const handleChange = vi.fn();
-      const { stdin } = renderWithTheme(
-        <TextInputField value="" onChange={handleChange} onSubmit={vi.fn()} onExit={vi.fn()} />,
+    it('preserves paste exceeding the old 10k cap while collapsing display', async () => {
+      const handleSubmit = vi.fn();
+      const { stdin, lastFrame } = renderWithTheme(
+        <StatefulWrapper onSubmit={handleSubmit} />,
       );
       await waitForMount();
-      stdin.write('x'.repeat(11_000));
+      const longText = 'x'.repeat(11_000);
+      stdin.write(longText);
       await waitForUpdate();
-      expect(handleChange).toHaveBeenCalledWith('[Pasted text #1]');
+      expect(lastFrame() ?? '').toContain('[Pasted text #1]');
+      stdin.write('\r');
+      await waitForUpdate();
+      expect(handleSubmit).toHaveBeenCalledWith(longText);
     });
 
     it('appends collapse token after existing text', async () => {
@@ -531,17 +535,18 @@ describe('paste handling', () => {
       expect(frame).not.toContain('[Pasted text #2]');
     });
 
-    it('resolves truncated paste to exactly MAX_PASTE_CHARS on submit', async () => {
+    it('resolves an oversized paste to its full original content on submit', async () => {
       const handleSubmit = vi.fn();
       const { stdin } = render(<StatefulWrapper onSubmit={handleSubmit} />);
       await waitForMount();
-      stdin.write('a'.repeat(11_000));
+      const longText = 'a'.repeat(11_000);
+      stdin.write(longText);
       await waitForUpdate();
       stdin.write('\r');
       await waitForUpdate();
       expect(handleSubmit).toHaveBeenCalledOnce();
       const submitted = handleSubmit.mock.calls[0]?.[0] as string;
-      expect(submitted.length).toBe(MAX_PASTE_CHARS);
+      expect(submitted).toBe(longText);
     });
 
     it('keeps collapsed paste tokens atomic when moving left and typing', async () => {
@@ -560,6 +565,46 @@ describe('paste handling', () => {
       const frame = lastFrame() ?? '';
       expect(frame).toContain('prefix A');
       expect(frame).toContain('█[Pasted text #1]');
+    });
+
+    it('collapses a rapid multi-chunk paste into one token and submits the full text', async () => {
+      const handleSubmit = vi.fn();
+      const chunks = Array.from({ length: 100 }, (_, index) => `chunk-${String(index).padStart(3, '0')}-` + 'x'.repeat(110));
+      const expected = chunks.join('');
+      const { stdin, lastFrame } = render(<StatefulWrapper onSubmit={handleSubmit} />);
+      await waitForMount();
+
+      for (const chunk of chunks) {
+        stdin.write(chunk);
+      }
+
+      await waitForPasteFlush();
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('[Pasted text #1]');
+      expect(frame).not.toContain('[Pasted text #2]');
+
+      stdin.write('\r');
+      await waitForUpdate();
+
+      expect(handleSubmit).toHaveBeenCalledOnce();
+      expect(handleSubmit).toHaveBeenCalledWith(expected);
+    });
+
+    it('flushes a pending paste before an immediate submit', async () => {
+      const handleSubmit = vi.fn();
+      const chunks = Array.from({ length: 20 }, (_, index) => `instant-${String(index)}-` + 'y'.repeat(80));
+      const expected = chunks.join('');
+      const { stdin } = render(<StatefulWrapper onSubmit={handleSubmit} />);
+      await waitForMount();
+
+      for (const chunk of chunks) {
+        stdin.write(chunk);
+      }
+      stdin.write('\r');
+      await waitForUpdate();
+
+      expect(handleSubmit).toHaveBeenCalledOnce();
+      expect(handleSubmit).toHaveBeenCalledWith(expected);
     });
   });
 });

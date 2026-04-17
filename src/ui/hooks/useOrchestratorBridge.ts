@@ -119,7 +119,7 @@ export const createEventHandler = (store: StoreApi<UIStore>): OrchestratorEventH
         break;
 
       case 'agent:completed':
-        getState().updateAgent(event.agentId, { status: 'completed', cost: event.cost, currentTool: null });
+        getState().updateAgent(event.agentId, { status: 'completed', currentTool: null });
         break;
 
       case 'agent:failed':
@@ -141,10 +141,6 @@ export const createEventHandler = (store: StoreApi<UIStore>): OrchestratorEventH
 
       case 'phase:completed':
         getState().setPhase(null);
-        break;
-
-      case 'session:cost-update':
-        getState().setTotalCost(event.totalCost);
         break;
 
       case 'session:token-update':

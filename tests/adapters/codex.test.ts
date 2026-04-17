@@ -110,6 +110,18 @@ describe('codex adapter', () => {
     ]);
   });
 
+  it('builds GPT-5.4 high-reasoning commands explicitly', () => {
+    const command = buildCodexCommand({
+      ...baseRequest(),
+      model: 'gpt-5.4',
+      effortLevel: 'high'
+    } as AdapterTurnRequest & { effortLevel: 'high' });
+
+    expect(command.args).toContain('--model');
+    expect(command.args).toContain('gpt-5.4');
+    expect(command.args).toContain('model_reasoning_effort="high"');
+  });
+
   it('adds a reasoning effort override for non-medium resumed sessions', () => {
     const command = buildCodexCommand({
       ...baseRequest(),

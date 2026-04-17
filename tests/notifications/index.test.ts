@@ -109,14 +109,14 @@ describe('notifications', () => {
 
     const result = await sendOpenWeftNotification(
       {
-        message: 'Budget threshold reached'
+        message: 'Agent failure'
       },
       dependencies
     );
 
     expect(dependencies.writes).toEqual([
       'bell',
-      'stderr:OpenWeft: Budget threshold reached'
+      'stderr:OpenWeft: Agent failure'
     ]);
     expect(result.attempts).toEqual([
       {

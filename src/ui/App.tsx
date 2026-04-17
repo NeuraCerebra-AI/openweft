@@ -14,16 +14,10 @@ import { Footer } from './Footer.js';
 import { HistoryView } from './HistoryView.js';
 import { HistoryDetailView } from './HistoryDetailView.js';
 import { ModelMenu } from './ModelMenu.js';
+import { TextInputField } from './TextInputField.js';
 import { useTerminalSize } from './hooks/useTerminalSize.js';
 import { filterAgents, handleKeypress } from './hooks/useKeyboard.js';
 import type { UIStore } from './store.js';
-import {
-  deleteBackward,
-  deleteBackwardWord,
-  insertAtCursor,
-  moveCursorLeft,
-  moveCursorRight,
-} from './textEditing.js';
 
 interface AppProps {
   readonly store: StoreApi<UIStore>;
@@ -140,51 +134,6 @@ export const App: React.FC<AppProps> = ({
     // Compose mode — swallow ALL keys
     const currentAddText = store.getState().addInputText;
     if (currentAddText !== null) {
-      const currentAddCursorOffset = store.getState().addInputCursorOffset;
-      if (key.escape) {
-        store.getState().setAddInputText(null);
-        return;
-      }
-      if (key.return) {
-        const trimmed = currentAddText.trim();
-        if (trimmed && onAddRequest) onAddRequest(trimmed);
-        return;
-      }
-      if (key.leftArrow) {
-        store.getState().setAddInputCursorOffset(
-          moveCursorLeft({ value: currentAddText, cursorOffset: currentAddCursorOffset }).cursorOffset
-        );
-        return;
-      }
-      if (key.rightArrow) {
-        store.getState().setAddInputCursorOffset(
-          moveCursorRight({ value: currentAddText, cursorOffset: currentAddCursorOffset }).cursorOffset
-        );
-        return;
-      }
-      // Ctrl+W — word delete (Unix standard)
-      if (_input === 'w' && key.ctrl) {
-        const nextState = deleteBackwardWord({ value: currentAddText, cursorOffset: currentAddCursorOffset });
-        store.getState().setAddInputText(nextState.value);
-        store.getState().setAddInputCursorOffset(nextState.cursorOffset);
-        return;
-      }
-      if (key.backspace || key.delete) {
-        const nextState = (key.meta || key.ctrl)
-          ? deleteBackwardWord({ value: currentAddText, cursorOffset: currentAddCursorOffset })
-          : deleteBackward({ value: currentAddText, cursorOffset: currentAddCursorOffset });
-        store.getState().setAddInputText(nextState.value);
-        store.getState().setAddInputCursorOffset(nextState.cursorOffset);
-        return;
-      }
-      if (_input && !key.ctrl && !key.meta) {
-        const nextState = insertAtCursor(
-          { value: currentAddText, cursorOffset: currentAddCursorOffset },
-          _input,
-        );
-        store.getState().setAddInputText(nextState.value);
-        store.getState().setAddInputCursorOffset(nextState.cursorOffset);
-      }
       return;
     }
 
@@ -370,11 +319,20 @@ export const App: React.FC<AppProps> = ({
               elapsed={state.elapsed}
             />
             {state.addInputText !== null ? (
-              <Box borderStyle="round" borderColor={catppuccinMocha.colors.green} paddingX={1} marginX={1}>
-                <Text color={catppuccinMocha.colors.green}>{'> '}</Text>
-                <Text>{state.addInputText.slice(0, state.addInputCursorOffset)}</Text>
-                <Text color={catppuccinMocha.colors.muted}>{'█'}</Text>
-                <Text>{state.addInputText.slice(state.addInputCursorOffset)}</Text>
+              <Box paddingX={1} marginX={1}>
+                <TextInputField
+                  value={state.addInputText}
+                  onChange={(text) => store.getState().setAddInputText(text)}
+                  onSubmit={(text) => {
+                    const trimmed = text.trim();
+                    if (trimmed && onAddRequest) onAddRequest(trimmed);
+                  }}
+                  onExit={() => store.getState().setAddInputText(null)}
+                  cursorOffset={state.addInputCursorOffset}
+                  onCursorOffsetChange={(offset) => store.getState().setAddInputCursorOffset(offset)}
+                  prompt="> "
+                  borderColor={catppuccinMocha.colors.green}
+                />
               </Box>
             ) : state.mode === 'input' ? (
               <Box borderStyle="round" borderColor={catppuccinMocha.colors.surface1} paddingX={1} marginX={1}>
@@ -397,7 +355,6 @@ export const App: React.FC<AppProps> = ({
                     focused={agent.id === state.focusedAgentId}
                     files={agent.files}
                     tokens={agent.tokens}
-                    cost={agent.cost}
                     elapsed={agent.elapsed}
                     currentTool={agent.currentTool}
                     approvalRequest={agent.approvalRequest}

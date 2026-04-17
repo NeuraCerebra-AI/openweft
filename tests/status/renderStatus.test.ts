@@ -49,7 +49,7 @@ describe('renderStatusReport', () => {
     expect(report).not.toContain('Cost:');
   });
 
-  it('can still render the estimated cost line when explicitly enabled', () => {
+  it('keeps token-only usage even when old config asks for estimated cost', () => {
     const checkpoint = createEmptyCheckpoint({
       orchestratorVersion: 'test',
       configHash: 'test-config-hash',
@@ -68,7 +68,51 @@ describe('renderStatusReport', () => {
       usageDisplay: 'estimated-cost'
     });
 
-    expect(report).toContain('Cost: $0.728000 (384000 input / 4000 output tokens)');
+    expect(report).toContain('Tokens: 384000 input / 4000 output');
+    expect(report).not.toContain('Cost:');
+    expect(report).not.toContain('$0.728000');
+  });
+
+  it('bounds huge feature request labels in status output', () => {
+    const checkpoint = createEmptyCheckpoint({
+      orchestratorVersion: 'test',
+      configHash: 'test-config-hash',
+      runId: 'test-run',
+      checkpointId: 'test-checkpoint',
+      createdAt: '2026-03-23T00:00:00.000Z'
+    });
+    const hugeRequest = `build ${'giant '.repeat(80)}thing`;
+    const normalized = hugeRequest.trim().replace(/\s+/g, ' ');
+    checkpoint.features['001'] = {
+      id: '001',
+      request: hugeRequest,
+      status: 'planned',
+      attempts: 0,
+      planFile: null,
+      promptBFile: null,
+      evolvedPlanFile: null,
+      branchName: null,
+      worktreePath: null,
+      sessionId: null,
+      sessionScope: null,
+      backend: 'mock',
+      manifest: null,
+      rerunEligible: true,
+      mergeResolutionAttempts: 0,
+      priorityScore: null,
+      priorityTier: null,
+      scoringCycles: 0,
+      updatedAt: '2026-03-23T00:00:00.000Z'
+    };
+
+    const report = renderStatusReport({
+      checkpoint,
+      checkpointSource: 'primary',
+      queueContent: '# OpenWeft feature queue\n'
+    });
+
+    expect(report).toContain(`${normalized.slice(0, 160)}...`);
+    expect(report).not.toContain(normalized);
   });
 
   it('discloses when status is rendering from the backup checkpoint', () => {

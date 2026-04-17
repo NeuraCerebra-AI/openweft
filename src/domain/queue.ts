@@ -4,6 +4,7 @@ import { extractNumericFeatureId } from './slug.js';
 
 const ENCODED_REQUEST_PREFIX = '@@openweft:request:v1:';
 const V1_QUEUE_HEADER = '# openweft queue format: v1';
+const REQUEST_SUMMARY_MAX_CHARS = 160;
 
 export interface QueueCommentLine {
   kind: 'comment';
@@ -61,7 +62,13 @@ export const normalizeQueuedRequest = (input: string): string | null => {
 
 export const summarizeQueueRequest = (request: string): string => {
   const normalized = normalizeRequestNewlines(request).trim().replace(/\s+/g, ' ');
-  return normalized === '' ? '(empty request)' : normalized;
+  if (normalized === '') {
+    return '(empty request)';
+  }
+
+  return normalized.length > REQUEST_SUMMARY_MAX_CHARS
+    ? `${normalized.slice(0, REQUEST_SUMMARY_MAX_CHARS)}...`
+    : normalized;
 };
 
 export const serializeQueueRequest = (request: string): string => {

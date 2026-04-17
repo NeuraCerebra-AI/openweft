@@ -10,6 +10,7 @@ const renderWithTheme = (el: React.ReactElement) =>
 
 const waitForMount = () => new Promise<void>((r) => setTimeout(r, 50));
 const waitForUpdate = () => new Promise<void>((r) => setTimeout(r, 50));
+const waitForPasteFlush = () => new Promise<void>((r) => setTimeout(r, 120));
 
 const defaultProps = {
   onAdvance: vi.fn(),
@@ -238,6 +239,61 @@ describe('StepFeatureInput', () => {
 
       expect(onQueueRequest).toHaveBeenCalledOnce();
       expect(onQueueRequest).toHaveBeenCalledWith('Bug ' + longText);
+    });
+
+    it('submits a rapid multi-chunk paste as one full request', async () => {
+      const chunks = Array.from({ length: 100 }, (_, index) => `feature-${String(index).padStart(3, '0')}-` + 'x'.repeat(96));
+      const expected = chunks.join('');
+      const onQueueRequest = vi.fn().mockResolvedValue(undefined);
+      const onAdvance = vi.fn();
+      const { stdin, lastFrame } = renderWithTheme(
+        <StepFeatureInput
+          {...defaultProps}
+          onQueueRequest={onQueueRequest}
+          onAdvance={onAdvance}
+        />,
+      );
+
+      await waitForMount();
+      for (const chunk of chunks) {
+        stdin.write(chunk);
+      }
+      await waitForPasteFlush();
+
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('[Pasted text #1]');
+      expect(frame).not.toContain('[Pasted text #2]');
+
+      stdin.write('\r');
+      await waitForUpdate();
+      await waitForUpdate();
+
+      expect(onQueueRequest).toHaveBeenCalledOnce();
+      expect(onQueueRequest).toHaveBeenCalledWith(expected);
+      expect(onAdvance).toHaveBeenCalledOnce();
+    });
+
+    it('flushes a pending multi-chunk paste before submitting immediately', async () => {
+      const chunks = Array.from({ length: 20 }, (_, index) => `instant-feature-${String(index)}-` + 'y'.repeat(70));
+      const expected = chunks.join('');
+      const onQueueRequest = vi.fn().mockResolvedValue(undefined);
+      const { stdin } = renderWithTheme(
+        <StepFeatureInput
+          {...defaultProps}
+          onQueueRequest={onQueueRequest}
+        />,
+      );
+
+      await waitForMount();
+      for (const chunk of chunks) {
+        stdin.write(chunk);
+      }
+      stdin.write('\r');
+      await waitForUpdate();
+      await waitForUpdate();
+
+      expect(onQueueRequest).toHaveBeenCalledOnce();
+      expect(onQueueRequest).toHaveBeenCalledWith(expected);
     });
   });
 });

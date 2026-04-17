@@ -490,16 +490,6 @@ const buildCodexHomeDir = (
   return path.join(config.paths.codexHomeDir, `${featureId}-${scope}`);
 };
 
-const shouldPauseForBudget = (config: ResolvedOpenWeftConfig, checkpoint: OrchestratorCheckpoint): boolean => {
-  const pauseAt = config.budget.pauseAtUsd;
-  return pauseAt !== null && checkpoint.cost.totalEstimatedUsd >= pauseAt;
-};
-
-const shouldStopForBudget = (config: ResolvedOpenWeftConfig, checkpoint: OrchestratorCheckpoint): boolean => {
-  const stopAt = config.budget.stopAtUsd;
-  return stopAt !== null && checkpoint.cost.totalEstimatedUsd >= stopAt;
-};
-
 const isMissingBranchError = (error: unknown): boolean => {
   return error instanceof Error && /branch.+not found|not a valid branch/i.test(error.message);
 };
@@ -545,7 +535,7 @@ const getAgentName = (
     return featureId;
   }
 
-  return `${feature.id} ${feature.title?.trim() || feature.request.trim()}`;
+  return `${feature.id} ${feature.title?.trim() || summarizeQueueRequest(feature.request)}`;
 };
 
 const getAgentFeature = (
@@ -558,15 +548,19 @@ const getAgentFeature = (
     return stage;
   }
 
-  return feature.title?.trim() || feature.request.trim();
+  return feature.title?.trim() || summarizeQueueRequest(feature.request);
 };
 
-const getFeatureCostUsd = (
+const getFeatureTokenCount = (
   checkpoint: OrchestratorCheckpoint,
   featureId: string
 ): number => {
-  return checkpoint.cost.perFeature[featureId]?.usd ?? 0;
+  const featureUsage = checkpoint.cost.perFeature[featureId];
+  return featureUsage ? featureUsage.inputTokens + featureUsage.outputTokens : 0;
 };
+
+const getTotalTokenCount = (checkpoint: OrchestratorCheckpoint): number =>
+  checkpoint.cost.totalInputTokens + checkpoint.cost.totalOutputTokens;
 
 const turnNeedsApproval = (stage: AdapterTurnRequest['stage']): boolean => {
   return stage === 'execution' || stage === 'adjustment' || stage === 'conflict-resolution';
@@ -1124,7 +1118,7 @@ const createFeatureBranchName = (featureId: string, request: string): string => 
 };
 
 const getFeatureLabel = (feature: Pick<FeatureCheckpoint, 'id' | 'title' | 'request'>): string => {
-  const title = feature.title?.trim() || feature.request.trim();
+  const title = feature.title?.trim() || summarizeQueueRequest(feature.request);
   return `${feature.id} ${title}`;
 };
 
@@ -1338,10 +1332,6 @@ const runTurnAndRecord = async (
   checkpoint: OrchestratorCheckpoint,
   request: AdapterTurnRequest
 ): Promise<AdapterTurnResult> => {
-  if (shouldStopForBudget(input.config, checkpoint)) {
-    throw new Error('Budget stop threshold reached before launching a new agent turn.');
-  }
-
   if (request.isolatedHomeDir) {
     await mkdir(request.isolatedHomeDir, { recursive: true });
 
@@ -1387,8 +1377,10 @@ const runTurnAndRecord = async (
   if (result.ok) {
     await appendCostRecord(input.config, checkpoint, result.costRecord);
     emitOrchestratorEvent(input, {
-      type: 'session:cost-update',
-      totalCost: checkpoint.cost.totalEstimatedUsd
+      type: 'session:token-update',
+      agentId: request.featureId,
+      tokens: getFeatureTokenCount(checkpoint, request.featureId),
+      totalTokens: getTotalTokenCount(checkpoint)
     });
     emitOrchestratorEvent(input, {
       type: 'agent:text',
@@ -1398,8 +1390,7 @@ const runTurnAndRecord = async (
     });
     emitOrchestratorEvent(input, {
       type: 'agent:completed',
-      agentId: request.featureId,
-      cost: getFeatureCostUsd(checkpoint, request.featureId)
+      agentId: request.featureId
     });
     await appendAudit(input.config, {
       level: 'info',
@@ -3330,18 +3321,6 @@ const executePhases = async (
       await announceProgress(context, `Phase ${phase.index} complete. Re-planning remaining work.`);
 
       if ((await runPendingReanalysis(context, checkpoint, phase.index, mergeSummaries)) === 'stopped') {
-        return {
-          checkpoint,
-          mergedCount
-        };
-      }
-
-      if (shouldPauseForBudget(context.config, checkpoint)) {
-        checkpoint.status = 'paused';
-        checkpoint.currentState = 'idle';
-        checkpoint.currentPhase = null;
-        await announceProgress(context, 'Budget threshold reached. OpenWeft paused after the current phase.');
-        await saveCheckpointSnapshot(context.config, checkpoint);
         return {
           checkpoint,
           mergedCount
