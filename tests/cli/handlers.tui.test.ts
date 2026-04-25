@@ -631,6 +631,45 @@ describe('TTY start handler', () => {
     await startPromise;
   });
 
+  it('applies direct start model and effort overrides to the runtime config', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-tui-direct-start-model-override-'));
+    let capturedInput: Record<string, unknown> | null = null;
+
+    await writeLaunchProjectFiles(repoRoot, {
+      queueContent: 'alpha\n'
+    });
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async (input) => {
+        capturedInput = input;
+        return {
+          checkpoint: { status: 'completed' },
+          mergedCount: 0,
+          plannedCount: 1
+        };
+      }
+    });
+
+    await harness.handlers.start({
+      model: 'gpt-5.4',
+      effort: 'high'
+    });
+
+    const runtimeInput = capturedInput as unknown as {
+      config: Awaited<ReturnType<typeof loadOpenWeftConfig>>['config'];
+      configHash: string;
+    };
+
+    expect(runtimeInput.config.models.codex).toBe('gpt-5.4');
+    expect(runtimeInput.config.effort.codex).toBe('high');
+    expect(runtimeInput.configHash).toBe(createConfigHash(runtimeInput.config));
+
+    const savedConfig = await loadOpenWeftConfig(repoRoot);
+    expect(savedConfig.config.models.codex).toBe('gpt-5.5');
+    expect(savedConfig.config.effort.codex).toBe('medium');
+  });
+
   it('requests graceful stop on SIGINT in TTY mode', async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-tui-signal-'));
     let resolveStart: ((result: StartResult) => void) | null = null;

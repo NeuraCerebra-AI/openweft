@@ -4,7 +4,7 @@ import { accumulateCostTotals, createCostEntry, createEmptyCostTotals, estimateC
 
 describe('costs', () => {
   it('estimates cost from model pricing', () => {
-    expect(estimateCostUsd('gpt-5.3-codex', 1_000_000, 100_000)).toBe(3.15);
+    expect(estimateCostUsd('gpt-5.5', 1_000_000, 100_000)).toBe(8);
   });
 
   it('returns zero quietly for unknown model names', () => {

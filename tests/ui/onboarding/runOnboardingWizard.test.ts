@@ -38,7 +38,7 @@ vi.mock('../../../src/config/index.js', () => ({
     },
     backend: 'codex',
     models: {
-      codex: 'gpt-5.3-codex',
+      codex: 'gpt-5.5',
       claude: 'claude-sonnet-4-6'
     },
     effort: {
@@ -372,7 +372,7 @@ describe('runOnboardingWizard', () => {
       expect(captured.callbacks).not.toBeNull();
       await captured.callbacks!.onRunInit({
         backend: 'codex',
-        model: 'gpt-5.3-codex',
+        model: 'gpt-5.5',
         effort: 'medium'
       });
 
@@ -399,7 +399,7 @@ describe('runOnboardingWizard', () => {
       expect(captured.callbacks).not.toBeNull();
       await captured.callbacks!.onRunInit({
         backend: 'codex',
-        model: 'gpt-5.3-codex',
+        model: 'gpt-5.5',
         effort: 'medium'
       });
 

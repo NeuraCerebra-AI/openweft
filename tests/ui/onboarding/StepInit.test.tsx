@@ -18,7 +18,7 @@ const makeOnRunInit = (shouldReject?: string) =>
 
 const successProps = {
   selectedBackend: 'codex' as const,
-  selectedModel: 'gpt-5.3-codex',
+  selectedModel: 'gpt-5.5',
   selectedEffort: 'medium' as const,
   initialized: true,
   initError: null,
@@ -31,7 +31,7 @@ const successProps = {
 
 const errorProps = {
   selectedBackend: 'codex' as const,
-  selectedModel: 'gpt-5.3-codex',
+  selectedModel: 'gpt-5.5',
   selectedEffort: 'medium' as const,
   initialized: false,
   initError: 'Permission denied: cannot write to directory',

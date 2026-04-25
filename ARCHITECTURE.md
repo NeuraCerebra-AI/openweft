@@ -667,7 +667,7 @@ prompts:
 featureRequestsDir: path (default: ./feature_requests)
 queueFile:       path (default: ./feature_requests/queue.txt)
 models:
-  codex:         string (default: 'gpt-5.3-codex')
+  codex:         string (default: 'gpt-5.5')
   claude:        string (default: 'claude-sonnet-4-6')
 effort:
   codex:           'low' | 'medium' | 'high' | 'xhigh' (default: 'medium')

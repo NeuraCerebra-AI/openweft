@@ -53,6 +53,18 @@ interface PricingTableEntry {
 }
 
 export const MODEL_PRICING: Record<string, PricingTableEntry> = {
+  'gpt-5.5': {
+    inputPerMillionUsd: 5,
+    outputPerMillionUsd: 30
+  },
+  'gpt-5.4': {
+    inputPerMillionUsd: 2.5,
+    outputPerMillionUsd: 15
+  },
+  'gpt-5.4-mini': {
+    inputPerMillionUsd: 0.75,
+    outputPerMillionUsd: 4.5
+  },
   'gpt-5.3-codex': {
     inputPerMillionUsd: 1.75,
     outputPerMillionUsd: 14

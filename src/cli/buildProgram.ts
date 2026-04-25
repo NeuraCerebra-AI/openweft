@@ -67,6 +67,8 @@ export const buildProgram = (handlers: Partial<CommandHandlers> = {}): Command =
     .option('--stream', 'Stream raw agent output.')
     .option('--tmux', 'Use tmux session output for agents when available.')
     .option('--dry-run', 'Use the mock adapter and avoid real backend execution.')
+    .option('--model <model>', 'Override the configured model for this run.')
+    .option('--effort <level>', 'Override the configured reasoning effort for this run.')
     .action(async (...args) => {
       await resolvedHandlers.start(...args);
     });

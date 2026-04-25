@@ -160,7 +160,7 @@ describe('handleKeypress', () => {
     const store = createUIStore();
     store.getState().setModelSelection({
       backend: 'codex',
-      model: 'gpt-5.3-codex',
+      model: 'gpt-5.5',
       effort: 'medium',
       editable: true
     });
@@ -170,7 +170,7 @@ describe('handleKeypress', () => {
     expect(result).toBe('handled');
     expect(store.getState().mode).toBe('model-menu');
     expect(store.getState().modelMenu).toEqual({
-      model: 'gpt-5.3-codex',
+      model: 'gpt-5.5',
       effort: 'medium',
       focus: 'model'
     });
@@ -180,7 +180,7 @@ describe('handleKeypress', () => {
     const store = createUIStore();
     store.getState().setModelSelection({
       backend: 'codex',
-      model: 'gpt-5.3-codex',
+      model: 'gpt-5.5',
       effort: 'medium',
       editable: false
     });
@@ -210,7 +210,7 @@ describe('handleKeypress', () => {
     const store = createUIStore();
     store.getState().setModelSelection({
       backend: 'codex',
-      model: 'gpt-5.3-codex',
+      model: 'gpt-5.5',
       effort: 'medium',
       editable: true
     });
@@ -319,7 +319,7 @@ describe('handleKeypress', () => {
     const saved: Array<{ model: string; effort: string }> = [];
     store.getState().setModelSelection({
       backend: 'codex',
-      model: 'gpt-5.3-codex',
+      model: 'gpt-5.5',
       effort: 'medium',
       editable: true
     });
@@ -344,7 +344,7 @@ describe('handleKeypress', () => {
     const store = createUIStore();
     store.getState().setModelSelection({
       backend: 'codex',
-      model: 'gpt-5.3-codex',
+      model: 'gpt-5.5',
       effort: 'medium',
       editable: true
     });

@@ -7,7 +7,7 @@ import type { CommandHandlers } from './buildProgram.js';
 import { ClaudeCliAdapter, CodexCliAdapter, MockAgentAdapter, createExecaCommandRunner } from '../adapters/index.js';
 import type { BackendEffortLevel } from '../config/options.js';
 import type { BackendDetection } from '../ui/onboarding/types.js';
-import { getDefaultConfig, loadOpenWeftConfig } from '../config/index.js';
+import { createConfigHash, getDefaultConfig, loadOpenWeftConfig } from '../config/index.js';
 import {
   appendRequestsToQueueContent,
   getNextFeatureIdFromQueue,
@@ -702,6 +702,47 @@ const buildModelSelectionForConfig = (
   };
 };
 
+const applyStartModelOverrides = (
+  config: ResolvedOpenWeftConfig,
+  overrides: {
+    model?: string;
+    effort?: string;
+  }
+): ResolvedOpenWeftConfig => {
+  const model = overrides.model?.trim();
+  const effort = overrides.effort?.trim();
+
+  if (!model && !effort) {
+    return config;
+  }
+
+  if (config.backend === 'claude') {
+    return {
+      ...config,
+      models: {
+        ...config.models,
+        ...(model ? { claude: model } : {})
+      },
+      effort: {
+        ...config.effort,
+        ...(effort ? { claude: effort as typeof config.effort.claude } : {})
+      }
+    };
+  }
+
+  return {
+    ...config,
+    models: {
+      ...config.models,
+      ...(model ? { codex: model } : {})
+    },
+    effort: {
+      ...config.effort,
+      ...(effort ? { codex: effort as typeof config.effort.codex } : {})
+    }
+  };
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 };
@@ -1292,9 +1333,18 @@ export const createCommandHandlers = (
         stream?: boolean;
         tmux?: boolean;
         dryRun?: boolean;
+        model?: string;
+        effort?: string;
       };
 
-      const { config, configHash } = await loadOpenWeftConfig(resolvedDependencies.getCwd());
+      const loadedConfig = await loadOpenWeftConfig(resolvedDependencies.getCwd());
+      const config = applyStartModelOverrides(loadedConfig.config, {
+        ...(options.model ? { model: options.model } : {}),
+        ...(options.effort ? { effort: options.effort } : {})
+      });
+      const configHash = config === loadedConfig.config
+        ? loadedConfig.configHash
+        : createConfigHash(config);
       if (config.configFilePath === null) {
         throw new Error('OpenWeft is not initialized here. Run "openweft init" first.');
       }

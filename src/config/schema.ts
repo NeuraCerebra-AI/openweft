@@ -117,7 +117,7 @@ export const DEFAULT_OPENWEFT_CONFIG: OpenWeftConfig = {
   featureRequestsDir: './feature_requests',
   queueFile: './feature_requests/queue.txt',
   models: {
-    codex: 'gpt-5.3-codex',
+    codex: 'gpt-5.5',
     claude: 'claude-sonnet-4-6'
   },
   effort: {

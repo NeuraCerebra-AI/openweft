@@ -21,7 +21,7 @@ describe('onboarding types', () => {
       codexStatus: { installed: true, authenticated: true },
       claudeStatus: { installed: false, authenticated: false },
       selectedBackend: 'codex',
-      selectedModel: 'gpt-5.3-codex',
+      selectedModel: 'gpt-5.5',
       selectedEffort: 'medium',
       gitInitError: null,
       initialized: false,

@@ -97,6 +97,8 @@ openweft                       setup wizard (first run) · dashboard (returning)
 openweft init                  set up config, directories, prompt files
 openweft add "feature"         queue a request (also accepts stdin)
 openweft start                 run the queue with interactive dashboard
+openweft start --model gpt-5.5 run once with a model override
+openweft start --effort high   run once with a reasoning effort override
 openweft start --bg            detach — PID tracked, logs to .openweft/output.log
 openweft start --stream        stream raw agent output to your terminal
 openweft start --tmux          launch in a tmux session
@@ -111,7 +113,7 @@ openweft stop                  finish the current phase, then stop
 
 `openweft init` writes `.openweftrc.json`. Config loads via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig) — so `.openweftrc`, `.openweftrc.yaml`, `openweft.config.js`, or the `openweft` key in `package.json` all work.
 
-**Auth:** `subscription` (default) uses your existing CLI login. `api_key` mode reads from an env var you specify. **Models:** Defaults to `gpt-5.3-codex` for Codex and `claude-sonnet-4-6` for Claude — both work on standard subscription plans. **Concurrency:** 3 parallel agents, 5s stagger delay, 5 retry attempts with backoff. **Approval:** Auto-approves all stages by default (true fire-and-forget). Set `"per-feature"` to confirm each, or `"first-only"` to approve once.
+**Auth:** `subscription` (default) uses your existing CLI login. `api_key` mode reads from an env var you specify. **Models:** Defaults to `gpt-5.5` for Codex and `claude-sonnet-4-6` for Claude. After onboarding, run `openweft` and press `m` in the ready dashboard to save a new default model/effort, or use `openweft start --model <model> --effort <level>` for a one-run override. **Concurrency:** 3 parallel agents, 5s stagger delay, 5 retry attempts with backoff. **Approval:** Auto-approves all stages by default (true fire-and-forget). Set `"per-feature"` to confirm each, or `"first-only"` to approve once.
 
 <details>
 <summary>Full default config</summary>
@@ -130,7 +132,7 @@ openweft stop                  finish the current phase, then stop
   "featureRequestsDir": "./feature_requests",
   "queueFile": "./feature_requests/queue.txt",
   "models": {
-    "codex": "gpt-5.3-codex",
+    "codex": "gpt-5.5",
     "claude": "claude-sonnet-4-6"
   },
   "effort": {

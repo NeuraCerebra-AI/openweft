@@ -142,7 +142,7 @@ describe('StepBackends', () => {
       await waitForUpdate();
       expect(onAdvance).toHaveBeenCalledWith({
         backend: 'codex',
-        model: 'gpt-5.3-codex',
+        model: 'gpt-5.5',
         effort: 'medium'
       });
     });
@@ -272,7 +272,7 @@ describe('StepBackends', () => {
       await waitForUpdate();
       expect(onAdvance).toHaveBeenCalledWith({
         backend: 'codex',
-        model: 'gpt-5.3-codex',
+        model: 'gpt-5.5',
         effort: 'medium'
       });
     });

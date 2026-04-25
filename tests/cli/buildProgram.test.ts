@@ -19,7 +19,9 @@ describe('buildProgram', () => {
       '--bg',
       '--stream',
       '--tmux',
-      '--dry-run'
+      '--dry-run',
+      '--model',
+      '--effort'
     ]);
   });
 });

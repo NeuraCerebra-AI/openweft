@@ -12,7 +12,7 @@ const baseRequest = (): AdapterTurnRequest => ({
   stage: 'execution',
   cwd: '/tmp/openweft-test',
   prompt: 'Reply with OK.',
-  model: 'gpt-5.3-codex',
+  model: 'gpt-5.5',
   auth: { method: 'subscription' },
   persistSession: false,
   isolatedHomeDir: '/tmp/codex-home',
@@ -38,7 +38,7 @@ describe('codex adapter', () => {
       '--color',
       'never',
       '--model',
-      'gpt-5.3-codex',
+      'gpt-5.5',
       '-'
     ]);
     expect(command.input).toBe('Reply with OK.');
@@ -69,7 +69,7 @@ describe('codex adapter', () => {
       'session-123',
       '--json',
       '--model',
-      'gpt-5.3-codex',
+      'gpt-5.5',
       '-'
     ]);
     expect(command.idleTimeoutMs).toBe(90 * 60 * 1000);
@@ -103,7 +103,7 @@ describe('codex adapter', () => {
       '--color',
       'never',
       '--model',
-      'gpt-5.3-codex',
+      'gpt-5.5',
       '-c',
       'model_reasoning_effort="high"',
       '-'
@@ -136,7 +136,7 @@ describe('codex adapter', () => {
       'session-123',
       '--json',
       '--model',
-      'gpt-5.3-codex',
+      'gpt-5.5',
       '-c',
       'model_reasoning_effort="xhigh"',
       '-'
