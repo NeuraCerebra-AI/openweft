@@ -58,39 +58,204 @@ Features 1 and 2 ran in parallel — no file overlap. Feature 3 touched the same
   </picture>
 </p>
 
-**Good fit:** You have a backlog of features, some touch overlapping files, and you want to batch them through Claude Code or Codex without manually coordinating worktrees, merges, and re-plans.
+## When to use OpenWeft
 
-**Not the right tool:** One quick edit (just run Claude Code directly), interactive pair-programming, repos that can't use git worktrees, or anyone expecting a polished 1.0.
+| Good fit | Not a fit |
+|---|---|
+| You have a backlog of independent or semi-independent feature requests. | You need one quick edit; run Codex or Claude directly. |
+| Some tasks may touch overlapping files and need scheduling before execution. | You want interactive pair-programming instead of batch execution. |
+| You want agents isolated in git worktrees, merged in priority order, and resumed after crashes. | Your repository cannot use git worktrees. |
+| You want an inspectable trail of plans, manifests, ledgers, checkpoints, and audit events. | You expect a polished 1.0 product surface. |
 
-Requires Node.js `>=24`, Git, and one or both of `codex` / `claude` already logged in. OpenWeft piggybacks on your existing CLI sessions — a standard $20/mo subscription works. API keys are optional if you want them, but not required.
+Requires Node.js `>=24`, Git, and one or both of `codex` / `claude` already logged in.
 
 ---
 
-## How it works
+## What OpenWeft proves
 
-You queue a request. OpenWeft compiles it into a detailed worker brief — not a one-line prompt, but a full operating document with investigation steps, 5-approach brainstorming, risk scoring, and a structured execution plan. Each feature gets its own git worktree so agents can't step on each other.
+OpenWeft is an agentic workflow orchestrator, not a prompt wrapper. It turns raw feature requests into durable plans, schedules them by file-level risk, executes each feature in a separate git worktree, merges completed branches in priority order, and keeps enough state on disk to recover after interruptions.
 
-OpenWeft analyzes which features would touch the same files using file-level manifest analysis with coupling weights. Non-overlapping work runs simultaneously. Everything else gets queued for the next batch. When agents finish, results merge in priority order. If there's a conflict, the agent resolves it. Then the cycle repeats — re-score, re-phase, re-plan — until the queue is empty.
+The core design separates model cognition from orchestration control:
 
-Every step is recorded. Plans, checkpoints, audit trails, and token usage persist on disk. If the process crashes, `openweft start` recovers from the last checkpoint automatically.
+| Layer | Responsibility |
+|---|---|
+| Prompt pipeline | Convert requests into worker briefs, then executable plans. |
+| Domain model | Score risk, detect manifest overlap, assign phases, classify failures. |
+| Orchestrator | Drive the planning, execution, merge, re-analysis, and recovery loop. |
+| Git layer | Own worktree lifecycle, dirty-tree-safe merges, conflict handling, and cleanup. |
+| State layer | Persist strict checkpoints, token usage, audit events, and recovery artifacts. |
+| Adapter layer | Normalize Codex CLI, Claude Code, and deterministic mock execution behind one contract. |
 
 For the full architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ---
 
-## Features
+## Core loop
 
-- **Two-stage prompt system.** Your raw request compiles into a production-grade worker brief (Prompt A → Prompt B). Agents investigate the codebase, brainstorm 5 approaches, score by risk, and verify downstream impact — not first-idea execution.
-- **Conflict-aware phasing.** Features that touch high-fan-in files (shared configs, route registries, index barrels) get scored and phased into their own execution group. Deterministic XState v5 state machine, not a chain of promises.
-- **Dirty-tree-safe merges.** If your main branch has staged, unstaged, or untracked local changes, OpenWeft auto-stashes them before integrating a feature branch, restores them afterward, and keeps recovery possible if manual stash resolution is ever needed.
-- **Three backends, one interface.** Codex CLI, Claude Code, and a deterministic mock share the same adapter contract. The mock powers `--dry-run` — validate the full pipeline without calling live agents.
-- **Crash recovery.** Kill the process, reboot, `Ctrl+C` at the worst moment. Zod-validated checkpoints reset in-flight features to `planned` and re-run them.
-- **Token-first usage.** Status reports input and output tokens, with no subscription-price guesses or dollar estimates in the normal flow.
-- **Full auditability.** Each plan includes a structured Ledger section. When it's done, you can read what was investigated, what changed, and what got deferred — a narrative, not a log dump.
+```text
+Queue -> Plan -> Score -> Phase -> Execute -> Merge -> Re-plan -> Checkpoint
+          ^                                                |
+          └──────────────── repeat until queue empty ──────┘
+```
+
+Each queue item becomes a feature plan. Each plan declares the files it expects to create, modify, or delete. OpenWeft scores those plans by risk, groups non-overlapping features into execution phases, launches each feature in an isolated worktree, merges completed branches back to the base branch, feeds real edit summaries into remaining plans, and repeats until no runnable work remains.
+
+The normal path is batch-oriented, but not blind. Every stage produces durable artifacts under `feature_requests/` or `.openweft/`, so the system can explain what it tried, what changed, and what still needs attention.
+
+---
+
+## Planning pipeline
+
+OpenWeft uses a two-stage planning compiler:
+
+```text
+Raw request
+  -> Prompt A meta-prompt
+  -> Prompt B worker brief
+  -> Markdown execution plan
+  -> ## Manifest + ## Ledger
+```
+
+**Stage 1** sends the raw request through Prompt A. Prompt A does not implement the feature; it generates Prompt B, a detailed worker brief saved under `feature_requests/briefs/`.
+
+**Stage 2** sends Prompt B to the selected backend. The result is a Markdown feature plan saved under `feature_requests/`, validated as an execution artifact instead of treated as disposable chat output.
+
+Every plan must include a manifest:
+
+```json
+{
+  "create": [],
+  "modify": [],
+  "delete": []
+}
+```
+
+The manifest is parsed structurally with `remark`, validated with strict Zod schemas, and repaired with `jsonrepair` / JSON5 fallback when possible. Every plan also needs a `## Ledger` section with required `Constraints`, `Assumptions`, `Watchpoints`, and `Validation` subheadings, making execution inspectable before agents touch code.
+
+---
+
+## Scheduling and conflict avoidance
+
+OpenWeft treats parallel coding as a scheduling problem. It does not simply launch a group of agents and hope git sorts it out later.
+
+| Mechanism | What it does | Why it matters |
+|---|---|---|
+| Manifest overlap detection | Compares `create`, `modify`, and `delete` paths across plans. | Features that touch the same file never run in the same phase. |
+| Hot-file isolation | Isolates schema migrations, config/CI files, and high-fan-in shared libraries. | Changes to central files get serialized even when manifests do not collide. |
+| Blast-radius scoring | Weighs file type, operation type, fan-in, and directory spread. | Risky work is visible to the scheduler before execution begins. |
+| Success likelihood | Penalizes broad, modification-heavy, external-API-heavy, high-coupling work. | Smaller and safer tasks can land first. |
+| EWMA + hysteresis | Smooths priority changes and prevents tier flicker across cycles. | Re-planning stays stable instead of bouncing between noisy rankings. |
+
+The phasing algorithm is intentionally conservative:
+
+```text
+for feature in priority order:
+  if feature touches hot files:
+    isolate in its own phase
+  else if a phase has capacity and no manifest overlap:
+    add feature to that phase
+  else:
+    create the next phase
+```
+
+Example:
+
+| Feature | Manifest files | Phase |
+|---|---|---|
+| Password reset | `src/auth/reset.ts`, `src/email.ts` | 1 |
+| Audit export | `src/audit/export.ts` | 1 |
+| Auth middleware refactor | `src/auth/middleware.ts`, `src/auth/reset.ts` | 2 |
+
+The first two features can run together. The third overlaps with the password-reset work, so it waits for the next phase and re-plans against the merged result.
+
+---
+
+## Execution and merge safety
+
+Each feature gets its own physical git worktree under `.openweft/worktrees/`:
+
+```text
+base branch
+  ├─ .openweft/worktrees/001 -> feature branch -> merge --no-ff
+  ├─ .openweft/worktrees/002 -> feature branch -> merge --no-ff
+  └─ .openweft/worktrees/003 -> waits for re-plan
+```
+
+The orchestrator owns topology. Workers are told to use the assigned worktree only; they do not create extra branches, clone the repo, or decide where their output lands.
+
+Merges happen back on the base branch in priority order using `--no-ff`, preserving a visible merge commit for each completed feature. If your base branch has staged, unstaged, or untracked changes, OpenWeft stashes them before merge and restores them afterward. If a merge conflicts, OpenWeft aborts the base merge, stages the base changes into the feature worktree, asks the agent to resolve the conflict with the original plan context, commits the resolution, and retries within bounded reconciliation rounds.
+
+On resume, OpenWeft can also detect reusable completion commits. If a worker already finished before the process died, the system queues that branch for merge recovery instead of spending another agent run on identical work.
+
+---
+
+## Recovery model
+
+Fire-and-forget only works if the process can survive bad timing: terminal exits, `Ctrl+C`, power loss, background jobs, and half-finished agent sessions.
+
+| Artifact | Purpose |
+|---|---|
+| `.openweft/checkpoint.json` | Current run state, feature statuses, phase, queue order, merge summaries, and usage totals. |
+| `.openweft/checkpoint.json.backup` | Last known checkpoint fallback. |
+| `.openweft/audit-trail.jsonl` | Append-only event history for real runs. |
+| `.openweft/costs.jsonl` | Token usage per agent call. |
+| `feature_requests/*.md` | Validated Markdown execution plans. |
+| `feature_requests/briefs/*.md` | Durable Prompt B worker briefs. |
+| `.openweft/shadow-plans/` | Internal mirrors used during execution and recovery. |
+
+Checkpoint writes are atomic and Zod-validated. Loading prefers the primary checkpoint, falls back to the backup if the primary is corrupt, and rejects unexpected schema fields. On resume, in-flight features reset to `planned` unless OpenWeft can prove there is already a reusable completion or recorded merge. Clean re-execution from a persisted plan is safer than trying to resurrect half-valid model context.
+
+Completion is also verified after the run. OpenWeft checks that recorded merge commits are reachable from final `HEAD`; if durability verification fails, the run is downgraded instead of pretending success.
+
+---
+
+## Runtime model
+
+OpenWeft piggybacks on the agent CLIs you already use.
+
+| Backend | Auth modes | Notes |
+|---|---|---|
+| Codex CLI | `subscription` or `api_key` | Uses your existing Codex CLI login by default. |
+| Claude Code | `subscription` or `api_key` | Uses your existing Claude Code login by default. |
+| Mock | none | Powers `--dry-run` and deterministic tests. |
+
+A standard subscription CLI login is enough. API keys are optional if you want that deployment model, but not required for normal use. Status output reports input and output tokens, not speculative subscription-price estimates.
+
+The adapter contract normalizes command construction, working directory, prompts, model, effort level, auth, sandbox mode, session reuse, token usage, and classified failure results across backends.
+
+---
+
+## Operational guardrails
+
+OpenWeft has explicit boundaries for failure and retry behavior:
+
+| Guardrail | Behavior |
+|---|---|
+| Failure taxonomy | Errors are classified as infrastructure, rate-limit, permission, circuit-breaker, user-input, or unknown. |
+| Retry policy | Recoverable execution failures can reset the worktree and rerun within configured limits. |
+| Circuit breaker | Excessive failures can stop the run rather than burning through the rest of the queue. |
+| Bounded conflict resolution | Merge conflicts get a limited number of agent-assisted resolution rounds. |
+| Post-merge re-analysis | Remaining plans whose manifests overlap with real changed paths get adjusted before execution. |
+| Token accounting | Every agent call records input and output tokens by stage and feature. |
+
+This is the main distinction: OpenWeft operationalizes AI coding agents as schedulable workers. The model performs cognition inside a bounded worktree; the orchestrator owns state, ordering, recovery, and reconciliation.
 
 ---
 
 ## Commands
+
+Common flow:
+
+```bash
+openweft init
+openweft add "add password reset flow"
+openweft start --dry-run
+openweft start
+openweft status
+openweft stop
+```
+
+Full command reference:
 
 ```
 openweft                       setup wizard (first run) · dashboard (returning)
@@ -111,9 +276,20 @@ openweft stop                  finish the current phase, then stop
 
 ## Configuration
 
-`openweft init` writes `.openweftrc.json`. Config loads via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig) — so `.openweftrc`, `.openweftrc.yaml`, `openweft.config.js`, or the `openweft` key in `package.json` all work.
+`openweft init` writes `.openweftrc.json`. Config loads via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig), so `.openweftrc`, `.openweftrc.yaml`, `openweft.config.js`, or the `openweft` key in `package.json` all work.
 
-**Auth:** `subscription` (default) uses your existing CLI login. `api_key` mode reads from an env var you specify. **Models:** Defaults to `gpt-5.5` for Codex and `claude-sonnet-4-6` for Claude. After onboarding, run `openweft` and press `m` in the ready dashboard to save a new default model/effort, or use `openweft start --model <model> --effort <level>` for a one-run override. **Concurrency:** 3 parallel agents, 5s stagger delay, 5 retry attempts with backoff. **Approval:** Auto-approves all stages by default (true fire-and-forget). Set `"per-feature"` to confirm each, or `"first-only"` to approve once.
+| Setting | Default | Meaning |
+|---|---|---|
+| `backend` | `codex` | Agent backend for live runs. |
+| `auth.*.method` | `subscription` | Use existing CLI login unless configured for API-key mode. |
+| `models.codex` | `gpt-5.5` | Default Codex model. |
+| `models.claude` | `claude-sonnet-4-6` | Default Claude model. |
+| `approval` | `always` | Fire-and-forget by default; can be `per-feature` or `first-only`. |
+| `concurrency.maxParallelAgents` | `3` | Maximum workers per compatible phase. |
+| `concurrency.staggerDelayMs` | `5000` | Delay between worker launches. |
+| `status.usageDisplay` | `tokens` | Status reports token counts. |
+
+After onboarding, run `openweft` and press `m` in the ready dashboard to save a new default model/effort, or use `openweft start --model <model> --effort <level>` for a one-run override.
 
 <details>
 <summary>Full default config</summary>
@@ -154,9 +330,51 @@ openweft stop                  finish the current phase, then stop
 
 ---
 
+## Repository layout
+
+```text
+src/
+├── adapters/       Backend contracts for Codex CLI, Claude Code, and mock runs
+├── orchestrator/   Planning, execution, merge, re-analysis, finalization
+├── domain/         Pure scoring, phasing, manifest, queue, cost, and error logic
+├── state/          Strict checkpoint schema, save, load, and backup recovery
+├── git/            Worktree lifecycle, branch merge, conflicts, cleanup, auto-gc
+├── config/         Zod config schema and cosmiconfig loading
+├── cli/            Commander commands and handler wiring
+├── fs/             Atomic writes, retry reads, JSONL helpers, runtime paths
+├── status/         Runtime diagnostics and status rendering
+├── ui/             Ink onboarding, dashboard state, keyboard, terminal behavior
+└── tmux/           Optional tmux launch and slot log integration
+```
+
+The important boundary is that `domain/` stays pure, `git/` owns repository topology, `state/` owns recovery durability, and `adapters/` keep backend-specific CLI behavior out of the orchestrator.
+
+---
+
+## Design principles
+
+**Prompt B is first-class.** The generated worker brief is persisted, inspectable, and recoverable. It is not throwaway glue between a user request and an agent turn.
+
+**OpenWeft owns topology.** Agents work inside assigned worktrees. The orchestrator decides branches, merges, cleanup, and recovery.
+
+**Real diffs beat declared intent.** Manifests guide scheduling, but actual repository changes are the final truth for merge summaries and downstream re-analysis.
+
+**Separate cognition from orchestration.** The model investigates and edits. OpenWeft controls state, ordering, retries, isolation, and reconciliation.
+
+**Simplicity is role clarity.** The system is easier to reason about because each layer has one job: plan, score, phase, execute, merge, recover.
+
+---
+
 ## Contributing
 
-PRs welcome. Run `npm run release:check` before submitting.
+PRs welcome. Useful local checks:
+
+```bash
+npm run typecheck
+npm test
+npm run build
+npm run release:check
+```
 
 ## License
 
