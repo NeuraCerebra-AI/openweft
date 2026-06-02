@@ -647,6 +647,19 @@ const formatCleanupSummary = (
   }
 };
 
+const formatRunTerminalLabel = (status: string): string => {
+  switch (status) {
+    case 'failed':
+      return 'Run failed';
+    case 'paused':
+      return 'Run paused';
+    case 'stopped':
+      return 'Run stopped';
+    default:
+      return 'Run complete';
+  }
+};
+
 const waitForBackgroundChildReady = async (input: {
   pidFile: string;
   spawnedPid: number;
@@ -1548,10 +1561,11 @@ export const createCommandHandlers = (
           ...(tmuxMonitor ? { tmuxMonitor } : {})
         });
 
+        const terminalLabel = formatRunTerminalLabel(result.checkpoint.status);
         resolvedDependencies.writeLine(
           result.finalizationSummary
-            ? `Run complete: planned ${result.plannedCount}, merged ${result.mergedCount}, status ${result.checkpoint.status}, head ${result.finalizationSummary.finalHead ?? 'unknown'}, durability ${summarizeMergeDurability(result.finalizationSummary.mergeDurability)}, ${formatCleanupSummary(result.finalizationSummary.runtimeCleanup.action)}.`
-            : `Run complete: planned ${result.plannedCount}, merged ${result.mergedCount}, status ${result.checkpoint.status}.`
+            ? `${terminalLabel}: planned ${result.plannedCount}, merged ${result.mergedCount}, status ${result.checkpoint.status}, head ${result.finalizationSummary.finalHead ?? 'unknown'}, durability ${summarizeMergeDurability(result.finalizationSummary.mergeDurability)}, ${formatCleanupSummary(result.finalizationSummary.runtimeCleanup.action)}.`
+            : `${terminalLabel}: planned ${result.plannedCount}, merged ${result.mergedCount}, status ${result.checkpoint.status}.`
         );
       } finally {
         process.off('SIGINT', signalHandler);

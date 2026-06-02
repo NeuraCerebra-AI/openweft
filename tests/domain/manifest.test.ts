@@ -49,6 +49,44 @@ describe('manifest', () => {
     expect(repaired.method).toBe('jsonrepair');
   });
 
+  it('falls back to the last known good manifest only when parsing fails', () => {
+    const lastKnownGood = {
+      create: ['src/fallback.ts'],
+      modify: [],
+      delete: []
+    };
+    const parsed = parseManifestJson(']', lastKnownGood);
+
+    expect(parsed).toEqual({
+      manifest: lastKnownGood,
+      method: 'last-known-good'
+    });
+  });
+
+  it('treats tolerant-parser non-objects as parse failures for last-known-good fallback', () => {
+    const lastKnownGood = {
+      create: ['src/fallback.ts'],
+      modify: [],
+      delete: []
+    };
+    const parsed = parseManifestJson('garbage', lastKnownGood);
+
+    expect(parsed).toEqual({
+      manifest: lastKnownGood,
+      method: 'last-known-good'
+    });
+  });
+
+  it('does not fall back to last known good when a parsed manifest has unsafe paths', () => {
+    expect(() =>
+      parseManifestJson('{"create":["../secrets.txt"],"modify":[],"delete":[]}', {
+        create: ['src/fallback.ts'],
+        modify: [],
+        delete: []
+      })
+    ).toThrow(/safe repository-relative file path/);
+  });
+
   it('updates manifest blocks in place', () => {
     const updated = updateManifestInMarkdown(markdown, {
       create: ['src/new.ts'],

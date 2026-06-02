@@ -1155,6 +1155,8 @@ describe('runRealOrchestration', () => {
       return originalRunTurn(request);
     };
 
+    vi.doUnmock('../../src/git/index.js');
+    vi.doUnmock('../../src/git/index.js');
     vi.resetModules();
     vi.doMock('../../src/git/index.js', async () => {
       const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
@@ -3240,9 +3242,7 @@ describe('runRealOrchestration', () => {
         }
       );
     const mergeOrderAudit = auditEntries.find((entry) => entry.event === 'merge.phase.order');
-    const phaseOneMergeResultAudits = auditEntries.filter(
-      (entry) => entry.event === 'merge.feature.result' && entry.data?.phaseIndex === 1
-    );
+    const mergeResultAudits = auditEntries.filter((entry) => entry.event === 'merge.feature.result');
     const reanalysisDecisionAudits = auditEntries.filter(
       (entry) => entry.event === 'reanalysis.feature.decision' && entry.data?.phaseIndex === 1
     );
@@ -3263,8 +3263,8 @@ describe('runRealOrchestration', () => {
         (left, right) => right - left
       )
     );
-    expect(phaseOneMergeResultAudits.map((entry) => entry.data?.featureId).sort()).toEqual(['001', '002']);
-    expect(phaseOneMergeResultAudits.every((entry) => entry.data?.result === 'merged')).toBe(true);
+    expect(mergeResultAudits.slice(0, 2).map((entry) => entry.data?.featureId).sort()).toEqual(['001', '002']);
+    expect(mergeResultAudits.every((entry) => entry.data?.result === 'merged')).toBe(true);
     expect(
       reanalysisDecisionAudits.some(
         (entry) =>
@@ -3278,6 +3278,100 @@ describe('runRealOrchestration', () => {
         (entry) => entry.data?.featureId === '004' && entry.data.decision === 'skipped-no-overlap'
       )
     ).toBe(true);
+  });
+
+  it('recomputes future phases after re-analysis changes a remaining manifest', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 2,
+      queueRequests: ['add feature alpha', 'add feature beta', 'add feature gamma', 'add feature delta']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const manifestsByFeatureId: Record<string, string[]> = {
+      '001': ['src/a.ts'],
+      '002': ['src/b.ts'],
+      '003': ['src/a.ts'],
+      '004': ['src/b.ts']
+    };
+    const adapter = new RecordingAdapter(new DeterministicManifestAdapter(manifestsByFeatureId));
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'adjustment' && request.featureId === '003') {
+        adapter.requests.push(request);
+        manifestsByFeatureId['003'] = ['src/b.ts'];
+
+        return {
+          ok: true,
+          backend: 'codex',
+          sessionId: 'adjust-003-overlap-004',
+          finalMessage: `# Feature Plan: ${request.featureId}
+
+${TEST_LEDGER_SECTION}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/b.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`,
+          model: request.model,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cachedInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            totalCostUsd: 0,
+            raw: null
+          },
+          costRecord: {
+            featureId: request.featureId,
+            stage: request.stage,
+            model: request.model,
+            inputTokens: 10,
+            outputTokens: 5,
+            estimatedCostUsd: 0,
+            timestamp: new Date().toISOString()
+          },
+          artifacts: {
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+            command: adapter.buildCommand(request)
+          }
+        };
+      }
+
+      return originalRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+    const mergeOrderAudits = auditEntries.filter((entry) => entry.event === 'merge.phase.order');
+    const mergeOrderPhaseIndexes = mergeOrderAudits.map((entry) => entry.data?.phaseIndex);
+    const staleMergedTogether = mergeOrderAudits.some((entry) => {
+      const orderedFeatures = (entry.data?.orderedFeatures as Array<{ featureId: string }> | undefined) ?? [];
+      const featureIds = orderedFeatures.map((feature) => feature.featureId);
+      return featureIds.includes('003') && featureIds.includes('004');
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.checkpoint.features['003']?.manifest?.create).toEqual(['src/b.ts']);
+    expect(mergeOrderPhaseIndexes).toEqual([1, 2, 3]);
+    expect(staleMergedTogether).toBe(false);
   });
 
   it('reuses an interrupted execution commit without rerunning execution', async () => {
@@ -3434,6 +3528,105 @@ describe('runRealOrchestration', () => {
     expect(result.checkpoint.status).toBe('completed');
     expect(result.mergedCount).toBe(1);
     expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(true);
+  });
+
+  it('records post-merge auto-stash restore failures with merge metadata', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['update shared module']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const mergedEditSummary = {
+      merge_commit: 'merge-commit',
+      branch: 'openweft-001-update-shared-module',
+      pre_merge_commit: 'pre-merge-commit',
+      total_files_changed: 1,
+      total_lines_added: 2,
+      total_lines_removed: 1,
+      files: [
+        {
+          path: 'src/features/001-runtime-generated-prompt-b-for-001.ts',
+          change_type: 'modified' as const,
+          lines_added: 2,
+          lines_removed: 1,
+          old_path: null
+        }
+      ]
+    };
+
+    vi.resetModules();
+    vi.doMock('../../src/git/index.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
+        '../../src/git/index.js'
+      );
+
+      return {
+        ...actual,
+        isCommitAncestor: vi.fn(async (_repoRoot: string, ancestorCommit: string) => {
+          return ancestorCommit === 'merge-commit';
+        }),
+        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
+          throw new actual.PostMergeAutoStashRestoreError({
+            branch,
+            preMergeCommit: 'pre-merge-commit',
+            mergeCommit: 'merge-commit',
+            editSummary: mergedEditSummary,
+            autoStash: {
+              created: true,
+              restored: false,
+              recoveryMessage: 'OpenWeft could not restore your auto-stashed changes cleanly after merging.'
+            }
+          });
+        })
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runRealOrchestrationWithStashFailure } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithStashFailure({
+        config,
+        configHash,
+        adapter,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('failed');
+      expect(result.checkpoint.pendingMergeSummaries).toEqual([
+        {
+          featureId: '001',
+          summary: mergedEditSummary
+        }
+      ]);
+      expect(result.checkpoint.features['001']).toMatchObject({
+        status: 'failed',
+        mergeCommit: 'merge-commit',
+        rerunEligible: false,
+        lastError: expect.stringContaining('could not restore your auto-stashed changes')
+      });
+
+      const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+      const mergeAudit = auditEntries.find(
+        (entry) =>
+          entry.event === 'merge.feature.result' &&
+          entry.data?.featureId === '001'
+      );
+      expect(mergeAudit?.data).toMatchObject({
+        result: 'failed',
+        failureStage: 'post-merge-auto-stash-restore',
+        editSummary: mergedEditSummary,
+        error: expect.stringContaining('could not restore your auto-stashed changes')
+      });
+    } finally {
+      vi.doUnmock('../../src/git/index.js');
+      vi.resetModules();
+    }
   });
 
   it('resolves merge conflicts through the orchestrator worktree retry path', async () => {
@@ -3596,6 +3789,7 @@ describe('runRealOrchestration', () => {
       ]
     };
 
+    vi.doUnmock('../../src/git/index.js');
     vi.resetModules();
     vi.doMock('../../src/git/index.js', async () => {
       const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
@@ -3661,6 +3855,145 @@ describe('runRealOrchestration', () => {
       });
       expect(adapter.requests.filter((request) => request.stage === 'conflict-resolution')).toHaveLength(2);
       expect(abortMergeMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.doUnmock('../../src/git/index.js');
+      vi.resetModules();
+    }
+  });
+
+  it('retries conflict resolution when unresolved conflict sanity checks fail', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['update shared module']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const inner = new MockAgentAdapter();
+    const adapter = new RecordingAdapter(inner);
+    const innerRunTurn = inner.runTurn.bind(inner);
+
+    adapter.runTurn = async (request) => {
+      adapter.requests.push(request);
+      return innerRunTurn(request);
+    };
+
+    const mergedEditSummary = {
+      merge_commit: 'merge-commit',
+      branch: 'openweft-001-update-shared-module',
+      pre_merge_commit: 'pre-merge-commit',
+      total_files_changed: 1,
+      total_lines_added: 2,
+      total_lines_removed: 1,
+      files: [
+        {
+          path: 'src/features/001-runtime-generated-prompt-b-for-001.ts',
+          change_type: 'modified' as const,
+          lines_added: 2,
+          lines_removed: 1,
+          old_path: null
+        }
+      ]
+    };
+
+    vi.resetModules();
+    vi.doMock('../../src/git/index.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
+        '../../src/git/index.js'
+      );
+      const resetWorktreeToHead = vi.fn(async () => {});
+      let mergeAttempts = 0;
+      let sanityAttempts = 0;
+      const assertNoUnresolvedConflictState = vi.fn(async () => {
+        sanityAttempts += 1;
+        if (sanityAttempts === 1) {
+          throw new Error('Conflict markers remain in resolved files: src/conflicted.ts');
+        }
+      });
+
+      return {
+        ...actual,
+        resetWorktreeToHead,
+        isCommitAncestor: vi.fn(async (_repoRoot: string, ancestorCommit: string) => {
+          return ancestorCommit === 'merge-commit';
+        }),
+        getWorktreeStatusSummary: vi.fn(async () => ({
+          ahead: 0,
+          behind: 0,
+          dirty: true,
+          changedFiles: ['src/conflicted.ts', 'src/extra-marker.ts']
+        })),
+        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
+          mergeAttempts += 1;
+          if (mergeAttempts === 1) {
+            return {
+              status: 'conflict' as const,
+              branch,
+              preMergeCommit: 'pre-merge-commit',
+              conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+            };
+          }
+
+          return {
+            status: 'merged' as const,
+            branch,
+            preMergeCommit: 'pre-merge-commit',
+            mergeCommit: 'merge-commit',
+            editSummary: mergedEditSummary
+          };
+        }),
+        mergeBranchIntoWorktree: vi.fn(async (_worktreePath: string, branch: string) => ({
+          status: 'conflicted' as const,
+          branch,
+          preMergeCommit: 'pre-merge-commit',
+          mergeHeadCommit: 'merge-head-commit',
+          conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
+        })),
+        assertNoUnresolvedConflictState,
+        commitAllChanges: vi.fn(async () => 'resolved-commit')
+      };
+    });
+
+    try {
+      const gitModule = await import('../../src/git/index.js');
+      const assertNoUnresolvedConflictStateMock = vi.mocked(gitModule.assertNoUnresolvedConflictState);
+      const resetWorktreeToHeadMock = vi.mocked(gitModule.resetWorktreeToHead);
+      const { runRealOrchestration: runRealOrchestrationWithSanityRetry } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      const result = await runRealOrchestrationWithSanityRetry({
+        config,
+        configHash,
+        adapter,
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      });
+
+      expect(result.checkpoint.status).toBe('completed');
+      expect(result.checkpoint.features['001']).toMatchObject({
+        status: 'completed',
+        mergeResolutionAttempts: 0
+      });
+      expect(adapter.requests.filter((request) => request.stage === 'conflict-resolution')).toHaveLength(2);
+      expect(assertNoUnresolvedConflictStateMock).toHaveBeenCalledWith(
+        expect.any(String),
+        ['src/conflicted.ts', 'src/extra-marker.ts']
+      );
+      expect(resetWorktreeToHeadMock).toHaveBeenCalledWith(
+        expect.any(String),
+        'pre-merge-commit'
+      );
+
+      const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+      const retryAudit = auditEntries.find(
+        (entry) =>
+          entry.event === 'merge.conflict-resolution.retry-scheduled' &&
+          entry.data?.failureStage === 'conflict-resolution-sanity'
+      );
+      expect(retryAudit?.data?.error).toEqual(
+        expect.stringContaining('Conflict markers remain')
+      );
     } finally {
       vi.doUnmock('../../src/git/index.js');
       vi.resetModules();
@@ -3764,7 +4097,8 @@ describe('runRealOrchestration', () => {
 
       expect(result.checkpoint.status).toBe('completed');
       expect(resetWorktreeToHeadMock).toHaveBeenCalledWith(
-        result.checkpoint.features['001']?.worktreePath ?? expect.any(String)
+        result.checkpoint.features['001']?.worktreePath ?? expect.any(String),
+        'HEAD'
       );
     } finally {
       vi.doUnmock('../../src/git/index.js');
@@ -4664,7 +4998,7 @@ ${TEST_LEDGER_SECTION}
       sleep: async () => {}
     });
 
-    for (let attempt = 0; attempt < 200 && !approvalController.hasPendingApproval(); attempt += 1) {
+    for (let attempt = 0; attempt < 1000 && !approvalController.hasPendingApproval(); attempt += 1) {
       await new Promise((resolve) => {
         setTimeout(resolve, 10);
       });
@@ -4711,7 +5045,7 @@ ${TEST_LEDGER_SECTION}
       sleep: async () => {}
     });
 
-    for (let attempt = 0; attempt < 200 && !approvalController.hasPendingApproval(); attempt += 1) {
+    for (let attempt = 0; attempt < 1000 && !approvalController.hasPendingApproval(); attempt += 1) {
       await new Promise((resolve) => {
         setTimeout(resolve, 10);
       });

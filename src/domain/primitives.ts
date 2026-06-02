@@ -1,8 +1,7 @@
 import { z } from 'zod';
 
-export const RelativeFilePathSchema = z
-  .string()
-  .regex(/^[\w./@-][\w./@ -]*$/, 'Must be a valid relative file path');
+export { RelativeFilePathSchema } from './paths.js';
+import { RelativeFilePathSchema } from './paths.js';
 
 export const ManifestSchema = z
   .object({

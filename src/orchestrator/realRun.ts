@@ -42,6 +42,7 @@ import {
 } from '../fs/index.js';
 import {
   abortMerge,
+  assertNoUnresolvedConflictState,
   commitAllChanges,
   createWorktree,
   getAutoGcSetting,
@@ -50,6 +51,7 @@ import {
   hasChangesSince,
   mergeBranchIntoCurrent,
   mergeBranchIntoWorktree,
+  PostMergeAutoStashRestoreError,
   pruneOrphanedOpenWeftArtifacts,
   removeWorktree,
   resetWorktreeToHead,
@@ -189,6 +191,7 @@ interface RealRunContext extends RealRunInput {
   error: string | null;
   recoveredExecutions: Map<string, RecoveredExecutionResult>;
   resumeReanalysisPhaseIndex: number | null;
+  nextPhaseIndex: number;
   approvalState: RunApprovalState;
 }
 
@@ -1868,7 +1871,8 @@ const createOrResetFeatureWorktree = async (
       repoRoot: input.config.repoRoot,
       worktreePath: feature.worktreePath,
       branchName,
-      force: true
+      force: true,
+      worktreesDir: input.config.paths.worktreesDir
     });
   } else if (feature.branchName) {
     await simpleGit(input.config.repoRoot).raw(['worktree', 'prune']);
@@ -1991,9 +1995,12 @@ const appendMergeFeatureResultAudit = async (
     failureStage?:
       | 'merge-into-current'
       | 'merge-into-worktree'
+      | 'conflict-resolution-sanity'
       | 'conflict-resolution-approval'
       | 'conflict-resolution-turn'
-      | 'post-resolution-retry';
+      | 'post-resolution-retry'
+      | 'post-merge-auto-stash-restore'
+      | 'post-resolution-auto-stash-restore';
     conflictFiles?: string[];
     editSummary?: EditSummary;
     error?: string | null;
@@ -2023,6 +2030,57 @@ const appendMergeFeatureResultAudit = async (
       editSummary: input.editSummary ?? null
     }
   });
+};
+
+const recordPostMergeAutoStashFailure = async (
+  context: RealRunContext,
+  checkpoint: OrchestratorCheckpoint,
+  input: {
+    phaseIndex: number;
+    feature: FeatureCheckpoint;
+    error: PostMergeAutoStashRestoreError;
+    failureStage: 'post-merge-auto-stash-restore' | 'post-resolution-auto-stash-restore';
+    conflictFiles?: string[];
+    mergeResolutionAttempts?: number;
+  }
+): Promise<void> => {
+  const pendingMergeSummary = {
+    featureId: input.feature.id,
+    summary: input.error.editSummary
+  };
+  checkpoint.pendingMergeSummaries = [
+    ...checkpoint.pendingMergeSummaries.filter((entry) => entry.featureId !== input.feature.id),
+    pendingMergeSummary
+  ];
+  if (input.feature.planFile) {
+    await promoteStagedPlan(context.config, input.feature.id, input.feature.planFile);
+  }
+
+  updateFeatureCheckpoint(checkpoint, input.feature.id, {
+    status: 'failed',
+    mergeCommit: input.error.mergeCommit,
+    lastError: input.error.message,
+    evolvedPlanFile: null,
+    rerunEligible: false,
+    mergeResolutionAttempts: input.mergeResolutionAttempts ?? 0
+  });
+  checkpoint.status = 'failed';
+  checkpoint.currentState = 'idle';
+  checkpoint.currentPhase = null;
+  await saveCheckpointSnapshot(context.config, checkpoint);
+  await appendMergeFeatureResultAudit(context, {
+    phaseIndex: input.phaseIndex,
+    feature: input.feature,
+    result: 'failed',
+    failureStage: input.failureStage,
+    conflictFiles: input.conflictFiles ?? [],
+    editSummary: input.error.editSummary,
+    error: input.error.message
+  });
+  await announceProgress(
+    context,
+    `Feature ${getFeatureLabel(input.feature)} merged, but OpenWeft could not restore auto-stashed changes. ${input.error.message}`
+  );
 };
 
 const appendReanalysisDecisionAudit = async (
@@ -2591,6 +2649,8 @@ const executePhases = async (
     gcDisabled = true;
 
     for (const phase of phases) {
+      const runPhaseIndex = context.nextPhaseIndex;
+      const runPhaseTotal = runPhaseIndex + phases.length - 1;
       if (context.stopController?.isRequested) {
         checkpoint.status = 'stopped';
         checkpoint.currentState = 'stopped';
@@ -2605,20 +2665,20 @@ const executePhases = async (
       checkpoint.status = 'in-progress';
       checkpoint.currentState = 'executing';
       checkpoint.currentPhase = {
-        index: phase.index,
-        name: `Phase ${phase.index}`,
+        index: runPhaseIndex,
+        name: `Phase ${runPhaseIndex}`,
         featureIds: phase.featureIds,
         startedAt: timestamp()
       };
       emitOrchestratorEvent(context, {
         type: 'phase:started',
-        phase: phase.index,
-        total: phases.length,
+        phase: runPhaseIndex,
+        total: runPhaseTotal,
         featureIds: [...phase.featureIds]
       });
       await announceProgress(
         context,
-        `Phase ${phase.index} starting (${phase.featureIds.length} feature${phase.featureIds.length === 1 ? '' : 's'}).`
+        `Phase ${runPhaseIndex} starting (${phase.featureIds.length} feature${phase.featureIds.length === 1 ? '' : 's'}).`
       );
 
       for (const featureId of phase.featureIds) {
@@ -2650,13 +2710,13 @@ const executePhases = async (
             }
 
             const tmuxSlot = availableTmuxSlots.shift() ?? null;
-            if (tmuxSlot !== null) {
-              await appendTmuxSlotLine(
-                context,
-                tmuxSlot,
-                `Assigned ${getFeatureLabel(feature)} for execution in phase ${phase.index}.`
-              );
-            }
+                if (tmuxSlot !== null) {
+                  await appendTmuxSlotLine(
+                    context,
+                    tmuxSlot,
+                    `Assigned ${getFeatureLabel(feature)} for execution in phase ${runPhaseIndex}.`
+                  );
+                }
 
             try {
               const recovered = context.recoveredExecutions.get(feature.id);
@@ -2692,7 +2752,7 @@ const executePhases = async (
                 message: `Feature ${feature.id} failed before an execution result was recorded.`,
                 data: {
                   featureId: feature.id,
-                  phase: phase.index,
+                  phase: runPhaseIndex,
                   error: unexpectedFailure.result.error,
                   errorTier: unexpectedFailure.classified.tier
                 }
@@ -2732,9 +2792,9 @@ const executePhases = async (
           await appendAudit(context.config, {
             level: 'error',
             event: 'feature.execution.failed',
-            message: `A queued execution task rejected without a matching feature in phase ${phase.index}.`,
+            message: `A queued execution task rejected without a matching feature in phase ${runPhaseIndex}.`,
             data: {
-              phase: phase.index,
+              phase: runPhaseIndex,
               error: classifyError(settledFeature.reason).reason
             }
           });
@@ -2749,7 +2809,7 @@ const executePhases = async (
             message: `Execution task for feature ${featureId} rejected before the checkpoint entry could be loaded.`,
             data: {
               featureId,
-              phase: phase.index,
+              phase: runPhaseIndex,
               error: classifyError(settledFeature.reason).reason
             }
           });
@@ -2767,7 +2827,7 @@ const executePhases = async (
           message: `Feature ${featureId} rejected after leaving the execution queue callback.`,
           data: {
             featureId,
-            phase: phase.index,
+            phase: runPhaseIndex,
             error: unexpectedFailure.result.error,
             errorTier: unexpectedFailure.classified.tier
           }
@@ -2860,7 +2920,7 @@ const executePhases = async (
         checkpoint.status = 'failed';
         checkpoint.currentState = 'idle';
         checkpoint.currentPhase = null;
-        await announceProgress(context, `Phase ${phase.index} halted by a fatal agent failure.`);
+        await announceProgress(context, `Phase ${runPhaseIndex} halted by a fatal agent failure.`);
         await saveCheckpointSnapshot(context.config, checkpoint);
         return {
           checkpoint,
@@ -2872,7 +2932,7 @@ const executePhases = async (
         checkpoint.status = 'failed';
         checkpoint.currentState = 'idle';
         checkpoint.currentPhase = null;
-        await announceProgress(context, `Phase ${phase.index} halted by circuit breaker.`);
+        await announceProgress(context, `Phase ${runPhaseIndex} halted by circuit breaker.`);
         await saveCheckpointSnapshot(context.config, checkpoint);
         return {
           checkpoint,
@@ -2897,7 +2957,7 @@ const executePhases = async (
       const mergeSummaries: Array<{ featureId: string; summary: EditSummary }> = [];
       if (successfulFeatureIds.length > 0) {
         checkpoint.pendingMergeSummaries = [];
-        await appendMergePhaseOrderAudit(context, phase.index, successfulFeatureIds, scoreById);
+        await appendMergePhaseOrderAudit(context, runPhaseIndex, successfulFeatureIds, scoreById);
       }
 
       for (const featureId of successfulFeatureIds) {
@@ -2906,24 +2966,48 @@ const executePhases = async (
           continue;
         }
 
-        const merged = await mergeBranchIntoCurrent(context.config.repoRoot, feature.branchName);
+        let merged: Awaited<ReturnType<typeof mergeBranchIntoCurrent>>;
+        try {
+          merged = await mergeBranchIntoCurrent(context.config.repoRoot, feature.branchName);
+        } catch (error) {
+          if (error instanceof PostMergeAutoStashRestoreError) {
+            await recordPostMergeAutoStashFailure(context, checkpoint, {
+              phaseIndex: runPhaseIndex,
+              feature,
+              error,
+              failureStage: 'post-merge-auto-stash-restore'
+            });
+            return {
+              checkpoint,
+              mergedCount
+            };
+          }
+
+          throw error;
+        }
         if (merged.status === 'conflict') {
           const initialConflictFiles = merged.conflicts.map((conflict) => conflict.file);
           if (feature.worktreePath) {
             let lastConflictFiles = initialConflictFiles;
             let lastFailureStage:
               | 'conflict-resolution-approval'
+              | 'conflict-resolution-sanity'
               | 'conflict-resolution-turn'
               | 'post-resolution-retry'
               | null = null;
             let lastFailureReason: string | null = null;
             let mergeResolved = false;
             let terminalMergeFailure = false;
+            let resetCommitForNextConflictResolutionRound: string | null = null;
 
             for (let round = 1; round <= MAX_MERGE_RESOLUTION_ROUNDS; round += 1) {
               await abortMerge(feature.worktreePath).catch(() => {});
               if (round > 1) {
-                await resetWorktreeToHead(feature.worktreePath);
+                await resetWorktreeToHead(
+                  feature.worktreePath,
+                  resetCommitForNextConflictResolutionRound ?? 'HEAD'
+                );
+                resetCommitForNextConflictResolutionRound = null;
               }
               updateFeatureCheckpoint(checkpoint, featureId, {
                 mergeResolutionAttempts: round
@@ -2941,7 +3025,7 @@ const executePhases = async (
                 });
                 await saveCheckpointSnapshot(context.config, checkpoint);
                 await appendMergeFeatureResultAudit(context, {
-                  phaseIndex: phase.index,
+                  phaseIndex: runPhaseIndex,
                   feature,
                   result: 'failed',
                   failureStage: 'merge-into-worktree',
@@ -3028,7 +3112,7 @@ const executePhases = async (
                       message: `Retrying merge conflict resolution round ${round + 1}/${MAX_MERGE_RESOLUTION_ROUNDS} for feature ${featureId}.`,
                       data: {
                         featureId,
-                        phaseIndex: phase.index,
+                        phaseIndex: runPhaseIndex,
                         round,
                         nextRound: round + 1,
                         failureStage: lastFailureStage,
@@ -3051,7 +3135,7 @@ const executePhases = async (
                   });
                   await saveCheckpointSnapshot(context.config, checkpoint);
                   await appendMergeFeatureResultAudit(context, {
-                    phaseIndex: phase.index,
+                    phaseIndex: runPhaseIndex,
                     feature,
                     result: 'failed',
                     failureStage: 'conflict-resolution-approval',
@@ -3093,7 +3177,7 @@ const executePhases = async (
                     message: `Retrying merge conflict resolution round ${round + 1}/${MAX_MERGE_RESOLUTION_ROUNDS} for feature ${featureId}.`,
                     data: {
                       featureId,
-                      phaseIndex: phase.index,
+                      phaseIndex: runPhaseIndex,
                       round,
                       nextRound: round + 1,
                       failureStage: lastFailureStage,
@@ -3118,7 +3202,7 @@ const executePhases = async (
                 });
                 await saveCheckpointSnapshot(context.config, checkpoint);
                 await appendMergeFeatureResultAudit(context, {
-                  phaseIndex: phase.index,
+                  phaseIndex: runPhaseIndex,
                   feature,
                   result: 'failed',
                   failureStage: 'conflict-resolution-turn',
@@ -3130,6 +3214,73 @@ const executePhases = async (
                   `Feature ${getFeatureLabel(feature)} failed during merge conflict resolution${conflictResolution.error ? `: ${conflictResolution.error}` : '.'}`
                 );
                 terminalMergeFailure = true;
+                break;
+              }
+
+              const conflictResolutionChangedFiles = (await getWorktreeStatusSummary(feature.worktreePath)).changedFiles;
+              const conflictResolutionSanityFiles = [
+                ...new Set([...conflictResolutionFiles, ...conflictResolutionChangedFiles])
+              ];
+              try {
+                await assertNoUnresolvedConflictState(feature.worktreePath, conflictResolutionSanityFiles);
+              } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                lastConflictFiles = conflictResolutionFiles;
+                lastFailureStage = 'conflict-resolution-sanity';
+                lastFailureReason = errorMessage;
+
+                if (round < MAX_MERGE_RESOLUTION_ROUNDS) {
+                  resetCommitForNextConflictResolutionRound = mergeIntoWorktree.preMergeCommit;
+                  updateFeatureCheckpoint(checkpoint, featureId, {
+                    lastError: errorMessage,
+                    mergeResolutionAttempts: round
+                  });
+                  await saveCheckpointSnapshot(context.config, checkpoint);
+                  await appendAudit(context.config, {
+                    level: 'warn',
+                    event: 'merge.conflict-resolution.retry-scheduled',
+                    message: `Retrying merge conflict resolution round ${round + 1}/${MAX_MERGE_RESOLUTION_ROUNDS} for feature ${featureId}.`,
+                    data: {
+                      featureId,
+                      phaseIndex: runPhaseIndex,
+                      round,
+                      nextRound: round + 1,
+                      failureStage: lastFailureStage,
+                      error: errorMessage,
+                      conflictFiles: conflictResolutionSanityFiles
+                    }
+                  });
+                  await announceProgress(
+                    context,
+                    `Retrying merge conflict resolution round ${round + 1}/${MAX_MERGE_RESOLUTION_ROUNDS} for feature ${getFeatureLabel(feature)} after unresolved conflicts remained: ${errorMessage}`
+                  );
+                  continue;
+                }
+
+                updateFeatureCheckpoint(checkpoint, featureId, {
+                  status: 'failed',
+                  lastError: errorMessage,
+                  rerunEligible: false,
+                  mergeResolutionAttempts: round
+                });
+                await saveCheckpointSnapshot(context.config, checkpoint);
+                await appendMergeFeatureResultAudit(context, {
+                  phaseIndex: runPhaseIndex,
+                  feature,
+                  result: 'failed',
+                  failureStage: 'conflict-resolution-sanity',
+                  conflictFiles: conflictResolutionSanityFiles,
+                  error: errorMessage
+                });
+                await announceProgress(
+                  context,
+                  `Feature ${getFeatureLabel(feature)} failed because unresolved conflicts remained after conflict resolution: ${errorMessage}`
+                );
+                terminalMergeFailure = true;
+                break;
+              }
+
+              if (terminalMergeFailure) {
                 break;
               }
 
@@ -3145,7 +3296,27 @@ const executePhases = async (
                 );
               }
 
-              const retryMerge = await mergeBranchIntoCurrent(context.config.repoRoot, feature.branchName);
+              let retryMerge: Awaited<ReturnType<typeof mergeBranchIntoCurrent>>;
+              try {
+                retryMerge = await mergeBranchIntoCurrent(context.config.repoRoot, feature.branchName);
+              } catch (error) {
+                if (error instanceof PostMergeAutoStashRestoreError) {
+                  await recordPostMergeAutoStashFailure(context, checkpoint, {
+                    phaseIndex: runPhaseIndex,
+                    feature,
+                    error,
+                    failureStage: 'post-resolution-auto-stash-restore',
+                    conflictFiles: conflictResolutionFiles,
+                    mergeResolutionAttempts: round
+                  });
+                  return {
+                    checkpoint,
+                    mergedCount
+                  };
+                }
+
+                throw error;
+              }
               if (retryMerge.status !== 'merged') {
                 const conflictFiles = retryMerge.conflicts.map((conflict) => conflict.file);
                 lastConflictFiles = conflictFiles;
@@ -3164,7 +3335,7 @@ const executePhases = async (
                     message: `Retrying merge conflict resolution round ${round + 1}/${MAX_MERGE_RESOLUTION_ROUNDS} for feature ${featureId}.`,
                     data: {
                       featureId,
-                      phaseIndex: phase.index,
+                      phaseIndex: runPhaseIndex,
                       round,
                       nextRound: round + 1,
                       failureStage: lastFailureStage,
@@ -3186,7 +3357,7 @@ const executePhases = async (
                 });
                 await saveCheckpointSnapshot(context.config, checkpoint);
                 await appendMergeFeatureResultAudit(context, {
-                  phaseIndex: phase.index,
+                  phaseIndex: runPhaseIndex,
                   feature,
                   result: 'failed',
                   failureStage: 'post-resolution-retry',
@@ -3223,7 +3394,7 @@ const executePhases = async (
               });
               await saveCheckpointSnapshot(context.config, checkpoint);
               await appendMergeFeatureResultAudit(context, {
-                phaseIndex: phase.index,
+                phaseIndex: runPhaseIndex,
                 feature,
                 result: 'merged-after-conflict-resolution',
                 conflictFiles: conflictResolutionFiles,
@@ -3234,7 +3405,8 @@ const executePhases = async (
                 repoRoot: context.config.repoRoot,
                 worktreePath: feature.worktreePath,
                 branchName: feature.branchName,
-                force: true
+                force: true,
+                worktreesDir: context.config.paths.worktreesDir
               });
               updateFeatureCheckpoint(checkpoint, featureId, {
                 branchName: null,
@@ -3255,7 +3427,7 @@ const executePhases = async (
             rerunEligible: false
           });
           await appendMergeFeatureResultAudit(context, {
-            phaseIndex: phase.index,
+            phaseIndex: runPhaseIndex,
             feature,
             result: 'failed',
             failureStage: 'merge-into-current',
@@ -3291,7 +3463,7 @@ const executePhases = async (
         });
         await saveCheckpointSnapshot(context.config, checkpoint);
         await appendMergeFeatureResultAudit(context, {
-          phaseIndex: phase.index,
+          phaseIndex: runPhaseIndex,
           feature,
           result: 'merged',
           editSummary: merged.editSummary
@@ -3303,7 +3475,8 @@ const executePhases = async (
             repoRoot: context.config.repoRoot,
             worktreePath: feature.worktreePath,
             branchName: feature.branchName,
-            force: true
+            force: true,
+            worktreesDir: context.config.paths.worktreesDir
           });
           updateFeatureCheckpoint(checkpoint, featureId, {
             branchName: null,
@@ -3315,12 +3488,12 @@ const executePhases = async (
       checkpoint.currentState = 're-analysis';
       emitOrchestratorEvent(context, {
         type: 'phase:re-analyzing',
-        phase: phase.index,
-        total: phases.length
+        phase: runPhaseIndex,
+        total: runPhaseTotal
       });
-      await announceProgress(context, `Phase ${phase.index} complete. Re-planning remaining work.`);
+      await announceProgress(context, `Phase ${runPhaseIndex} complete. Re-planning remaining work.`);
 
-      if ((await runPendingReanalysis(context, checkpoint, phase.index, mergeSummaries)) === 'stopped') {
+      if ((await runPendingReanalysis(context, checkpoint, runPhaseIndex, mergeSummaries)) === 'stopped') {
         return {
           checkpoint,
           mergedCount
@@ -3340,12 +3513,18 @@ const executePhases = async (
 
       emitOrchestratorEvent(context, {
         type: 'phase:completed',
-        phase: phase.index
+        phase: runPhaseIndex
       });
 
       checkpoint.currentPhase = null;
       checkpoint.currentState = 'queue-management';
       await saveCheckpointSnapshot(context.config, checkpoint);
+      context.nextPhaseIndex = runPhaseIndex + 1;
+
+      return {
+        checkpoint,
+        mergedCount
+      };
     }
 
     checkpoint.currentState = 'idle';
@@ -3375,6 +3554,7 @@ const runRealWorkflow = async (
     error: null,
     recoveredExecutions,
     resumeReanalysisPhaseIndex,
+    nextPhaseIndex: 1,
     approvalState: {
       firstApprovalSatisfied: checkpoint.approvalState.firstApprovalSatisfied,
       approvedFeatureIds: new Set<string>(checkpoint.approvalState.approvedFeatureIds),

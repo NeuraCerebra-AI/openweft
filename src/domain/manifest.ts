@@ -35,6 +35,10 @@ export interface ParsedManifestDocument {
 
 const REQUIRED_LEDGER_SUBHEADINGS = ['Constraints', 'Assumptions', 'Watchpoints', 'Validation'] as const;
 
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+};
+
 export const normalizeManifest = (manifest: Manifest): Manifest => {
   const normalizeEntries = (entries: string[]) => [...new Set(entries.map((entry) => normalizeRelativePath(entry)))];
 
@@ -151,13 +155,26 @@ export const parseManifestJson = (
   ];
 
   for (const [method, parseAttempt] of attempts) {
+    let candidate: unknown;
     try {
-      return {
-        manifest: normalizeManifest(ManifestSchema.parse(parseAttempt())),
-        method
-      };
+      candidate = parseAttempt();
     } catch {
       continue;
+    }
+    if (!isRecord(candidate)) {
+      continue;
+    }
+
+    try {
+      return {
+        manifest: normalizeManifest(ManifestSchema.parse(candidate)),
+        method
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Manifest parsed with ${method} but failed validation: ${message}`, {
+        cause: error
+      });
     }
   }
 

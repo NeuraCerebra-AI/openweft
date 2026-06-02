@@ -8,6 +8,7 @@ import { simpleGit } from 'simple-git';
 
 import {
   abortMerge,
+  assertNoUnresolvedConflictState,
   commitAllChanges,
   createWorktree,
   getAutoGcSetting,
@@ -227,6 +228,73 @@ describe('git worktree infrastructure', () => {
     await abortMerge(branchBPath);
   });
 
+  it('detects unresolved index entries left after conflict resolution', async () => {
+    const branchAPath = buildWorktreePath(repoRoot, 'wt-agent-unresolved-a');
+    const branchBPath = buildWorktreePath(repoRoot, 'wt-agent-unresolved-b');
+
+    await createWorktree({
+      repoRoot,
+      worktreePath: branchAPath,
+      branchName: 'agent-unresolved-a'
+    });
+    await createWorktree({
+      repoRoot,
+      worktreePath: branchBPath,
+      branchName: 'agent-unresolved-b'
+    });
+
+    await commitChange(branchAPath, 'value = 2\n', 'agent unresolved a');
+    await commitChange(branchBPath, 'value = 3\n', 'agent unresolved b');
+    const merged = await mergeBranchIntoCurrent(repoRoot, 'agent-unresolved-a');
+    expect(merged.status).toBe('merged');
+    const stagedConflict = await mergeBranchIntoWorktree(branchBPath, 'main');
+    expect(stagedConflict.status).toBe('conflicted');
+
+    await expect(assertNoUnresolvedConflictState(branchBPath, ['src.txt'])).rejects.toThrow(
+      /Unresolved merge conflict entries remain/
+    );
+
+    await abortMerge(branchBPath);
+  });
+
+  it('detects conflict markers left in conflict-touched text files', async () => {
+    const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-marker-residue');
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName: 'agent-marker-residue'
+    });
+
+    await writeFile(
+      path.join(worktreePath, 'src.txt'),
+      '<<<<<<< ours\nvalue = 2\n=======\nvalue = 3\n>>>>>>> theirs\n',
+      'utf8'
+    );
+
+    await expect(assertNoUnresolvedConflictState(worktreePath, ['src.txt'])).rejects.toThrow(
+      /Conflict markers remain/
+    );
+  });
+
+  it('ignores marker-looking text outside the conflict file set', async () => {
+    await writeFile(
+      path.join(repoRoot, 'notes.txt'),
+      '<<<<<<< example\nkeep both ideas\n=======\nthis is documentation\n>>>>>>> example\n',
+      'utf8'
+    );
+
+    await expect(assertNoUnresolvedConflictState(repoRoot, ['src.txt'])).resolves.toBeUndefined();
+  });
+
+  it('skips binary files when scanning for conflict marker residue', async () => {
+    await writeFile(
+      path.join(repoRoot, 'asset.bin'),
+      Buffer.from([0, 60, 60, 60, 60, 60, 60, 60, 32, 111, 117, 114, 115])
+    );
+
+    await expect(assertNoUnresolvedConflictState(repoRoot, ['asset.bin'])).resolves.toBeUndefined();
+  });
+
   it('returns staged merge details for a clean merge into a worktree', async () => {
     const branchAPath = buildWorktreePath(repoRoot, 'wt-agent-clean-a');
     const branchBPath = buildWorktreePath(repoRoot, 'wt-agent-clean-b');
@@ -357,7 +425,7 @@ describe('git worktree infrastructure', () => {
     expect(await listStashEntries(repoRoot)).toEqual([]);
   });
 
-  it('leaves stash in list when pop conflicts with merge result', async () => {
+  it('fails instead of reporting merged when auto-stash apply leaves conflicts after merge', async () => {
     const branchName = 'agent-stash-pop-conflict';
     const stashMessage = `openweft: auto-stash before merging ${branchName}`;
     const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-stash-pop-conflict');
@@ -369,24 +437,15 @@ describe('git worktree infrastructure', () => {
     });
 
     await commitChange(worktreePath, 'value = 2\n', 'agent stash pop conflict');
-    await writeFile(path.join(repoRoot, 'src.txt'), 'value = 1\n// local scratch\n', 'utf8');
+    await writeFile(path.join(repoRoot, 'src.txt'), 'value = local scratch\n', 'utf8');
 
-    const result = await mergeBranchIntoCurrent(repoRoot, branchName);
+    await expect(mergeBranchIntoCurrent(repoRoot, branchName)).rejects.toThrow(
+      /could not restore your auto-stashed changes cleanly/
+    );
     const stashEntries = await listStashEntries(repoRoot);
-    const srcContents = await readFile(path.join(repoRoot, 'src.txt'), 'utf8');
     const matchingStashes = stashEntries.filter((entry) => entry.includes(stashMessage));
 
-    expect(result.status).toBe('merged');
-    if (result.status === 'merged') {
-      expect(result.autoStash?.created).toBe(true);
-    }
-
-    if (result.status === 'merged' && result.autoStash?.restored === false) {
-      expect(matchingStashes).toHaveLength(1);
-      expect(result.autoStash.recoveryMessage).toContain('git stash');
-    } else {
-      expect(srcContents).toContain('// local scratch\n');
-    }
+    expect(matchingStashes).toHaveLength(1);
   });
 
   it('throws for non-conflict merge failures', async () => {
@@ -475,6 +534,64 @@ describe('git worktree infrastructure', () => {
     expect(recreated.branch).toBe('agent-reuse');
   });
 
+  it('does not remove arbitrary paths when git does not list them as worktrees', async () => {
+    const externalPath = buildWorktreePath(repoRoot, 'not-a-worktree');
+    await mkdir(externalPath, { recursive: true });
+    await writeFile(path.join(externalPath, 'keep.txt'), 'user-owned\n', 'utf8');
+
+    await expect(removeWorktree({
+      repoRoot,
+      worktreePath: externalPath,
+      force: true
+    })).rejects.toThrow();
+
+    await expect(readFile(path.join(externalPath, 'keep.txt'), 'utf8')).resolves.toBe('user-owned\n');
+  });
+
+  it('removes stale managed worktree directories that git no longer lists', async () => {
+    const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
+    const stalePath = path.join(worktreesDir, '001');
+    await mkdir(stalePath, { recursive: true });
+    await writeFile(path.join(stalePath, 'stale.txt'), 'old worker state\n', 'utf8');
+    await simpleGit(repoRoot).raw(['branch', 'openweft-001-stale']);
+
+    await removeWorktree({
+      repoRoot,
+      worktreePath: stalePath,
+      branchName: 'openweft-001-stale',
+      force: true,
+      worktreesDir
+    });
+
+    await expect(readFile(path.join(stalePath, 'stale.txt'), 'utf8')).rejects.toThrow();
+    const recreated = await createWorktree({
+      repoRoot,
+      worktreePath: stalePath,
+      branchName: 'openweft-001-stale'
+    });
+    expect(recreated.branch).toBe('openweft-001-stale');
+  });
+
+  it('does not delete a branch that was not attached to the removed worktree', async () => {
+    const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-owned');
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName: 'agent-owned'
+    });
+    await simpleGit(repoRoot).raw(['branch', 'agent-preserved']);
+
+    await removeWorktree({
+      repoRoot,
+      worktreePath,
+      branchName: 'agent-preserved',
+      force: true
+    });
+
+    const branches = await simpleGit(repoRoot).branchLocal();
+    expect(branches.all).toContain('agent-preserved');
+  });
+
   it('prunes orphaned OpenWeft worktrees, branches, and stray directories while preserving retained artifacts', async () => {
     const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
     const retainedPath = path.join(worktreesDir, '001');
@@ -523,6 +640,24 @@ describe('git worktree infrastructure', () => {
     expect(branches.all).toContain('openweft-001-retained');
     expect(branches.all).not.toContain('openweft-999-orphan');
     await expect(readFile(path.join(strayPath, 'note.txt'), 'utf8')).rejects.toThrow();
+  });
+
+  it('preserves detached openweft-prefixed branches during orphan pruning', async () => {
+    const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
+    await mkdir(worktreesDir, { recursive: true });
+    await simpleGit(repoRoot).raw(['branch', 'openweft-experiment']);
+    await simpleGit(repoRoot).raw(['branch', 'openweft-2026-roadmap']);
+
+    const result = await pruneOrphanedOpenWeftArtifacts({
+      repoRoot,
+      worktreesDir
+    });
+
+    expect(result.removedBranchNames).not.toContain('openweft-experiment');
+    expect(result.removedBranchNames).not.toContain('openweft-2026-roadmap');
+    const branches = await simpleGit(repoRoot).branchLocal();
+    expect(branches.all).toContain('openweft-experiment');
+    expect(branches.all).toContain('openweft-2026-roadmap');
   });
 
   it('reports worktree status relative to the base ref', async () => {
@@ -692,6 +827,9 @@ describe('git worktree infrastructure', () => {
           expect(args[2]).toBe('oid-auto');
           return 'Applied';
         }
+        if (args[0] === 'diff' && args.includes('--diff-filter=U')) {
+          return '';
+        }
         if (args[0] === 'diff-tree' && args.includes('--name-status')) {
           return 'M\tsrc.txt\n';
         }
@@ -731,4 +869,5 @@ describe('git worktree infrastructure', () => {
       vi.resetModules();
     }
   });
+
 });
