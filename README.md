@@ -62,12 +62,19 @@ Features 1 and 2 ran in parallel — no file overlap. Feature 3 touched the same
 
 ## When to use OpenWeft
 
-| Good fit | Not a fit |
-|---|---|
-| You have a backlog of independent or semi-independent feature requests. | You need one quick edit; run Codex or Claude directly. |
-| Some tasks may touch overlapping files and need scheduling before execution. | You want interactive pair-programming instead of batch execution. |
-| You want agents isolated in git worktrees, merged in priority order, and resumed after crashes. | Your repository cannot use git worktrees. |
-| You want an inspectable trail of plans, manifests, ledgers, checkpoints, and audit events. | You expect a polished 1.0 product surface. |
+**✅ Good Fit**
+
+- You have a backlog of independent or semi-independent feature requests.
+- Some tasks may touch overlapping files and need scheduling before execution.
+- You want agents isolated in git worktrees, merged in priority order, and resumed after crashes.
+- You want an inspectable trail of plans, manifests, ledgers, checkpoints, and audit events.
+
+**⚠️ Not A Fit**
+
+- You need one quick edit; run Codex or Claude directly.
+- You want interactive pair-programming instead of batch execution.
+- Your repository cannot use git worktrees.
+- You expect a polished 1.0 product surface.
 
 Requires Node.js `>=24`, Git, and one or both of `codex` / `claude` already logged in.
 
