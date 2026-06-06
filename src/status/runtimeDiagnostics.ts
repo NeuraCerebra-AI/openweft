@@ -45,7 +45,10 @@ export const summarizeMergeDurability = (
 };
 
 const countResidueFiles = async (rootDir: string): Promise<number> => {
-  const entries = await readdir(rootDir, { withFileTypes: true });
+  // Tolerate the directory (or any nested subdirectory) disappearing or
+  // becoming unreadable mid-walk during concurrent cleanup: a failed readdir
+  // contributes 0 instead of throwing and collapsing the entire count.
+  const entries = await readdir(rootDir, { withFileTypes: true }).catch(() => []);
   let total = 0;
 
   for (const entry of entries) {

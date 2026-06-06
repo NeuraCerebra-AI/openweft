@@ -87,6 +87,63 @@ describe('scoring', () => {
     expect(smoothPriority(0.7, NaN, 5)).toBe(0.7);
   });
 
+  it('A1: maps the lowest-blast feature to a near-zero normalized blast radius among several features', () => {
+    // Three features with strictly distinct, increasing blast radii.
+    // Min-max normalization should map the smallest to ~0 and the largest to 1.
+    const scored = scoreQueueFeatures(
+      [
+        {
+          featureId: '001',
+          title: 'tiny',
+          manifest: { create: ['src/features/b.ts'], modify: [], delete: [] }
+        },
+        {
+          featureId: '002',
+          title: 'medium',
+          manifest: { create: [], modify: ['src/features/a.ts'], delete: [] }
+        },
+        {
+          featureId: '003',
+          title: 'large',
+          manifest: { create: [], modify: ['src/shared/utils.ts'], delete: [] }
+        }
+      ],
+      repoContext
+    );
+
+    const byId = Object.fromEntries(scored.map((s) => [s.featureId, s]));
+    const radii = scored.map((s) => s.blastRadius);
+    const minRadius = Math.min(...radii);
+    const smallest = scored.find((s) => s.blastRadius === minRadius)!;
+
+    // The smallest blast-radius feature must normalize to ~0 (true min-max).
+    expect(smallest.normalizedBlastRadius).toBeCloseTo(0, 5);
+    // And the largest must normalize to 1.
+    const maxRadius = Math.max(...radii);
+    const largest = scored.find((s) => s.blastRadius === maxRadius)!;
+    expect(largest.normalizedBlastRadius).toBeCloseTo(1, 5);
+    expect(byId['001']).toBeDefined();
+  });
+
+  it('A2: produces a deterministic order for several equal-priority new features (no previousRank)', () => {
+    const makeFeature = (featureId: string) => ({
+      featureId,
+      title: `feature ${featureId}`,
+      manifest: { create: ['src/features/b.ts'], modify: [], delete: [] }
+    });
+
+    // Provide IDs in a deliberately non-sorted input order.
+    const inputOrder = ['003', '001', '004', '002'];
+    const run = () => scoreQueueFeatures(inputOrder.map(makeFeature), repoContext).map((s) => s.featureId);
+
+    const first = run();
+    const second = run();
+    // Determinism: same input always yields the same order.
+    expect(first).toEqual(second);
+    // And the deterministic order should be a stable, well-defined sequence (by featureId).
+    expect(first).toEqual(['001', '002', '003', '004']);
+  });
+
   it('propagates cyclesSeen through scoreQueue so EWMA damping activates', () => {
     const feature = {
       id: '001',

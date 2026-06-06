@@ -502,8 +502,14 @@ export const getNextFeatureIdFromQueue = (existingNames: Iterable<string>, queue
   }
 
   for (const processed of parseQueueFile(queueContent).processed) {
-    const n = Number.parseInt(processed.featureId, 10);
-    if (!Number.isNaN(n)) highest = Math.max(highest, n);
+    // Use the same canonical parser as everywhere else (^\d{3,}) so that processed
+    // records and existing names agree on what counts as a feature id; Number.parseInt
+    // would otherwise accept non-canonical ids (e.g. "42") that the rest of the system
+    // rejects, yielding an inconsistent next id.
+    const parsed = extractNumericFeatureId(processed.featureId);
+    if (parsed !== null) {
+      highest = Math.max(highest, parsed);
+    }
   }
 
   return highest + 1;

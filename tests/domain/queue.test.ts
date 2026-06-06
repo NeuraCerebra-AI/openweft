@@ -4,6 +4,7 @@ import {
   appendRequestsToQueueContent,
   buildQueueContentFromCheckpointState,
   extractRequestsFromInput,
+  getNextFeatureIdFromQueue,
   removePendingQueueLine,
   markQueueLineProcessed,
   parseQueueFile,
@@ -155,6 +156,31 @@ describe('queue', () => {
 
   it('returns empty string when removing the only pending line', () => {
     expect(removePendingQueueLine('alpha\n', 0)).toBe('');
+  });
+
+  it('A6: derives the next feature id consistently between existing names and processed queue records', () => {
+    // A processed record whose featureId is canonical (3+ digits).
+    const queueContent = buildQueueContentFromCheckpointState({
+      existingContent: '',
+      processed: [{ featureId: '007', request: 'lucky' }],
+      pendingRequests: []
+    });
+
+    // existingNames provides a higher canonical id.
+    expect(getNextFeatureIdFromQueue(['012-foo'], queueContent)).toBe(13);
+    // Only the processed record provides the highest id.
+    expect(getNextFeatureIdFromQueue(['003-foo'], queueContent)).toBe(8);
+  });
+
+  it('A6: parses processed featureIds the same way extractNumericFeatureId does (rejects non-canonical ids)', () => {
+    // A processed record with a 2-digit (non-canonical) featureId. extractNumericFeatureId
+    // requires ^\d{3,}; Number.parseInt would still parse "42" as 42. The two parsers must agree.
+    const content = '# openweft queue format: v1\n{"version":1,"type":"processed","id":"q_x","featureId":"42","request":"r"}\n';
+    const parsed = parseQueueFile(content);
+    expect(parsed.processed.map((p) => p.featureId)).toEqual(['42']);
+
+    // With no canonical existing names, a non-canonical "42" should be ignored, yielding 1.
+    expect(getNextFeatureIdFromQueue([], content)).toBe(1);
   });
 
   it('rebuilds queue content from processed features and pending requests', () => {

@@ -1,8 +1,8 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   CheckpointSchema,
@@ -30,6 +30,78 @@ describe('checkpoint persistence', () => {
 
     expect(loaded.source).toBe('primary');
     expect(loaded.checkpoint?.runId).toBe('run-1');
+  });
+
+  it('surfaces backup-write failures via onBackupError instead of silently swallowing them', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-checkpoint-backup-fail-'));
+    const checkpointFile = path.join(tempDirectory, 'checkpoint.json');
+    // Make the backup path un-writable: its parent component is a regular file,
+    // so writeJsonFileAtomic's mkdir(dirname) (or the write) will throw ENOTDIR.
+    const notADir = path.join(tempDirectory, 'blocker');
+    await writeFile(notADir, 'x', 'utf8');
+    const backupFile = path.join(notADir, 'checkpoint.json.backup');
+
+    const first = createEmptyCheckpoint({
+      orchestratorVersion: '0.1.0',
+      configHash: 'sha256:test',
+      runId: 'run-1',
+      checkpointId: 'chk-1',
+      createdAt: '2026-03-13T08:00:00.000Z'
+    });
+    const second = {
+      ...first,
+      checkpointId: 'chk-2',
+      updatedAt: '2026-03-13T08:01:00.000Z',
+      status: 'in-progress' as const
+    };
+
+    // First save: no existing primary, so no backup is attempted -> no error.
+    await saveCheckpoint({ checkpoint: first, checkpointFile, backupFile });
+
+    // Second save: there IS an on-disk primary to back up, and the backup write
+    // will fail. The failure must be surfaced through the injected hook.
+    const backupErrors: unknown[] = [];
+    await saveCheckpoint({
+      checkpoint: second,
+      checkpointFile,
+      backupFile,
+      onBackupError: (error) => {
+        backupErrors.push(error);
+      }
+    });
+
+    // The failure was observable.
+    expect(backupErrors).toHaveLength(1);
+    expect(backupErrors[0]).toBeInstanceOf(Error);
+
+    // The primary was still written (happy-path primary durability preserved).
+    const loaded = await loadCheckpoint(checkpointFile, backupFile);
+    expect(loaded.source).toBe('primary');
+    expect(loaded.checkpoint?.checkpointId).toBe('chk-2');
+  });
+
+  it('writes both primary and backup on the happy path and does not invoke onBackupError', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-checkpoint-backup-ok-'));
+    const checkpointFile = path.join(tempDirectory, 'checkpoint.json');
+    const backupFile = path.join(tempDirectory, 'checkpoint.json.backup');
+
+    const first = createEmptyCheckpoint({
+      orchestratorVersion: '0.1.0',
+      configHash: 'sha256:test',
+      runId: 'run-1',
+      checkpointId: 'chk-1',
+      createdAt: '2026-03-13T08:00:00.000Z'
+    });
+    const second = { ...first, checkpointId: 'chk-2', updatedAt: '2026-03-13T08:01:00.000Z' };
+
+    await saveCheckpoint({ checkpoint: first, checkpointFile, backupFile });
+    const onBackupError = vi.fn();
+    await saveCheckpoint({ checkpoint: second, checkpointFile, backupFile, onBackupError });
+
+    expect(onBackupError).not.toHaveBeenCalled();
+    // Backup holds the previous primary (chk-1); primary holds chk-2.
+    const backupContent = JSON.parse(await readFile(backupFile, 'utf8')) as { checkpointId: string };
+    expect(backupContent.checkpointId).toBe('chk-1');
   });
 
   it('falls back to the backup file when the primary is corrupted', async () => {

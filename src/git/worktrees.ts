@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { readFile, readdir, realpath, rm } from 'node:fs/promises';
+import { readFile, readdir, realpath, rm, stat } from 'node:fs/promises';
 
 import { simpleGit, type GitResponseError, type MergeSummary, type SimpleGit } from 'simple-git';
 
@@ -174,6 +174,18 @@ const createAutoStash = async (git: SimpleGit, branch: string): Promise<ManagedS
 
   const matchingEntry = (await listStashEntries(git)).find((entry) => entry.subject.includes(message));
   if (!matchingEntry) {
+    // `git stash push` can no-op (e.g. a dirty submodule pointer that stash cannot
+    // capture without --recurse-submodules) while `git status` still reports the tree
+    // as dirty. Proceeding here would merge into a tree we believe is clean and sweep
+    // the uncaptured changes into the merge. Fail safe rather than risk the work.
+    const residual = (await git.raw(['status', '--porcelain'])).trim();
+    if (residual.length > 0) {
+      throw new Error(
+        `OpenWeft could not auto-stash uncommitted changes before merging ${branch}; ` +
+          'the working tree is still dirty (e.g. a modified submodule). ' +
+          'Commit, discard, or stash these changes manually and retry.'
+      );
+    }
     return null;
   }
 
@@ -210,6 +222,11 @@ const restoreAutoStash = async (
   try {
     await git.raw(['stash', 'apply', managedStash.oid]);
   } catch {
+    // `stash apply` can fail after partially writing conflicted content into the
+    // working tree. Restore the tree to its clean pre-apply state so we never leave
+    // half-applied changes / conflict markers on top of the merge commit. The stash
+    // entry is preserved, so the user's work stays recoverable.
+    await git.raw(['reset', '--hard', 'HEAD']).catch(() => undefined);
     return {
       created: true,
       restored: false,
@@ -217,6 +234,10 @@ const restoreAutoStash = async (
     };
   }
   if (await hasUnmergedFiles(git)) {
+    // A partial-conflict apply leaves unmerged paths (with conflict markers) in the
+    // working tree even though `stash apply` exited 0. Roll the tree back to the clean
+    // pre-apply state; the changes remain safe in the still-present stash entry.
+    await git.raw(['reset', '--hard', 'HEAD']).catch(() => undefined);
     return {
       created: true,
       restored: false,
@@ -303,9 +324,52 @@ const parseUnmergedPaths = (output: string): string[] => {
   ].sort();
 };
 
+// Parse `git status --porcelain -z --branch` output. The `-z` format is NUL-delimited
+// and leaves paths unquoted, so paths containing spaces survive intact. Rename/copy
+// records (`R`/`C`) emit the destination path in the XY field followed by a *separate*
+// NUL-terminated field holding the source path; we report the destination and consume
+// the trailing source field so it is not mistaken for its own entry.
+const parsePorcelainStatus = (
+  output: string
+): { branchLine: string; changedFiles: string[] } => {
+  const fields = output.split('\0');
+  let branchLine = '';
+  const changedFiles: string[] = [];
+
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index];
+    if (field === undefined || field === '') {
+      continue;
+    }
+
+    if (field.startsWith('## ')) {
+      branchLine = field;
+      continue;
+    }
+
+    const status = field.slice(0, 2);
+    const filePath = field.slice(3).trim();
+    if (filePath) {
+      changedFiles.push(filePath);
+    }
+
+    // Rename/copy records carry the source path in the next NUL field; skip it.
+    if (status[0] === 'R' || status[0] === 'C' || status[1] === 'R' || status[1] === 'C') {
+      index += 1;
+    }
+  }
+
+  return { branchLine, changedFiles };
+};
+
 const hasConflictMarkers = (content: string): boolean => {
-  return /^<<<<<<<(?: .*)?$/m.test(content) &&
-    /^=======(?: .*)?$/m.test(content) &&
+  // A half-resolved file can be left with just one stray marker (e.g. a leftover
+  // `<<<<<<< HEAD` after a botched manual resolution). Requiring all three markers
+  // would let such a file pass once it is staged. Treat any `<<<<<<<` or `>>>>>>>`
+  // ours/theirs marker as suspicious. These 7-char run markers are git-specific and
+  // very unlikely in legitimate content, unlike a bare `=======` (Markdown/RST), which
+  // we therefore do not flag on its own.
+  return /^<<<<<<<(?: .*)?$/m.test(content) ||
     /^>>>>>>>(?: .*)?$/m.test(content);
 };
 
@@ -449,6 +513,19 @@ const isManagedWorktreePath = async (
   const normalizedWorktreePath = await normalizeExistingPath(worktreePath);
   return normalizedWorktreePath !== normalizedWorktreesDir &&
     isWithinDirectory(normalizedWorktreePath, normalizedWorktreesDir);
+};
+
+// A real git worktree directory always carries a `.git` gitfile (or, for the main
+// worktree, a `.git` directory). We require this marker before falling back to a
+// destructive `rm -rf` so we never delete unrelated data that merely happens to sit
+// under the managed worktrees directory.
+const looksLikeWorktreeDirectory = async (worktreePath: string): Promise<boolean> => {
+  try {
+    await stat(path.join(worktreePath, '.git'));
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 export const findReusableExecutionCommit = async (input: {
@@ -606,7 +683,14 @@ export const removeWorktree = async (
   try {
     await git.raw(removeArgs);
   } catch (error) {
-    if (!listedWorktree && !managedWorktreePath) {
+    // Only fall back to a destructive `rm -rf` when we have real evidence the target is
+    // a managed git worktree: either git itself listed it, or it sits under the managed
+    // worktrees directory AND carries a `.git` marker. Otherwise refuse, so a bad path or
+    // a misconfigured worktrees directory can never nuke unrelated data.
+    const safeToRemove = listedWorktree
+      ? true
+      : managedWorktreePath && (await looksLikeWorktreeDirectory(resolved.worktreePath));
+    if (!safeToRemove) {
       throw error;
     }
 
@@ -672,7 +756,6 @@ export const pruneOrphanedOpenWeftArtifacts = async (
   const remainingManagedWorktrees = new Set(
     await Promise.all(
       (await listWorktrees(input.repoRoot))
-        .filter(async () => true)
         .map(async (worktree) => {
           const normalizedWorktreePath = await normalizeExistingPath(worktree.path);
           return isWithinDirectory(normalizedWorktreePath, normalizedWorktreesDir)
@@ -684,9 +767,19 @@ export const pruneOrphanedOpenWeftArtifacts = async (
 
   const managedDirectoryEntries = await readdir(input.worktreesDir, { withFileTypes: true }).catch(() => []);
   for (const entry of managedDirectoryEntries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
     const entryPath = path.join(input.worktreesDir, entry.name);
     const normalizedEntryPath = await normalizeExistingPath(entryPath);
     if (retainedWorktreePaths.has(normalizedEntryPath) || remainingManagedWorktrees.has(normalizedEntryPath)) {
+      continue;
+    }
+
+    // Only delete leftover OpenWeft worktree directories (which carry a `.git` marker).
+    // Unrelated directories under the worktrees dir are never removed, so a missing or
+    // empty retained set cannot cause us to delete un-merged work we don't recognise.
+    if (!(await looksLikeWorktreeDirectory(entryPath))) {
       continue;
     }
 
@@ -732,13 +825,8 @@ export const getWorktreeStatusSummary = async (
   baseRef = 'HEAD'
 ): Promise<WorktreeStatusSummary> => {
   const git = createGit(repoRoot);
-  const output = await git.raw(['status', '--porcelain', '--branch']);
-  const lines = output.split(/\r?\n/).filter(Boolean);
-  const branchLine = lines[0] ?? '';
-  const changedFiles = lines
-    .slice(1)
-    .map((line) => line.slice(3).trim())
-    .filter(Boolean);
+  const output = await git.raw(['status', '--porcelain', '-z', '--branch']);
+  const { branchLine, changedFiles } = parsePorcelainStatus(output);
 
   const aheadMatch = branchLine.match(/\[ahead (\d+)(?:,|])?/);
   const behindMatch = branchLine.match(/\bbehind (\d+)\]/);

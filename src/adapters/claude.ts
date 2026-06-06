@@ -37,7 +37,17 @@ export const parseClaudeJsonOutput = (
 
   const usagePayload = (parsed.usage ?? {}) as Record<string, unknown>;
   const modelUsage = (parsed.modelUsage ?? {}) as Record<string, unknown>;
-  const modelName = Object.keys(modelUsage)[0] ?? fallbackModel;
+  // Prefer an explicit top-level model field when Claude reports one. Otherwise,
+  // only trust the modelUsage map when it unambiguously names a single model;
+  // when multiple models appear, picking an arbitrary first key mis-attributes
+  // aggregate usage, so fall back to the requested model instead.
+  const modelUsageKeys = Object.keys(modelUsage);
+  const modelName =
+    typeof parsed.model === 'string' && parsed.model.length > 0
+      ? parsed.model
+      : modelUsageKeys.length === 1
+        ? modelUsageKeys[0] ?? fallbackModel
+        : fallbackModel;
   const finalMessage =
     typeof parsed.result === 'string' ? parsed.result : '';
 

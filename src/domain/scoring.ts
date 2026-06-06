@@ -248,8 +248,8 @@ export const scoreQueueFeatures = (
   repoContext: RepoAnalysisContext
 ): ScoredFeature[] => {
   const blastRadiusValues = features.map((feature) => calculateBlastRadius(feature.manifest, repoContext));
-  const minBlastRadius = Math.min(...blastRadiusValues, 0);
-  const maxBlastRadius = Math.max(...blastRadiusValues, 0);
+  const minBlastRadius = blastRadiusValues.length > 0 ? Math.min(...blastRadiusValues) : 0;
+  const maxBlastRadius = blastRadiusValues.length > 0 ? Math.max(...blastRadiusValues) : 0;
 
   const scored = features.map((feature, index) => {
     const blastRadius = blastRadiusValues[index] ?? 0;
@@ -282,7 +282,14 @@ export const scoreQueueFeatures = (
   return scored.sort((left, right) => {
     const delta = right.smoothedPriority - left.smoothedPriority;
     if (Math.abs(delta) <= 0.03) {
-      return (left.previousRank ?? Number.MAX_SAFE_INTEGER) - (right.previousRank ?? Number.MAX_SAFE_INTEGER);
+      const rankDelta =
+        (left.previousRank ?? Number.MAX_SAFE_INTEGER) - (right.previousRank ?? Number.MAX_SAFE_INTEGER);
+      if (rankDelta !== 0) {
+        return rankDelta;
+      }
+      // Deterministic final tiebreaker: features without a previousRank (e.g. brand-new
+      // features) all collapse to the same sentinel rank, so fall back to featureId order.
+      return left.featureId < right.featureId ? -1 : left.featureId > right.featureId ? 1 : 0;
     }
 
     return delta;

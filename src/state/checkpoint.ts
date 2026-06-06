@@ -244,6 +244,19 @@ const resolveCheckpointPaths = (
   };
 };
 
+/**
+ * Optional hook invoked when the pre-write copy of the existing primary
+ * checkpoint into the backup file fails. The backup is best-effort (a torn
+ * primary can still be recovered from a stale-but-valid backup), so the failure
+ * is non-fatal, but it MUST be observable: in `--bg`/tmux runs `console.warn`
+ * is invisible, which can mask the loss of crash-recovery redundancy. Callers
+ * can route this to an audit log or surface it however they choose.
+ */
+export type BackupErrorHook = (
+  error: unknown,
+  context: { backupFile: string }
+) => void;
+
 export const saveCheckpoint = async (
   input:
     | {
@@ -251,8 +264,9 @@ export const saveCheckpoint = async (
         checkpointFile: string;
         backupFile?: string;
         checkpointBackupFile?: string;
+        onBackupError?: BackupErrorHook;
       }
-    | CheckpointPathInput,
+    | (CheckpointPathInput & { onBackupError?: BackupErrorHook }),
   checkpointArg?: OrchestratorCheckpoint
 ): Promise<void> => {
   const checkpoint =
@@ -263,6 +277,7 @@ export const saveCheckpoint = async (
   }
 
   const paths = resolveCheckpointPaths(input);
+  const onBackupError = input.onBackupError;
 
   let primaryContent: string | undefined;
   try {
@@ -275,9 +290,16 @@ export const saveCheckpoint = async (
     try {
       await writeJsonFileAtomic(paths.backupFile, JSON.parse(primaryContent));
     } catch (backupError) {
-      console.warn(
-        `OpenWeft: failed to write checkpoint backup to ${paths.backupFile}: ${backupError instanceof Error ? backupError.message : String(backupError)}`
-      );
+      // Surface the failure to an injected hook when provided so it is
+      // observable/handleable even when stdout is detached. Fall back to
+      // console.warn only when no hook is wired up, preserving prior behavior.
+      if (onBackupError) {
+        onBackupError(backupError, { backupFile: paths.backupFile });
+      } else {
+        console.warn(
+          `OpenWeft: failed to write checkpoint backup to ${paths.backupFile}: ${backupError instanceof Error ? backupError.message : String(backupError)}`
+        );
+      }
     }
   }
 

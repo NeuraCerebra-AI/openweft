@@ -56,12 +56,11 @@ export const extractManifestBlock = (markdown: string): ManifestBlock | null => 
 
   visit(tree, (node) => {
     if (node.type === 'heading' && node.depth === 2) {
+      // A `##`-level heading delimits manifest sections: only "## Manifest" opens one,
+      // and any other `##` heading closes the current one. Deeper headings (`###`+) are
+      // treated as subsections of the manifest, and a shallower `#` heading (which may
+      // precede the fence as a document title or note) does not terminate the section.
       underManifestHeading = toString(node).trim() === 'Manifest';
-      return;
-    }
-
-    if (node.type === 'heading' && node.depth <= 2) {
-      underManifestHeading = false;
       return;
     }
 

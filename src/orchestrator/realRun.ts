@@ -260,7 +260,18 @@ const saveCheckpointSnapshot = async (
   await saveCheckpoint({
     checkpoint,
     checkpointFile: config.paths.checkpointFile,
-    checkpointBackupFile: config.paths.checkpointBackupFile
+    checkpointBackupFile: config.paths.checkpointBackupFile,
+    onBackupError: (error, { backupFile }) => {
+      // Route backup-write failures to the durable audit trail so they remain
+      // observable in detached/--bg runs where stderr is not being watched.
+      void appendAuditEntry(config.paths.auditLogFile, {
+        timestamp: timestamp(),
+        level: 'warn',
+        event: 'checkpoint.backup.failed',
+        message: `Failed to write checkpoint backup to ${backupFile}.`,
+        data: { backupFile, error: error instanceof Error ? error.message : String(error) }
+      });
+    }
   });
 };
 

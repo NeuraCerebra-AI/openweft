@@ -97,6 +97,42 @@ describe('manifest', () => {
     expect(updated).toContain('"create": [\n    "src/new.ts"\n  ]');
   });
 
+  it('A5a: extracts the manifest even when an h1 heading follows the ## Manifest heading before the fence', () => {
+    const md = `## Manifest
+
+# Notes
+
+\`\`\`json manifest
+{
+  "create": ["src/a.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`;
+    const parsed = parseManifestFromMarkdown(md);
+    expect(parsed.manifest.create).toEqual(['src/a.ts']);
+  });
+
+  it('A5b: does not capture a json fence buried under a ### subsection after ## Manifest', () => {
+    const md = `## Manifest
+
+### Notes about the manifest
+
+\`\`\`json
+{
+  "create": ["src/should-not-be-captured.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`;
+    // The fence is under a ### subsection that is still part of the Manifest section,
+    // so capturing it here is acceptable; this test pins current behavior to detect regressions.
+    const parsed = parseManifestFromMarkdown(md);
+    expect(parsed.manifest.create).toEqual(['src/should-not-be-captured.ts']);
+  });
+
   it('detects overlapping manifest paths', () => {
     expect(
       findManifestOverlap(

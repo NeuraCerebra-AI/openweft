@@ -170,6 +170,57 @@ describe('claude adapter', () => {
     expect(parsed.usage.totalCostUsd).toBe(0.2677775);
   });
 
+  it('prefers an explicit top-level model field over a modelUsage key (D3)', () => {
+    const output = JSON.stringify({
+      is_error: false,
+      result: 'OK',
+      session_id: 's1',
+      model: 'claude-opus-4-6',
+      modelUsage: {
+        'claude-haiku-4-6': { inputTokens: 1 },
+        'claude-opus-4-6': { inputTokens: 2 }
+      },
+      usage: { input_tokens: 3, output_tokens: 4 }
+    });
+
+    const parsed = parseClaudeJsonOutput(output, 'claude-sonnet-4-6');
+
+    expect(parsed.model).toBe('claude-opus-4-6');
+  });
+
+  it('falls back to the requested model when modelUsage has multiple keys and no top-level model (D3)', () => {
+    const output = JSON.stringify({
+      is_error: false,
+      result: 'OK',
+      session_id: 's1',
+      modelUsage: {
+        'claude-haiku-4-6': { inputTokens: 1 },
+        'claude-opus-4-6': { inputTokens: 2 }
+      },
+      usage: { input_tokens: 3, output_tokens: 4 }
+    });
+
+    const parsed = parseClaudeJsonOutput(output, 'claude-sonnet-4-6');
+
+    // Previously this returned an arbitrary first modelUsage key
+    // ('claude-haiku-4-6'), mis-attributing aggregate usage.
+    expect(parsed.model).toBe('claude-sonnet-4-6');
+  });
+
+  it('still uses the single modelUsage key when exactly one model is present (D3 regression guard)', () => {
+    const output = JSON.stringify({
+      is_error: false,
+      result: 'OK',
+      session_id: 's1',
+      modelUsage: { 'claude-opus-4-6': { inputTokens: 2 } },
+      usage: { input_tokens: 3, output_tokens: 4 }
+    });
+
+    const parsed = parseClaudeJsonOutput(output, 'claude-sonnet-4-6');
+
+    expect(parsed.model).toBe('claude-opus-4-6');
+  });
+
   it('throws when claude output has is_error: true with a result message', () => {
     const errorOutput = JSON.stringify({ is_error: true, result: 'API rate limit hit' });
     expect(() => parseClaudeJsonOutput(errorOutput, 'claude-sonnet-4-6')).toThrow('API rate limit hit');

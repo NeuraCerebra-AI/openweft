@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyError } from '../../src/domain/errors.js';
+import { circuitBreakerTripped, classifyError } from '../../src/domain/errors.js';
 
 describe('errors', () => {
   it('classifies transient failures', () => {
@@ -29,5 +29,31 @@ describe('errors', () => {
 
   it('classifies all other failures as agent errors', () => {
     expect(classifyError(new Error('Model produced malformed patch output')).tier).toBe('agent');
+  });
+
+  it('A4: classifies a genuine 5xx network error as transient even if the message also mentions a fatal token', () => {
+    // A real transient outage whose human-readable text happens to contain "authentication".
+    expect(
+      classifyError(new Error('503 service unavailable: authentication service degraded')).tier
+    ).toBe('transient');
+  });
+
+  it('A4: still classifies genuine fatal auth errors as fatal', () => {
+    expect(classifyError(new Error('401 Unauthorized: Incorrect API key provided')).tier).toBe('fatal');
+    expect(classifyError(new Error('Authentication failed: not logged in')).tier).toBe('fatal');
+    expect(classifyError(new Error('ENOENT: no such file or directory')).tier).toBe('fatal');
+  });
+
+  it('A3: does not trip the circuit breaker when exactly half of attempts failed', () => {
+    // Exactly half failing should not trip a >half breaker.
+    expect(circuitBreakerTripped(2, 4)).toBe(false);
+    // A clear majority should trip.
+    expect(circuitBreakerTripped(3, 4)).toBe(true);
+  });
+
+  it('A3: requires a minimum sample before tripping the circuit breaker', () => {
+    // A single failure out of a single attempt should not immediately trip the breaker.
+    expect(circuitBreakerTripped(1, 1)).toBe(false);
+    expect(circuitBreakerTripped(2, 2)).toBe(false);
   });
 });

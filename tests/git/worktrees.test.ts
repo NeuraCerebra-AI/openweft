@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { realpath } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -551,9 +551,20 @@ describe('git worktree infrastructure', () => {
   it('removes stale managed worktree directories that git no longer lists', async () => {
     const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
     const stalePath = path.join(worktreesDir, '001');
-    await mkdir(stalePath, { recursive: true });
+    // Create a genuine worktree, then sever it from git's registry but leave the
+    // directory (with its `.git` gitfile) on disk to model a stale/orphaned worktree.
+    await createWorktree({
+      repoRoot,
+      worktreePath: stalePath,
+      branchName: 'openweft-001-stale'
+    });
     await writeFile(path.join(stalePath, 'stale.txt'), 'old worker state\n', 'utf8');
-    await simpleGit(repoRoot).raw(['branch', 'openweft-001-stale']);
+    await simpleGit(repoRoot).raw(['worktree', 'lock', stalePath]).catch(() => undefined);
+    // Drop git's metadata so `git worktree remove` fails and the fallback path runs,
+    // while the on-disk directory (a real worktree, with `.git`) remains.
+    await rm(path.join(repoRoot, '.git', 'worktrees', '001'), { recursive: true, force: true }).catch(
+      () => undefined
+    );
 
     await removeWorktree({
       repoRoot,
@@ -570,6 +581,26 @@ describe('git worktree infrastructure', () => {
       branchName: 'openweft-001-stale'
     });
     expect(recreated.branch).toBe('openweft-001-stale');
+  });
+
+  it('refuses to delete a non-worktree directory that merely sits under worktreesDir', async () => {
+    const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
+    const strayPath = path.join(worktreesDir, '001');
+    // No `.git` marker -> not a worktree, just a directory of unrelated data.
+    await mkdir(strayPath, { recursive: true });
+    await writeFile(path.join(strayPath, 'precious.txt'), 'unrelated data\n', 'utf8');
+
+    await expect(
+      removeWorktree({
+        repoRoot,
+        worktreePath: strayPath,
+        force: true,
+        worktreesDir
+      })
+    ).rejects.toThrow();
+
+    // The data must survive the refused removal.
+    await expect(readFile(path.join(strayPath, 'precious.txt'), 'utf8')).resolves.toContain('unrelated');
   });
 
   it('does not delete a branch that was not attached to the removed worktree', async () => {
@@ -619,7 +650,9 @@ describe('git worktree infrastructure', () => {
     });
 
     expect(result.removedWorktreePaths.some((removedPath) => removedPath.endsWith(`${path.sep}999`))).toBe(true);
-    expect(result.removedWorktreePaths.some((removedPath) => removedPath.endsWith(`${path.sep}stray`))).toBe(true);
+    // A `stray` directory with no `.git` marker is not a worktree; it must be preserved
+    // (we never blindly rm -rf unrecognised directories that could hold un-merged work).
+    expect(result.removedWorktreePaths.some((removedPath) => removedPath.endsWith(`${path.sep}stray`))).toBe(false);
     expect(result.removedWorktreePaths.some((removedPath) => removedPath.endsWith(`${path.sep}001`))).toBe(false);
     expect(result.removedBranchNames).toContain('openweft-999-orphan');
     expect(result.removedBranchNames).not.toContain('openweft-001-retained');
@@ -639,7 +672,8 @@ describe('git worktree infrastructure', () => {
     const branches = await simpleGit(repoRoot).branchLocal();
     expect(branches.all).toContain('openweft-001-retained');
     expect(branches.all).not.toContain('openweft-999-orphan');
-    await expect(readFile(path.join(strayPath, 'note.txt'), 'utf8')).rejects.toThrow();
+    // The stray directory's contents must survive pruning.
+    await expect(readFile(path.join(strayPath, 'note.txt'), 'utf8')).resolves.toContain('orphan');
   });
 
   it('preserves detached openweft-prefixed branches during orphan pruning', async () => {
