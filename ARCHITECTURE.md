@@ -21,7 +21,7 @@ Everything OpenWeft does fits inside one loop:
                    ▼                                          │
               ┌──────────┐    Prompt A compiles each          │
               │  Plan     │    request into a worker brief    │
-              └────┬─────┘    (Prompt B)                      │
+              └────┬─────┘    (Work Brief)                    │
                    │                                          │
                    ▼                                          │
               ┌──────────┐    successLikelihood /              │
@@ -60,7 +60,7 @@ Everything OpenWeft does fits inside one loop:
        Done
 ```
 
-The loop runs inside a `while(true)` in `realRun.ts`. Each iteration: plan pending requests → check for pending re-analysis → score and phase → execute phases → merge → collect diff summaries → loop. It breaks when the queue is empty, the user stops it, or unresolved failures remain.
+The loop runs inside a `while(true)` in `realRun.ts`. Each iteration: plan pending requests → check for pending re-analysis → score and phase → execute one compatible phase → merge → collect diff summaries → loop. OpenWeft intentionally re-enters scoring and phasing after a phase finishes so remaining work can be adjusted against the real merged code. It breaks when the queue is empty, the user stops it, or unresolved failures remain.
 
 ---
 
@@ -84,6 +84,7 @@ src/
 │   ├── realRun.ts          Main orchestration loop + state transitions
 │   ├── dryRun.ts           XState v5 state machine (mock-backed pipeline)
 │   ├── audit.ts            Append-only JSONL audit trail
+│   ├── finalization.ts     Terminal durability checks + runtime cleanup
 │   └── stop.ts             Graceful shutdown controller
 │
 ├── domain/                 Pure business logic (no side effects)
@@ -104,6 +105,9 @@ src/
 ├── git/                    Git operations
 │   └── worktrees.ts        Worktree lifecycle, dirty-tree-safe --no-ff merge, conflict handling, gc
 │
+├── status/                 Runtime diagnostics + status rendering
+│   └── runtimeDiagnostics.ts HEAD, checkpoint, merge durability, and Codex-home checks
+│
 └── fs/                     File system utilities
     ├── paths.ts            RuntimePaths (all .openweft/ subdirectories)
     └── ...                 Atomic writes, retry reads, JSONL append
@@ -123,8 +127,8 @@ OpenWeft doesn't send your feature request directly to an agent. It compiles it 
           │
           ▼
 ┌─────────────────────┐
-│     Prompt A         │     Meta-prompt (212 lines, production-grade)
-│                      │     Tells the agent HOW to plan:
+│   Brief Compiler     │     Meta-prompt (production-grade)
+│                      │     Tells the agent how to write a Work Brief:
 │  • 5-approach        │     - investigate codebase first
 │    brainstorming     │     - brainstorm 5 high-level approaches
 │  • Structured brief  │     - score by blast radius, reversibility
@@ -137,7 +141,7 @@ OpenWeft doesn't send your feature request directly to an agent. It compiles it 
           │
           ▼
 ┌─────────────────────┐
-│     Prompt B         │     The actual worker brief
+│    Work Brief        │     The actual worker operating brief
 │                      │     Persisted to feature_requests/briefs/
 │  Contains:           │     Inspectable, durable, recoverable
 │  • Codebase context  │
@@ -147,16 +151,16 @@ OpenWeft doesn't send your feature request directly to an agent. It compiles it 
 └─────────────────────┘
 ```
 
-**Stage 1 (S1):** Prompt A runs against your request. Output: Prompt B — the detailed worker brief persisted under `feature_requests/briefs/`.
+**Stage 1 (S1):** the Brief Compiler runs against your request. Output: a Work Brief — the detailed worker operating brief persisted under `feature_requests/briefs/`.
 
-**Stage 2 (S2):** Prompt B runs against the codebase. Output: a full Markdown plan persisted under `feature_requests/*.md` with a `## Manifest` block (files to create/modify/delete) and a `## Ledger` (constraints, assumptions, watchpoints, validation).
+**Stage 2 (S2):** the Work Brief runs against the codebase. Output: a full Markdown plan persisted under `feature_requests/*.md` with a `## Manifest` block (files to create/modify/delete) and a `## Ledger` (constraints, assumptions, watchpoints, validation).
 
-The Stage 2 plan is what gets validated and resumed from:
+The Stage 2 plan is what gets structurally validated:
 
 - **Manifest** must parse as `{ create: string[], modify: string[], delete: string[] }`. If JSON is malformed, OpenWeft tries `jsonrepair`, then `JSON5.parse`, then falls back to the last known good manifest.
 - **Ledger** must contain four required h3 subheadings: `Constraints`, `Assumptions`, `Watchpoints`, `Validation`. Enforced by `assertLedgerSection()`.
 
-The Prompt B artifact is saved to `feature_requests/briefs/` and the validated plan is saved to `feature_requests/*.md`. If a session degrades or the process crashes, both survive. Recovery resumes from the plan plus checkpoint state, not from transient model memory.
+The Work Brief artifact is saved to `feature_requests/briefs/` and the validated plan is saved to `feature_requests/*.md`. If a session degrades or the process crashes, both survive. Recovery resumes from durable artifacts: checkpoint state, the Work Brief, and the plan. It does not depend on transient model memory.
 
 ---
 
@@ -317,7 +321,7 @@ your-repo/
 
 ### Ownership
 
-OpenWeft owns all worktree lifecycle — creation, cleanup, merge, and garbage collection. Workers are explicitly instructed to never create additional worktrees, clone the repo, or create ad hoc branches. Every Prompt B includes this boundary:
+OpenWeft owns all worktree lifecycle — creation, cleanup, merge, and garbage collection. Workers are explicitly instructed to never create additional worktrees, clone the repo, or create ad hoc branches. The default Work Brief contract and execution prompt include this boundary:
 
 > *Workspace isolation has already been solved by the orchestrator. Use the current assigned worktree as the only workspace.*
 
@@ -351,6 +355,17 @@ On resume, OpenWeft checks whether a managed worktree already has a reusable com
 ### Cleanup
 
 After merges, `pruneOrphanedOpenWeftArtifacts` removes worktrees and branches not in the active set. Auto-gc is temporarily disabled during heavy worktree operations to avoid git pauses.
+
+### Codex worker homes
+
+Codex-backed turns run with isolated `CODEX_HOME` directories under `.openweft/codex-home/`. OpenWeft prepares each worker home from a minimal deterministic config:
+
+- `approval_policy = "never"`
+- the requested sandbox mode
+- only the active worker `cwd` trusted
+- subscription auth copied only when `auth.json` is needed and present
+
+Worker homes do not inherit personal `mcp_servers`, `notify`, plugin, skill, or unrelated trusted-project configuration from the operator's Codex home. By default, successful runs clean `.openweft/codex-home/`; set `runtime.codexHomeRetention` to `preserve` when you want to inspect those homes after a run.
 
 ---
 
@@ -446,7 +461,8 @@ The checkpoint is a Zod-validated JSON blob (schema version `1.0.0`, strict — 
 OrchestratorCheckpoint {
   schemaVersion:    '1.0.0'
   runId:            string (UUID, unique per orchestration session)
-  checkpointId:     string (UUID, unique per write)
+  checkpointId:     string (UUID for this checkpoint lineage)
+  orchestratorVersion, configHash, createdAt, updatedAt
   status:           'idle' | 'in-progress' | 'paused'
                     | 'completed' | 'failed' | 'stopped'
   currentState:     'idle' | 'planning' | 'executing' | 'merging'
@@ -454,6 +470,8 @@ OrchestratorCheckpoint {
   currentPhase:     { index, name, featureIds, startedAt } | null
   queue:            { orderedFeatureIds, totalCount }
   features:         Record<featureId, FeatureCheckpoint>
+  pendingRequests:  Array<{ request, queuedAt }>
+  approvalState:    { firstApprovalSatisfied, approvedFeatureIds }
   pendingMergeSummaries: Array<{ featureId, summary }>
   cost:             { totalInputTokens, totalOutputTokens,
                       totalEstimatedUsd, perFeature: Record<...> }
@@ -465,13 +483,16 @@ Each feature tracks:
 
 ```typescript
 FeatureCheckpoint {
-  id, request, status, attempts,
+  id, title, request, status, attempts,
   planFile, promptBFile, evolvedPlanFile,
-  branchName, worktreePath, sessionId,
+  branchName, worktreePath, sessionId, sessionScope, backend,
   manifest, priorityScore, priorityTier, scoringCycles,
+  rerunEligible, mergeResolutionAttempts,
   mergeCommit, lastError, updatedAt
 }
 ```
+
+`checkpointId` is created with the checkpoint and is not the per-write freshness signal; `updatedAt` changes on checkpoint saves. `promptBFile` is a legacy checkpoint field name kept for checkpoint compatibility. New artifacts use Work Brief language and `.work-brief.md` filenames.
 
 ### Atomic write with backup
 
@@ -507,7 +528,20 @@ For each feature:
     → Normal execution
 ```
 
-In-flight features that died mid-execution get reset to `planned`. They re-run from the persisted plan file, not from broken agent context. This is intentional: clean re-execution beats attempting to resurrect a half-finished session.
+Before actionable features execute, OpenWeft verifies the Work Brief artifact pointer and repairs it from the canonical Work Brief path when possible. If the Work Brief artifact is missing for an actionable feature, resume fails clearly instead of guessing.
+
+In-flight features that died mid-execution get reset to `planned`. They re-run from the persisted Work Brief and plan file, not from broken agent context. This is intentional: clean re-execution beats attempting to resurrect a half-finished session.
+
+### Finalization
+
+At the end of a real run, `finalizeRun()` collects runtime diagnostics before writing the terminal audit event. It checks:
+
+- current `HEAD`
+- primary and backup checkpoint timestamps
+- whether recorded merge commits for completed features are reachable from final `HEAD`
+- whether `.openweft/codex-home/` still exists and how much residue it contains
+
+If a run reaches `completed` but merge durability fails, OpenWeft marks affected features and the run as `failed`. If Codex-home cleanup fails under the default `on-success-clean` policy, finalization also downgrades the run instead of reporting a false success.
 
 ---
 
@@ -518,8 +552,8 @@ Every agent call records input and output token counts. The normal CLI and TUI r
 ### Usage stages
 
 ```
-planning-s1          Prompt A generation
-planning-s2          Prompt B + plan generation
+planning-s1          Work Brief generation
+planning-s2          Plan generation from Work Brief
 execution            Feature implementation
 adjustment           Plan re-evaluation after merges
 conflict-resolution  Resolving merge conflicts
@@ -682,6 +716,14 @@ rateLimits:
     maxConcurrentRequests: positive int (codex: 3, claude: 2)
     retryBackoffMs:      non-negative int (default: 5000)
     retryMaxAttempts:    positive int (default: 5)
+status:
+  usageDisplay:       'tokens' | 'estimated-cost' (default: 'tokens')
+runtime:
+  codexHomeRetention: 'on-success-clean' | 'preserve' (default: 'on-success-clean')
+budget:
+  warnAtUsd:          number | null (default: null)
+  pauseAtUsd:         number | null (default: null)
+  stopAtUsd:          number | null (default: null)
 ```
 
 ---
@@ -692,15 +734,21 @@ rateLimits:
 your-repo/
 ├── feature_requests/
 │   ├── queue.txt                    Your requests (v1 JSON format)
-│   ├── 0001-add-password-reset.md   Generated plan with ## Manifest + ## Ledger
-│   ├── 0002-refactor-auth.md
+│   ├── 001_add-password-reset.md    Generated plan with ## Manifest + ## Ledger
+│   ├── 002_refactor-auth.md
 │   └── briefs/
-│       ├── 0001-add-password-reset.md   Prompt B artifact
-│       └── 0002-refactor-auth.md
+│       ├── 001_add-password-reset.work-brief.md    Work Brief artifact
+│       └── 002_refactor-auth.work-brief.md
 │
 ├── prompts/
 │   ├── prompt-a.md                  Your Prompt A template
 │   └── plan-adjustment.md           Your plan adjustment template
+│
+├── skills/
+│   └── openweft-work-protocol/
+│       ├── SKILL.md                 Repo-local worker protocol skill
+│       └── references/
+│           └── canonical-openweft-work-protocol.md
 │
 ├── .openweft/
 │   ├── checkpoint.json              Orchestrator state (Zod-validated)
@@ -712,26 +760,27 @@ your-repo/
 │   ├── worktrees/                   Git worktrees (one numeric dir per feature)
 │   ├── shadow-plans/                Canonical internal plan mirrors
 │   ├── evolved-plans/               Worktree-promoted plan copies awaiting promotion or cleanup
+│   ├── codex-home/                  Minimal isolated Codex worker homes
 │   └── dry-run-workspaces/          Scratch workspaces for --dry-run
 │
 └── .openweftrc.json                 Configuration
 ```
 
-Everything important to runtime and recovery is inspectable on disk.
+Everything important to runtime and recovery is inspectable on disk while a run is active or preserved for debugging. Some runtime residue, especially `.openweft/codex-home/`, is cleaned after successful runs by default.
 
 ---
 
 ## Design principles
 
-**Prompt B is first-class.** It's persisted, inspectable, and durable. Not disposable glue between stages.
+**Work Briefs are first-class.** They are persisted, inspectable, and durable. Not disposable glue between stages.
 
 **OpenWeft owns topology.** Workers never create worktrees, clone repos, or switch branches. Git infrastructure is orchestration, not intelligence.
 
 **Real diffs beat declared intent.** The actual repository changes are the final truth. Worker-reported manifests are useful signals, not gospel.
 
-**Separate cognition from orchestration.** Prompt B thinks and works. OpenWeft schedules and reconciles. Neither tries to do the other's job.
+**Separate cognition from orchestration.** Work Briefs guide the model's thinking and execution. OpenWeft schedules and reconciles. Neither tries to do the other's job.
 
-**Simplicity is role clarity.** Three layers, three jobs: Prompt A writes the mission brief. Prompt B runs the mission. OpenWeft controls the battlefield.
+**Simplicity is role clarity.** Three layers, three jobs: the Brief Compiler writes the Work Brief, the Work Brief drives the feature plan and execution, and OpenWeft controls orchestration.
 
 ---
 
@@ -739,9 +788,11 @@ Everything important to runtime and recovery is inspectable on disk.
 
 ```
 openweft                setup wizard (first run) · dashboard (returning)
-openweft init           config, directories, prompt files
+openweft init           config, directories, prompt files, work protocol skill
 openweft add "feature"  queue a request (also accepts stdin)
 openweft start          run the queue with interactive dashboard
+openweft start --model <model>  run once with a model override
+openweft start --effort <level> run once with a reasoning effort override
 openweft start --bg     detach — PID tracked, logs to .openweft/output.log
 openweft start --stream stream raw agent output to terminal
 openweft start --tmux   launch in a tmux session

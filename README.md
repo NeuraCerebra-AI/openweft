@@ -4,7 +4,9 @@
 
 OpenWeft orchestrates [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex CLI](https://github.com/openai/codex) — **queuing features**, **detecting file conflicts**, **running safe work in parallel**, and **merging results** automatically.
 
-**It runs on your existing subscription. No API keys, no per-token billing.**
+**It runs on your existing subscription by default. No API keys required unless you opt into API-key auth.**
+
+> **Architecture deep dive:** OpenWeft is designed as a real orchestration system, not a prompt wrapper. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full breakdown of the planning compiler, scoring algorithm, phase scheduler, worktree isolation, checkpoint recovery, finalization, and runtime diagnostics.
 
 <p align="center">
   <picture>
@@ -83,7 +85,7 @@ The core design separates model cognition from orchestration control:
 | Domain model | Score risk, detect manifest overlap, assign phases, classify failures. |
 | Orchestrator | Drive the planning, execution, merge, re-analysis, and recovery loop. |
 | Git layer | Own worktree lifecycle, dirty-tree-safe merges, conflict handling, and cleanup. |
-| State layer | Persist strict checkpoints, token usage, audit events, and recovery artifacts. |
+| State layer | Persist strict checkpoints, token usage, audit events, Work Briefs, plans, and recovery artifacts. |
 | Adapter layer | Normalize Codex CLI, Claude Code, and deterministic mock execution behind one contract. |
 
 For the full architecture, see [ARCHITECTURE.md](./ARCHITECTURE.md).
@@ -110,15 +112,15 @@ OpenWeft uses a two-stage planning compiler:
 
 ```text
 Raw request
-  -> Prompt A meta-prompt
-  -> Prompt B worker brief
-  -> Markdown execution plan
-  -> ## Manifest + ## Ledger
+  -> Brief Compiler
+  -> Work Brief
+  -> Feature Plan
+  -> ## Ledger + ## Manifest
 ```
 
-**Stage 1** sends the raw request through Prompt A. Prompt A does not implement the feature; it generates Prompt B, a detailed worker brief saved under `feature_requests/briefs/`.
+**Stage 1** sends the raw request through the Brief Compiler (`prompts/prompt-a.md`). The compiler does not implement the feature; it generates a Work Brief, a detailed operating brief saved under `feature_requests/briefs/`.
 
-**Stage 2** sends Prompt B to the selected backend. The result is a Markdown feature plan saved under `feature_requests/`, validated as an execution artifact instead of treated as disposable chat output.
+**Stage 2** sends the Work Brief to the selected backend. The result is a Markdown feature plan saved under `feature_requests/`, validated as an execution artifact instead of treated as disposable chat output.
 
 Every plan must include a manifest:
 
@@ -145,6 +147,16 @@ OpenWeft treats parallel coding as a scheduling problem. It does not simply laun
 | Blast-radius scoring | Weighs file type, operation type, fan-in, and directory spread. | Risky work is visible to the scheduler before execution begins. |
 | Success likelihood | Penalizes broad, modification-heavy, external-API-heavy, high-coupling work. | Smaller and safer tasks can land first. |
 | EWMA + hysteresis | Smooths priority changes and prevents tier flicker across cycles. | Re-planning stays stable instead of bouncing between noisy rankings. |
+
+OpenWeft ranks features with a score designed to favor work that is likely to land cleanly without ignoring important high-impact changes:
+
+```text
+rawPriority = successLikelihood / (normalizedBlastRadius^0.6 + 0.01)
+```
+
+`blastRadius` comes from the files in the manifest: schema migrations, config/CI, shared libraries, high-fan-in modules, broad directory spread, and operation type all affect risk. `successLikelihood` starts from a baseline and is reduced for wide file counts, heavy modification ratios, external API work, high coupling, and complex plans. The `^0.6` exponent means blast radius matters, but does not dominate the queue so completely that a large-but-straightforward feature can never move.
+
+After the first scoring passes, OpenWeft smooths priority with EWMA and assigns tiers with hysteresis. In plain English: priorities can change when the repository changes, but they do not jitter wildly between phases. That matters because every merge feeds real edit summaries back into the remaining plans before the next phase runs.
 
 The phasing algorithm is intentionally conservative:
 
@@ -200,10 +212,11 @@ Fire-and-forget only works if the process can survive bad timing: terminal exits
 | `.openweft/audit-trail.jsonl` | Append-only event history for real runs. |
 | `.openweft/costs.jsonl` | Token usage per agent call. |
 | `feature_requests/*.md` | Validated Markdown execution plans. |
-| `feature_requests/briefs/*.md` | Durable Prompt B worker briefs. |
+| `feature_requests/briefs/*.work-brief.md` | Durable Work Briefs. |
 | `.openweft/shadow-plans/` | Internal mirrors used during execution and recovery. |
+| `.openweft/codex-home/` | Minimal isolated Codex homes for worker turns; cleaned after successful runs by default. |
 
-Checkpoint writes are atomic and Zod-validated. Loading prefers the primary checkpoint, falls back to the backup if the primary is corrupt, and rejects unexpected schema fields. On resume, in-flight features reset to `planned` unless OpenWeft can prove there is already a reusable completion or recorded merge. Clean re-execution from a persisted plan is safer than trying to resurrect half-valid model context.
+Checkpoint writes are atomic and Zod-validated. Loading prefers the primary checkpoint, falls back to the backup if the primary is corrupt, and rejects unexpected schema fields. On resume, in-flight features reset to `planned` unless OpenWeft can prove there is already a reusable completion or recorded merge. Clean re-execution from the persisted Work Brief, plan, and checkpoint is safer than trying to resurrect half-valid model context.
 
 Completion is also verified after the run. OpenWeft checks that recorded merge commits are reachable from final `HEAD`; if durability verification fails, the run is downgraded instead of pretending success.
 
@@ -259,7 +272,7 @@ Full command reference:
 
 ```
 openweft                       setup wizard (first run) · dashboard (returning)
-openweft init                  set up config, directories, prompt files
+openweft init                  set up config, directories, prompts, and work protocol
 openweft add "feature"         queue a request (also accepts stdin)
 openweft start                 run the queue with interactive dashboard
 openweft start --model gpt-5.5 run once with a model override
@@ -276,7 +289,7 @@ openweft stop                  finish the current phase, then stop
 
 ## Configuration
 
-`openweft init` writes `.openweftrc.json`. Config loads via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig), so `.openweftrc`, `.openweftrc.yaml`, `openweft.config.js`, or the `openweft` key in `package.json` all work.
+`openweft init` writes `.openweftrc.json`, creates runtime directories, starter prompt templates, a repo-local `skills/openweft-work-protocol/` skill, and a `.gitignore` entry for `.openweft/`. Config loads via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig), so `.openweftrc`, `.openweftrc.yaml`, `openweft.config.js`, or the `openweft` key in `package.json` all work.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -287,7 +300,10 @@ openweft stop                  finish the current phase, then stop
 | `approval` | `always` | Fire-and-forget by default; can be `per-feature` or `first-only`. |
 | `concurrency.maxParallelAgents` | `3` | Maximum workers per compatible phase. |
 | `concurrency.staggerDelayMs` | `5000` | Delay between worker launches. |
+| `rateLimits.*.mode` | `subscription` | Rate-limit profile for subscription or API-key auth. |
 | `status.usageDisplay` | `tokens` | Status reports token counts. |
+| `runtime.codexHomeRetention` | `on-success-clean` | Clean isolated Codex worker homes after successful runs, or `preserve` for debugging. |
+| `budget.*` | `null` | Optional legacy budget thresholds; status still reports token counts. |
 
 After onboarding, run `openweft` and press `m` in the ready dashboard to save a new default model/effort, or use `openweft start --model <model> --effort <level>` for a one-run override.
 
@@ -320,8 +336,30 @@ After onboarding, run `openweft` and press `m` in the ready dashboard to save a 
     "maxParallelAgents": 3,
     "staggerDelayMs": 5000
   },
+  "rateLimits": {
+    "codex": {
+      "mode": "subscription",
+      "maxConcurrentRequests": 3,
+      "retryBackoffMs": 5000,
+      "retryMaxAttempts": 5
+    },
+    "claude": {
+      "mode": "subscription",
+      "maxConcurrentRequests": 2,
+      "retryBackoffMs": 5000,
+      "retryMaxAttempts": 5
+    }
+  },
   "status": {
     "usageDisplay": "tokens"
+  },
+  "runtime": {
+    "codexHomeRetention": "on-success-clean"
+  },
+  "budget": {
+    "warnAtUsd": null,
+    "pauseAtUsd": null,
+    "stopAtUsd": null
   }
 }
 ```
@@ -353,7 +391,7 @@ The important boundary is that `domain/` stays pure, `git/` owns repository topo
 
 ## Design principles
 
-**Prompt B is first-class.** The generated worker brief is persisted, inspectable, and recoverable. It is not throwaway glue between a user request and an agent turn.
+**Work Briefs are first-class.** The generated operating brief is persisted, inspectable, and recoverable. It is not throwaway glue between a user request and an agent turn.
 
 **OpenWeft owns topology.** Agents work inside assigned worktrees. The orchestrator decides branches, merges, cleanup, and recovery.
 

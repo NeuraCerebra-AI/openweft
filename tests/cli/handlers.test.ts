@@ -264,25 +264,146 @@ describe('command handlers', () => {
 
     const promptAPath = path.join(repoRoot, 'prompts', 'prompt-a.md');
     const planAdjustmentPath = path.join(repoRoot, 'prompts', 'plan-adjustment.md');
+    const workProtocolSkillPath = path.join(repoRoot, 'skills', 'openweft-work-protocol', 'SKILL.md');
+    const workProtocolReferencePath = path.join(
+      repoRoot,
+      'skills',
+      'openweft-work-protocol',
+      'references',
+      'canonical-openweft-work-protocol.md'
+    );
     const promptA = await readFile(promptAPath, 'utf8');
     const planAdjustment = await readFile(planAdjustmentPath, 'utf8');
+    const workProtocolSkill = await readFile(workProtocolSkillPath, 'utf8');
+    const workProtocolReference = await readFile(workProtocolReferencePath, 'utf8');
 
     expect(promptA).toBe(DEFAULT_PROMPT_A_TEMPLATE);
     expect(promptA).toContain('{{USER_REQUEST}}');
-    expect(promptA).toContain('### Instructions for Prompt Creation');
+    expect(promptA).toContain('### Instructions for Work Brief Creation');
+    expect(promptA).toContain('OpenWeft Work Protocol');
+    expect(promptA).toContain('skills/openweft-work-protocol/SKILL.md');
+    expect(promptA).toContain('Return the complete Work Brief as response text only');
+    expect(promptA).not.toContain('saved in a `.md` file in the ./prompts folder');
     expect(promptA).toContain('Living Plan Ledger');
+    expect(promptA).toContain('after completing the initial codebase research');
+    expect(promptA).toContain("feature plan's `## Ledger` section");
+    expect(promptA).toContain('It must not create a separate Living Plan Ledger Markdown file in `./project_ledgers`');
+    expect(promptA).toContain('canonical execution record');
+    expect(promptA).toContain('after every compaction, the full ledger must be reread');
+    expect(promptA).toContain('When constructing the plan, you must be deliberate about the **order of operations**');
+    expect(promptA).toContain('For **sub-steps**, a dedicated Downstream Impact Review is **not required by default**');
+    expect(promptA).toContain(
+      'When in doubt for a sub-step, prefer launching **1 targeted verification agent** rather than skipping review entirely.'
+    );
     expect(promptA).toContain('not create additional git worktrees');
+    expect(promptA).toContain('Use Context7 to saturate the debugging workflow');
+    expect(promptA).toContain('If Context7 is unavailable, use web search restricted to official relevant documentation.');
+    expect(promptA).toContain('~95%+ confidence');
+    expect(promptA).toContain('Risk-Scaled Execution Guardrails');
+    expect(promptA).toContain('For low-risk, local, mechanical tasks, ledger entries may be concise');
+    expect(promptA).toContain('Do not activate the full debugging protocol for routine expected TDD red tests');
+    expect(promptA).toContain(
+      'Do not fail, skip, or abandon a feature solely because ledger, dossier, or protocol formatting is imperfect'
+    );
+    expect(promptA).toContain(
+      'Use Context7 or official web docs only when external framework, library, API, or protocol behavior materially affects'
+    );
+    expect(promptA).toContain('record a brief self-check in the ledger instead of launching verification agents');
     expect(planAdjustment).toContain('{{CODE_EDIT_SUMMARY}}');
     expect(planAdjustment).toContain('## Ledger');
+    expect(planAdjustment).toContain('Downstream Impact Review');
+    expect(workProtocolSkill).toContain('OpenWeft Work Protocol');
+    expect(workProtocolSkill).toContain('Risk-Scaled Execution Guardrails');
+    expect(workProtocolReference).toContain('Canonical OpenWeft Work Protocol');
+    expect(workProtocolReference).toContain('after completing the initial codebase research');
+    expect(workProtocolReference).toContain("feature plan's `## Ledger` section");
+    expect(workProtocolReference).toContain(
+      'It must not create a separate Living Plan Ledger Markdown file in `./project_ledgers`'
+    );
+    expect(workProtocolReference).toContain('canonical execution record');
+    expect(workProtocolReference).toContain('after every compaction, the full ledger must be reread');
+    expect(workProtocolReference).toContain(
+      'When constructing the plan, you must be deliberate about the **order of operations**'
+    );
+    expect(workProtocolReference).toContain(
+      'For **sub-steps**, a dedicated Downstream Impact Review is **not required by default**'
+    );
+    expect(workProtocolReference).toContain(
+      'When in doubt for a sub-step, prefer launching **1 targeted verification agent** rather than skipping review entirely.'
+    );
+    expect(workProtocolReference).toContain('Use Context7 to saturate the debugging workflow');
+    expect(workProtocolReference).toContain(
+      'If Context7 is unavailable, use web search restricted to official relevant documentation.'
+    );
+    expect(workProtocolReference).toContain('~95%+ confidence');
+    expect(workProtocolReference).toContain('Risk-Scaled Execution Guardrails');
+    expect(workProtocolReference).toContain('For low-risk, local, mechanical tasks, ledger entries may be concise');
+    expect(workProtocolReference).toContain('Do not activate the full debugging protocol for routine expected TDD red tests');
+    expect(workProtocolReference).toContain(
+      'Do not fail, skip, or abandon a feature solely because ledger, dossier, or protocol formatting is imperfect'
+    );
+    expect(workProtocolReference).toContain(
+      'Use Context7 or official web docs only when external framework, library, API, or protocol behavior materially affects'
+    );
+    expect(workProtocolReference).toContain(
+      'record a brief self-check in the ledger instead of launching verification agents'
+    );
     expect(output).toContain('Prompts: prompt-a=created, plan-adjustment=created');
+    expect(output).toContain('Work protocol: skill=created, reference=created');
 
     await writeFile(promptAPath, 'custom prompt a\n', 'utf8');
+    await writeFile(workProtocolSkillPath, 'custom work protocol\n', 'utf8');
     output.length = 0;
 
     await runCli();
 
     expect(await readFile(promptAPath, 'utf8')).toBe('custom prompt a\n');
+    expect(await readFile(workProtocolSkillPath, 'utf8')).toBe('custom work protocol\n');
     expect(output).toContain('Prompts: prompt-a=kept, plan-adjustment=kept');
+    expect(output).toContain('Work protocol: skill=kept, reference=kept');
+  });
+
+  it('warns when existing starter prompts still contain the legacy prompt-writing contract', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-init-stale-prompts-'));
+    const output: string[] = [];
+    const program = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: false
+        })
+      })
+    );
+
+    await mkdir(path.join(repoRoot, 'prompts'), { recursive: true });
+    await writeFile(
+      path.join(repoRoot, 'prompts', 'prompt-a.md'),
+      'Write a prompt saved in a `.md` file in the ./prompts folder. It must then create a **Living Plan Ledger** Markdown file in `./project_ledgers`.\n',
+      'utf8'
+    );
+    await writeFile(
+      path.join(repoRoot, 'prompts', 'plan-adjustment.md'),
+      'If they do, update the plan file in place, including the manifest.\n',
+      'utf8'
+    );
+
+    await program.parseAsync(['init'], { from: 'user' });
+
+    expect(output).toContain(
+      'Warning: existing prompts/prompt-a.md appears to contain legacy Work Brief file-writing instructions; OpenWeft kept it, but Work Brief runs may be cleaner if you refresh it.'
+    );
+    expect(output).toContain(
+      'Warning: existing prompts/plan-adjustment.md appears to contain legacy in-place adjustment instructions; OpenWeft kept it, but Work Brief re-analysis expects returned plan markdown.'
+    );
   });
 
   it('refuses init outside a git repository', async () => {

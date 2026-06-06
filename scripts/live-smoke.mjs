@@ -6,6 +6,11 @@ import path from 'node:path';
 import process from 'node:process';
 
 import { execa } from 'execa';
+import {
+  parseLiveSmokeTimeoutMs,
+  printSmokeDiagnosticsSafely,
+  readJsonLines
+} from './live-smoke-helpers.mjs';
 
 const validBackends = new Set(['codex', 'claude']);
 const validScenarios = new Set(['single', 'resume']);
@@ -33,15 +38,6 @@ const featureRequests =
       ]
     : [`create ${targetFile} with one short sentence confirming the ${backend} live smoke passed`];
 
-const readJsonLines = async (filePath) => {
-  const content = await readFile(filePath, 'utf8');
-  return content
-    .trim()
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line));
-};
-
 const run = async (command, args, options = {}) => {
   return execa(command, args, {
     cwd: tempRepo,
@@ -50,12 +46,33 @@ const run = async (command, args, options = {}) => {
   });
 };
 
-const runOpenWeft = async (args) => {
-  const result = await execa(process.execPath, [cliEntrypoint, ...args], {
+const runOpenWeft = async (args, options = {}) => {
+  let timedOut = false;
+  let timer = null;
+  const child = execa(process.execPath, [cliEntrypoint, ...args], {
     cwd: tempRepo,
     reject: false,
     stripFinalNewline: false
   });
+
+  if (options.timeoutMs) {
+    timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM', { forceKillAfterDelay: 5000 });
+    }, options.timeoutMs);
+  }
+
+  const result = await child.finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
+
+  if (timedOut) {
+    throw new Error(
+      `OpenWeft command timed out after ${options.timeoutMs}ms: node ${cliEntrypoint} ${args.join(' ')}`
+    );
+  }
 
   if (result.exitCode !== 0) {
     throw new Error(
@@ -82,6 +99,7 @@ const cleanup = async () => {
 };
 
 try {
+  const liveSmokeTimeoutMs = parseLiveSmokeTimeoutMs();
   const authCommand =
     backend === 'codex'
       ? ['codex', ['login', 'status']]
@@ -124,17 +142,21 @@ try {
   await writeFile(
     path.join(tempRepo, 'prompts', 'prompt-a.md'),
     [
-      `You are preparing Prompt B for a tiny OpenWeft ${scenario} live smoke test.`,
+      `You are preparing a Work Brief for a tiny OpenWeft ${scenario} live smoke test.`,
       '',
       'User request:',
       '{{USER_REQUEST}}',
       '',
-      'Return Prompt B only. Prompt B must instruct the next agent to generate a compact Markdown feature plan that:',
+      'Return the Work Brief only. The Work Brief must instruct the next agent to generate a compact Markdown feature plan that:',
+      '- repeats the full user request verbatim, including the target path and any exact requested file content after a colon',
       '- produces the smallest safe implementation',
       '- includes 3-5 steps',
       '- includes a strict `## Manifest` section with a JSON code block containing `create`, `modify`, and `delete` arrays',
+      '- includes a `## Ledger` section with the exact subheadings `### Constraints`, `### Assumptions`, `### Watchpoints`, and `### Validation`',
       '- prefers creating exactly the requested file and no unrelated edits',
-      '- includes targeted validation'
+      '- includes targeted validation',
+      '- keeps any no-write/read-only rules scoped to planning responses only',
+      '- allows the execution worker to make the requested manifest-scoped file changes'
     ].join('\n'),
     'utf8'
   );
@@ -145,8 +167,10 @@ try {
       '{{CODE_EDIT_SUMMARY}}',
       '',
       'Investigate whether they interfere with the referenced feature plan.',
-      'If they do, update the plan file in place, including the manifest.',
-      'If they do not, leave the plan unchanged.'
+      'If they do, return the full updated plan markdown, including the manifest.',
+      'If they do not, return the full unchanged plan markdown.',
+      'Do not modify source files during this adjustment step.',
+      'This no-write rule applies only to the adjustment response; do not add it as an implementation constraint in the returned plan.'
     ].join('\n'),
     'utf8'
   );
@@ -155,7 +179,9 @@ try {
     await runOpenWeft(['add', featureRequest]);
   }
 
-  const startResult = await runOpenWeft(['start']);
+  const startResult = await runOpenWeft(['start'], {
+    timeoutMs: liveSmokeTimeoutMs
+  });
   const createdFile = path.join(tempRepo, targetFile);
   const createdContent = await readFile(createdFile, 'utf8');
   const checkpoint = JSON.parse(
@@ -236,5 +262,6 @@ try {
   } else {
     console.error(String(error));
   }
+  await printSmokeDiagnosticsSafely({ tempRepo });
   process.exitCode = 1;
 }

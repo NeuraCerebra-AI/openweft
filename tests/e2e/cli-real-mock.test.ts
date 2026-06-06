@@ -123,11 +123,11 @@ describe('openweft CLI real mock flow', () => {
     expect(parseQueueFile(queueContent).processed.map((entry) => entry.featureId)).toEqual(['001', '002']);
 
     const createdFeatureOne = await readFile(
-      path.join(repoRoot, 'src', 'features', '001-runtime-generated-prompt-b-for-001.ts'),
+      path.join(repoRoot, 'src', 'features', '001-runtime-generated-work-brief-for-001.ts'),
       'utf8'
     );
     const createdFeatureTwo = await readFile(
-      path.join(repoRoot, 'src', 'features', '002-runtime-generated-prompt-b-for-002.ts'),
+      path.join(repoRoot, 'src', 'features', '002-runtime-generated-work-brief-for-002.ts'),
       'utf8'
     );
     expect(createdFeatureOne).toContain('openweft-mock');
@@ -186,8 +186,9 @@ describe('openweft CLI real mock flow', () => {
     const promptBContent = await readFile(savedFeature?.promptBFile ?? '', 'utf8');
 
     expect(savedFeature?.status).toBe('completed');
+    expect(savedFeature?.promptBFile).toMatch(/\.work-brief\.md$/);
     expect(planContent).toContain('## Ledger');
     expect(planContent).toContain('## Manifest');
-    expect(promptBContent).toContain('Runtime-generated Prompt B');
+    expect(promptBContent).toContain('Runtime-generated Work Brief');
   }, CLI_REAL_MOCK_TIMEOUT_MS);
 });

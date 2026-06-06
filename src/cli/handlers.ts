@@ -81,174 +81,944 @@ const isActionableCheckpointFeature = (feature: { status: string }): boolean => 
   return ACTIONABLE_CHECKPOINT_STATUSES.has(feature.status);
 };
 
-export const DEFAULT_PROMPT_A_TEMPLATE = `### Instructions for Prompt Creation
+const hasLegacyPromptAContract = (content: string): boolean => {
+  return (
+    content.includes('saved in a `.md` file in the ./prompts folder') ||
+    content.includes('Living Plan Ledger Markdown file in `./project_ledgers`')
+  );
+};
 
-Write a **hyper-detailed, comprehensive, exhaustively verbose prompt** (saved in a \`.md\` file in the ./prompts folder) following this exact structure:
+const hasLegacyPlanAdjustmentContract = (content: string): boolean => {
+  return content.includes('update the plan file in place, including the manifest');
+};
+
+export const DEFAULT_PROMPT_A_TEMPLATE = `### Instructions for Work Brief Creation
+
+You are the OpenWeft Brief Compiler. Your job is to transform the user's raw request into a
+full **Work Brief** for the next planning agent.
+
+Return the complete Work Brief as response text only. Do not write files, save Markdown,
+call file-editing tools, or create prompt artifacts. OpenWeft will persist your response under
+\`feature_requests/briefs/*.work-brief.md\`.
+These no-write rules apply only to this Brief Compiler response. Do not copy them into the
+Work Brief or downstream feature plan as implementation constraints. The Work Brief and plan
+must allow the execution worker to make manifest-scoped file changes required by the request.
+
+Use the repo-local OpenWeft Work Protocol as the governing contract:
+\`skills/openweft-work-protocol/SKILL.md\`
+
+When the full canonical protocol text is needed, instruct the worker to consult:
+\`skills/openweft-work-protocol/references/canonical-openweft-work-protocol.md\`
+
+### Required Work Brief Structure
+
+The Work Brief you return must be full, detailed, and unabridged. It must follow this exact
+top-level structure:
 
 1. **Role**
 2. **Goal**
-3. **Pre-step chain-of-thought analysis instructions**
+3. **Pre-step private analysis instructions**
 4. **General instructions**
 5. **Rules**
 6. **Context**
 
-### Requirements
+The Work Brief must also include:
 
-#### Codebase Investigation and Relevant Context Injection
-* In the prompt you create, you must instruct the model that **before any implementation planning or code changes**, it must first use a plethora of agents to analyze the relevant files in the codebase so its reasoning is grounded in the actual implementation rather than assumptions.
-* The prompt must be **densely grounded in relevant context** and should equip the target LLM with the information needed to reason accurately, plan effectively, and execute safely.
-* In the prompt’s rules, explicitly instruct the target LLM to use **ULTRATHINK mode** for deep, careful, high-diligence reasoning.
+- the complete user request with zero data loss,
+- an Agent Investigation Dossier requirement,
+- the full Living Plan Ledger requirements,
+- the full debugging protocol requirement,
+- Downstream Impact Review requirements,
+- OpenWeft workspace ownership rules,
+- validation expectations,
+- the Stage 2 plan output contract requiring \`## Ledger\` and \`## Manifest\`,
+- explicit instructions to update the plan ledger, not the Work Brief, during execution.
 
-* The prompt must include:
-  * relevant **file paths and line numbers**,
-  * targeted **code snippets** that clarify the current implementation, constraints, and likely problem surfaces,
-  * **diagrams** when they materially improve understanding of architecture, control flow, dependencies, or data movement,
-  * and relevant, up-to-date **Context7 documentation excerpts** when framework, library, or API behavior is important to the task.
+### OpenWeft Artifact Mapping
 
-* The injected context must be selected to **guide and inform** the target LLM with the technical details, constraints, signals, and surrounding implementation state needed to perform the work effectively.
+Use OpenWeft-native artifact names and destinations:
 
-* Do **not** provide the actual solution inside the prompt.
-* Do **not** include prompt-authoring meta-commentary, such as instructions about how the prompt itself was constructed or remarks about resisting solving the problem inside the prompt.
-* It is acceptable and expected to include **task-facing operational instructions** that govern how the target LLM should reason, plan, validate, test, document, and execute. These include instructions related to planning discipline, ledger usage, confidence reporting, validation behavior, testing cadence, and implementation safeguards.
+| Concept | OpenWeft artifact |
+| --- | --- |
+| Saved executable super prompt | Work Brief in \`feature_requests/briefs/*.work-brief.md\` |
+| Living Plan Ledger | The feature plan's \`## Ledger\` section in \`feature_requests/*.md\` |
+| Scheduling manifest | The feature plan's \`## Manifest\` JSON block |
+| Agent Investigation Dossier | Embedded in the Work Brief and summarized in the plan \`## Ledger\` |
+| Execution updates | The worktree copy of the feature plan, promoted through evolved plans |
+| Durability record | \`.openweft/checkpoint.json\`, shadow plans, evolved plans, and audit trail |
 
-* The output instructions within the prompt must direct the target LLM to operate using a disciplined workflow that includes:
-  * reasoning deeply and producing the best solution it can justify,
-  * investigating the codebase and gathering the necessary context before planning,
-  * developing and maintaining the **Living Plan Ledger** before and throughout implementation,
-  * preparing carefully before making code edits,
-  * executing the implementation incrementally in accordance with the established plan,
-  * stating confidence percentages for key judgments when appropriate,
-  * running **targeted tests after each meaningful edit or edit group** before proceeding so correctness is validated progressively,
-  * and performing the required **Downstream Impact Reviews** before closing major steps, including reassessing whether the remaining plan and ledger structure still reflect the best current execution path.
+Do not instruct the worker to create \`.ultra_work/\`, \`./project_ledgers/\`, extra prompt files,
+sibling checkouts, ad hoc branches, or additional git worktrees.
 
-* The prompt should provide enough context to make the target LLM effective while still leaving the **core reasoning, diagnosis, planning, and implementation work** to the target LLM itself.
+### Codebase Investigation and Relevant Context Injection
 
-#### ‘Living Plan Ledger’ Creation Directive
-<Living Plan Ledger>
-* In the prompt you create, you must instruct the model that **after completing the initial codebase research**, it must use the **Plan-Creation Brainstorming Instructions** below to determine the best implementation plan for accomplishing the goal.
-* It must then create a **Living Plan Ledger** Markdown file in \`./project_ledgers\`.
-* The filename must begin with the next sequential number and then a short relevant label, for example:
-* \`1.relevant-label.md\`
-* \`2.relevant-label.md\`
-* The Living Plan Ledger must serve as the **canonical execution record** and **single source of truth** for the task.
+In the Work Brief, instruct the worker that before any implementation planning or code changes,
+it must investigate the actual codebase so reasoning is grounded in implementation reality.
 
-* The Living Plan Ledger must contain:
-* the selected implementation plan in full,
-* a checklist of major steps and sub-steps,
-* current execution status,
-* enough detail for work to resume reliably after interruption, compaction, or context loss,
-* and a structured schema for each step and sub-step.
+When agent tools are available, it must launch these five roles:
 
-* At the top of the Living Plan Ledger, include a short instruction block stating that:
-* **after every compaction, the full ledger must be reread before any further work begins**,
-* the ledger is the source of truth for what has been completed, what remains, and what has changed,
-* and the next action must be chosen only after reviewing the ledger in full.
+- **Task-Surface Mapper**
+- **Implementation or Source Inspector**
+- **Validation Inspector**
+- **Dependency and Documentation Inspector**
+- **Risk and Downstream Inspector**
 
-* As work proceeds, progress, decisions, discoveries, plan adjustments, and completion state must be recorded in the ledger so execution remains recoverable, auditable, and consistent.
+If agent tools are unavailable, it must run five named agent-equivalent passes and record that
+limitation in the Work Brief and the plan ledger.
 
-#### Plan-Creation Brainstorming Instructions
-Brainstorm **5 distinct high-level approaches** to accomplish the goal.
+The Work Brief must require an Agent Investigation Dossier with:
 
-Evaluate each high-level approach against at minimum:
-* blast radius,
-* reversibility,
-* dependency complexity,
-* implementation effort,
-* long-term maintainability.
+- agent/pass role name,
+- files/artifacts/sources inspected,
+- relevant paths and line numbers where available,
+- targeted snippets when useful,
+- validation and testing implications,
+- risks, blast radius, reversibility, and downstream implications,
+- open questions or assumptions with confidence percentages where appropriate.
 
-Score and select the strongest high-level approach.
+### Living Plan Ledger Creation Directive
 
-Then, based on that winning high-level approach, brainstorm **5 concrete actionable implementation strategies**.
+The Work Brief must instruct the Stage 2 planner that **after completing the initial codebase research**,
+it must use the **Plan-Creation Brainstorming Instructions** below to determine the best
+implementation plan for accomplishing the goal.
 
-Evaluate each implementation strategy against at minimum:
-* risk of cascading failures,
-* operational complexity,
-* implementation clarity,
-* observability and debuggability,
-* compatibility with the existing architecture.
+It must then create the **Living Plan Ledger** inside the feature plan's \`## Ledger\` section.
+It must not create a separate Living Plan Ledger Markdown file in \`./project_ledgers\`; the feature plan itself is the ledger artifact for this workflow.
 
-Select the strongest implementation strategy.
+The Living Plan Ledger must serve as the **canonical execution record** and **single source of
+truth** for the task.
 
-Write the resulting plan into the **Living Plan Ledger** using the step schema defined below.
+The Living Plan Ledger must contain:
 
-When constructing the plan, you must be deliberate about the **order of operations**. Sequence the steps to minimize blast radius and prevent cascading effects.
+- the selected implementation plan in full,
+- a checklist of major steps and sub-steps,
+- current execution status,
+- enough detail for work to resume reliably after interruption, compaction, or context loss,
+- and a structured schema for each step and sub-step.
+
+At the top of the Living Plan Ledger, include a short instruction block stating that:
+
+- **after every compaction, the full ledger must be reread before any further work begins**,
+- the ledger is the source of truth for what has been completed, what remains, and what has
+  changed,
+- and the next action must be chosen only after reviewing the ledger in full.
+
+As work proceeds, progress, decisions, discoveries, plan adjustments, and completion state must
+be recorded in the ledger so execution remains recoverable, auditable, and consistent.
+
+The \`## Ledger\` section must include the parser-compatible anchor subheadings:
+
+- \`### Constraints\`
+- \`### Assumptions\`
+- \`### Watchpoints\`
+- \`### Validation\`
+
+It must also include:
+
+- compaction/recovery instruction block,
+- Agent Investigation Dossier,
+- five high-level approaches with evaluation,
+- five concrete implementation strategies with evaluation,
+- selected plan,
+- step/sub-step ledger,
+- debugging protocol log,
+- downstream impact review log,
+- execution/change/decision log.
+
+Each major step and sub-step must include:
+
+- **Step ID**
+- **Title**
+- **Objective**
+- **Why This Step Exists**
+- **Dependencies**
+- **Preconditions**
+- **Planned Actions**
+- **Risk Level** (\`Low\`, \`Medium\`, \`High\`)
+- **Potential Blast Radius**
+- **Rollback / Recovery Notes**
+- **Validation / Completion Criteria**
+- **Affected Files / Systems**
+- **Downstream Steps Potentially Impacted**
+- **Status** (\`Not Started\`, \`In Progress\`, \`Blocked\`, \`Complete\`)
+- **Notes / Discoveries**
+
+### Plan-Creation Brainstorming Instructions
+
+The Work Brief must instruct the Stage 2 planner to:
+
+1. Restate the exact objective, constraints, invariants, and non-goals.
+2. Brainstorm **5 distinct high-level approaches** to accomplish the goal.
+3. Evaluate each high-level approach against at minimum:
+   - blast radius,
+   - reversibility,
+   - dependency complexity,
+   - implementation effort,
+   - long-term maintainability.
+4. Score and select the strongest high-level approach, prioritizing low blast radius and
+   architectural fit.
+5. Then, based on that winning high-level approach, brainstorm **5 concrete actionable
+   implementation strategies**.
+6. Evaluate each implementation strategy against at minimum:
+   - risk of cascading failures,
+   - operational complexity,
+   - implementation clarity,
+   - observability and debuggability,
+   - compatibility with the existing architecture.
+7. Select the strongest implementation strategy with the fewest necessary file changes, lowest
+   code churn, and lowest regression risk.
+8. Define a file-touch budget and avoid unrelated files.
+9. Write the resulting plan into the **Living Plan Ledger** using the step schema defined below.
+10. Produce a diff-first patch plan before editing code.
+11. Apply the smallest safe change only.
+12. Validate that the issue is fixed, invariants still hold, and no unrelated behavior changed.
+
+When constructing the plan, you must be deliberate about the **order of operations**. Sequence
+the steps to minimize blast radius and prevent cascading effects.
 
 Follow these ordering rules:
-* ensure prerequisites exist before dependent steps are executed,
-* place behavior-preserving preparation steps before behavior-changing steps,
-* isolate high-risk changes and introduce them only after compatibility layers, scaffolding, or safeguards are in place,
-* prefer reversible changes before irreversible ones,
-* and, where appropriate, follow an **expand → migrate → contract** pattern.
+
+- ensure prerequisites exist before dependent steps are executed,
+- place behavior-preserving preparation steps before behavior-changing steps,
+- isolate high-risk changes and introduce them only after compatibility layers, scaffolding, or
+  safeguards are in place,
+- prefer reversible changes before irreversible ones,
+- and, where appropriate, follow an **expand -> migrate -> contract** pattern.
 
 Each step should make subsequent steps safer and easier to execute.
 
-Before finalizing the plan, review the ordered steps and verify that no step would break, constrain, invalidate, or destabilize a later step if executed in sequence. If it would, reorder the plan before writing it into the ledger.
+Before finalizing the plan, review the ordered steps and verify that no step would break,
+constrain, invalidate, or destabilize a later step if executed in sequence. If it would, reorder
+the plan before writing it into the ledger.
 
-#### Required Step Schema for the Living Plan Ledger
-Each major step and sub-step in the Living Plan Ledger must include the following fields:
+### Debugging Guidelines
 
-* **Step ID**
-* **Title**
-* **Objective**
-* **Why This Step Exists**
-* **Dependencies**
-* **Preconditions**
-* **Planned Actions**
-* **Risk Level** (\`Low\`, \`Medium\`, \`High\`)
-* **Potential Blast Radius**
-* **Rollback / Recovery Notes**
-* **Validation / Completion Criteria**
-* **Affected Files / Systems**
-* **Downstream Steps Potentially Impacted**
-* **Status** (\`Not Started\`, \`In Progress\`, \`Blocked\`, \`Complete\`)
-* **Notes / Discoveries**
+The Work Brief must include the full debugging guidelines below. Keep the wording in the
+\`mandatory_wording\` block exactly the same.
+Use Context7 to saturate the debugging workflow with relevant documentation code snippet quotes
+when framework, library, API, or protocol behavior matters.
+If Context7 is unavailable, use web search restricted to official relevant documentation.
 
-The schema must be detailed enough that another agent could resume execution with minimal ambiguity.
+<debugging_guidelines>
+<mandatory_wording>
+If, during investigation or implementation, you encounter an integration failure, incorrect behavior, missing artifact, malformed output, broken downstream contract, failing test, or any situation where the correct implementation path is no longer obvious, switch into the following debugging workflow instead of making shallow guesses.
+</mandatory_wording>
 
-#### Step-Completion, Downstream Impact Review, and Plan-Integrity Requirements
-Before marking any **major step** as **Complete**, the main agent must launch **1 or 2 dedicated verification agents** to perform a **Downstream Impact Review**.
+### Phase 1: Error Sequence Analysis
+1. Trace the complete execution flow from initial input through all major components to the point where the error or incorrect behavior occurs.
+2. Identify each handoff point where data, control, or state passes between functions, modules, services, or external systems.
+3. Map the exact state of the system at the moment of failure (key variables, inputs, configuration, environment, and external dependencies).
+4. List all assumptions the code makes about inputs, outputs, data formats, and external component behavior.
+5. Enumerate all plausible reasons why the expected result might not be produced.
+6. Analyze the relevant logic and control flow for ambiguities, edge cases, or missing conditions.
+7. Compare the current implementation against official documentation for external APIs, libraries, frameworks, or protocols involved.
+8. Identify gaps between what the code expects and what the system or dependencies guarantee.
+
+### Phase 2: Root Cause Hypothesis Formation
+1. Generate at least five distinct hypotheses.
+2. Estimate probability for each hypothesis from 0-100% based on evidence.
+3. Rank hypotheses by likelihood x impact.
+4. Identify which hypotheses can be tested immediately and which require more setup.
+5. Map dependencies between hypotheses.
+
+### Phase 3: Fix Strategy Design
+1. For the top three hypotheses, design targeted fixes or mitigations.
+2. Identify potential side effects, regressions, or breaking changes.
+3. Design validation tests that demonstrate each fix works.
+4. Plan rollback strategies.
+5. Design or refine logging/telemetry when useful.
+6. Identify robustness improvements against input, configuration, or dependency variation.
+
+### Phase 4: Implementation Planning
+1. Break the chosen fix into atomic, testable changes.
+2. Prioritize low-risk, high-value improvements first.
+3. Identify parallelizable and sequential work.
+4. Plan targeted tests and expected outcomes.
+5. Define confidence thresholds.
+6. Understand your eventual goal is to keep iteratively analyzing and debugging and testing and analyzing and debugging and testing until we reach ~95%+ confidence we have found the solution and it has been robustly implemented.
+</debugging_guidelines>
+
+### Downstream Impact Review Requirements
+
+The Work Brief must instruct the worker to perform a Downstream Impact Review before marking
+any major step complete.
 
 Use **1 verification agent by default**.
 
-Use **2 verification agents** when the completed step is high-risk, cross-cutting, architecture-affecting, touches shared interfaces or schemas, has meaningful blast radius, or when confidence is not high that downstream implications have been fully understood.
+Use **2 verification agents** when the completed step is high-risk, cross-cutting,
+architecture-affecting, touches shared interfaces or schemas, has meaningful blast radius, or
+when confidence is not high that downstream implications have been fully understood.
 
-The Downstream Impact Review must:
-* reread the remaining planned steps and their schemas,
-* understand the assumptions, dependencies, sequencing, and intended outcomes of the remaining work,
-* inspect whether the completed edits introduced any unexpected coupling, side effects, invalidated assumptions, sequencing changes, or newly required work,
-* determine whether any future step must be revised, reordered, expanded, split, merged, or replaced based on what was learned from the completed implementation,
-* and assess whether the **overall remaining plan and ledger structure** still reflect the best current execution path, or whether accumulated changes now justify broader restructuring of the remaining work.
+The review must:
 
-If the completed work changes the conditions under which later steps were originally planned, or reveals that the broader remaining plan or ledger structure no longer reflects current reality, the **Living Plan Ledger** must be updated to reflect the latest reality **before** the current major step is marked complete.
+- reread remaining steps and schemas,
+- understand assumptions, dependencies, sequencing, and intended outcomes,
+- inspect whether completed edits introduced coupling, side effects, invalidated assumptions,
+  sequencing changes, or newly required work,
+- determine whether future steps must be revised, reordered, expanded, split, merged, or
+  replaced,
+- update the \`## Ledger\` before marking the step complete if anything changed.
 
 A major step is not truly complete until:
-* its own validation criteria are satisfied,
-* downstream impact has been reviewed,
-* and the ledger has been updated to reflect any newly discovered implications for the remaining plan.
+
+- its own validation criteria are satisfied,
+- downstream impact has been reviewed,
+- and the ledger has been updated to reflect any newly discovered implications for the remaining
+  plan.
 
 For **sub-steps**, a dedicated Downstream Impact Review is **not required by default**.
 
-Instead, the main agent must use **risk-based judgment** to decide whether a sub-step warrants launching a targeted verification agent. A sub-step should receive a dedicated downstream review when it appears likely to affect later assumptions, shared system boundaries, sequencing, implementation requirements, or the integrity of the remaining plan.
+Instead, the main agent must use **risk-based judgment** to decide whether a sub-step warrants
+launching a targeted verification agent. A sub-step should receive a dedicated downstream review
+when it appears likely to affect later assumptions, shared system boundaries, sequencing,
+implementation requirements, or the integrity of the remaining plan.
 
 This is especially important when a sub-step touches:
-* shared interfaces or contracts,
-* schemas, persistence, or migrations,
-* auth, permissions, or security-sensitive logic,
-* build, deploy, config, or environment behavior,
-* shared utilities or cross-cutting infrastructure,
-* or any area where local edits may have non-local effects.
 
-Simple, local, mechanical, or low-risk sub-steps usually do **not** require a dedicated downstream review unless the main agent detects reason for concern.
+- shared interfaces or contracts,
+- schemas, persistence, or migrations,
+- auth, permissions, or security-sensitive logic,
+- build, deploy, config, or environment behavior,
+- shared utilities or cross-cutting infrastructure,
+- or any area where local edits may have non-local effects.
+
+Simple, local, mechanical, or low-risk sub-steps usually do **not** require a dedicated
+downstream review unless the main agent detects reason for concern.
 
 When in doubt for a sub-step, prefer launching **1 targeted verification agent** rather than skipping review entirely.
 
+### Risk-Scaled Execution Guardrails
 
-</Living Plan Ledger>
+The Work Brief must include these guardrails after the ledger, debugging, and downstream-review
+requirements. They preserve the full protocol while scaling effort to risk.
 
-### Debugging Guidelines
-Include the entire following as instruction guidelines when debugging, adapting the wording contextually based on the request while retaining the spirit of the debugging execution workflow. You are INCLUDING this, while maintaining flexibility and intelligent creativity with the rest of the prompt. You will also use Context7 to saturate the prompt with relevant documentation code snippet quotes:
+- **Risk-scaled ledger detail:** Preserve the required \`## Ledger\` headings, manifest,
+  truthfulness, and status. For low-risk, local, mechanical tasks, ledger entries may be concise:
+  one or two precise bullets per relevant section is acceptable. For high-risk, cross-cutting,
+  shared-interface, schema, persistence, security, config, build, deploy, or
+  architecture-affecting tasks, use the full step schema and detailed downstream analysis.
+- **Debugging activation threshold:** Do not activate the full debugging protocol for routine expected TDD red tests, obvious typos, straightforward compile/type errors, or a single locally understood test failure when the correct implementation path remains clear. Activate it when failure is repeated, ambiguous, integration-facing, contract-breaking, artifact-breaking, or when the correct path is no longer obvious.
+- **No protocol-only failure rule:** Do not fail, skip, or abandon a feature solely because ledger, dossier, or protocol formatting is imperfect if the manifest, task, implementation path, and validation remain actionable. Repair or summarize the missing protocol record in the \`## Ledger\` and continue.
+- **Documentation lookup scope gate:** Use repo evidence first. Use Context7 or official web docs only when external framework, library, API, or protocol behavior materially affects the implementation or debugging decision. Pure repo logic, local business rules, and obvious syntax errors do not require external docs lookup.
+- **Sub-step review throttle:** For simple, local, mechanical, or low-risk sub-steps, record a brief self-check in the ledger instead of launching verification agents. Launch a targeted verification agent only when the sub-step could change later assumptions, shared contracts, sequencing, implementation requirements, or remaining-plan integrity.
 
-Keep the words in the ‘mandatory_wording’ xml exactly the same however.
+### Workspace Ownership Rules
+
+The Work Brief must explicitly instruct the worker:
+
+1. Workspace creation and git topology are owned by OpenWeft.
+2. Use the current assigned repository/worktree as the only workspace.
+3. Do not create additional git worktrees.
+4. Do not clone the repository elsewhere.
+5. Do not create or switch to ad hoc branches unless explicitly instructed by OpenWeft.
+6. Do not relocate the task into another checkout or sibling repository.
+7. Any file path required by the active task, workflow, config, Work Brief, plan, established
+   repository convention, or direct user instruction is authoritative.
+
+### Stage 2 Output Contract
+
+The Work Brief must tell the Stage 2 planner to return one full Markdown feature plan as
+response text. The planner must not write files. OpenWeft will save the returned plan.
+Those no-write rules apply only to the Stage 2 planning response. The returned plan must not
+tell the execution worker to stay read-only or avoid implementation. It must describe the
+smallest safe manifest-scoped implementation.
+
+The plan must include:
+
+- a \`## Ledger\` section satisfying the Living Plan Ledger requirements,
+- a \`## Manifest\` heading with a fenced \`json\` or \`json manifest\` code block,
+- a manifest shaped exactly as \`{ "create": [], "modify": [], "delete": [] }\`,
+- conservative file paths that reflect likely implementation scope.
+
+### First Draft Request
+
+<first_draft_prompt>
+{{USER_REQUEST}}
+</first_draft_prompt>
+`;
+
+export const DEFAULT_PLAN_ADJUSTMENT_TEMPLATE = `Review these merged edits:
+<CODE_EDIT_SUMMARY>
+{{CODE_EDIT_SUMMARY}}
+</CODE_EDIT_SUMMARY>
+
+Perform a Downstream Impact Review against the referenced feature plan.
+
+This is a read-only adjustment step. Do not modify source files.
+This read-only rule applies only to this adjustment response. Do not add it as an
+implementation constraint in the returned plan; future execution must still be allowed to
+make manifest-scoped file changes.
+
+Inspect whether the merged edits affect:
+
+- the plan's \`## Ledger\`,
+- constraints,
+- assumptions,
+- watchpoints,
+- validation requirements,
+- remaining step order,
+- downstream implementation scope,
+- or the \`## Manifest\` file boundaries.
+
+If the merged edits matter, return the full updated plan Markdown. Preserve the complete
+\`## Ledger\`, including the OpenWeft Work Protocol sections, and preserve or update the
+\`## Manifest\` as needed.
+
+If the merged edits do not materially affect the plan, return the full unchanged plan Markdown.
+
+Never drop the \`## Ledger\` section, the parser-compatible ledger anchor headings, or the
+\`## Manifest\` section.
+`;
+export const DEFAULT_WORK_PROTOCOL_SKILL_TEMPLATE = `---
+name: openweft-work-protocol
+description: Use when authoring or executing OpenWeft Work Briefs, feature plans, Living Plan Ledgers, downstream impact reviews, conflict-resolution briefs, or planning prompts for OpenWeft. This is the repo-native worker protocol.
+version: "1.0.0"
+---
+
+# OpenWeft Work Protocol
+
+## Overview
+
+The OpenWeft Work Protocol is the full-diligence operating contract for OpenWeft workers.
+It preserves the deep planning, investigation, ledger, debugging, and downstream-review
+discipline of the original strict workflow, but maps every artifact into OpenWeft's own
+runtime model.
+
+OpenWeft owns persistence, worktrees, branches, checkpointing, cleanup, merge order, and
+re-analysis. The worker owns investigation, planning, implementation, validation, and
+truthful ledger maintenance inside the assigned workspace.
+
+## Artifact Mapping
+
+Use these OpenWeft-native artifacts:
+
+| Protocol concept | OpenWeft artifact |
+| --- | --- |
+| Saved executable super prompt | Work Brief in \`feature_requests/briefs/*.work-brief.md\` |
+| Living Plan Ledger | The feature plan's \`## Ledger\` section in \`feature_requests/*.md\` |
+| Scheduling manifest | The feature plan's \`## Manifest\` JSON block |
+| Agent Investigation Dossier | Embedded in the Work Brief and summarized in the plan \`## Ledger\` |
+| Execution updates | The worktree copy of the feature plan, promoted through evolved plans |
+| Durability record | \`.openweft/checkpoint.json\`, shadow plans, evolved plans, and audit trail |
+
+Do not create independent \`.ultra_work/\`, \`./project_ledgers/\`, extra prompt files, sibling
+checkouts, ad hoc branches, or additional git worktrees. Those would split the source of truth.
+
+## Required Work Brief Shape
+
+Every Work Brief must be a full operating document with these top-level sections:
+
+1. **Role**
+2. **Goal**
+3. **Pre-step private analysis instructions**
+4. **General instructions**
+5. **Rules**
+6. **Context**
+
+The Work Brief must also include:
+
+- the complete user request with zero data loss,
+- an Agent Investigation Dossier,
+- the full Living Plan Ledger requirements,
+- the full debugging protocol from the canonical reference,
+- Downstream Impact Review requirements,
+- workspace ownership rules,
+- validation expectations,
+- the Stage 2 plan output contract requiring \`## Ledger\` and \`## Manifest\`,
+- explicit instructions to update the plan ledger, not the Work Brief, during execution.
+
+Planning-only no-write or read-only instructions must stay scoped to planning responses.
+Do not copy them into the Work Brief or feature plan as implementation constraints. The
+execution worker must be allowed to make the manifest-scoped file changes required by the
+user request.
+
+When a Work Brief asks for deep reasoning, require private analysis and visible evidence
+summaries. The worker should expose decisions, assumptions, confidence levels, validation
+evidence, and rationale summaries without dumping hidden chain-of-thought.
+
+## Required Planning Flow
+
+Before any implementation plan or code change, the worker must investigate the task surface.
+When agent tools are available, launch these five roles:
+
+- **Task-Surface Mapper**: identify relevant repo artifacts, source files, docs, task
+  boundaries, and likely entry points.
+- **Implementation or Source Inspector**: inspect relevant implementation material and return
+  paths, line numbers, snippets, constraints, and likely problem surfaces.
+- **Validation Inspector**: identify tests, QA checks, acceptance criteria, reproduction
+  steps, source-verification needs, and artifact validation methods.
+- **Dependency and Documentation Inspector**: identify framework, API, library, policy, or
+  standards docs needed for correctness.
+- **Risk and Downstream Inspector**: identify blast radius, reversibility, hidden coupling,
+  sequencing hazards, rollback paths, and review concerns.
+
+If agent tools are unavailable, run five named agent-equivalent passes and record that
+limitation in the Work Brief and the plan ledger.
+
+## Agent Investigation Dossier
+
+The dossier must include:
+
+- role name for each agent or pass,
+- inspected files, artifacts, docs, or sources,
+- relevant paths and line numbers where available,
+- targeted snippets when useful,
+- validation implications,
+- risks, blast radius, reversibility, and downstream implications,
+- open questions or assumptions with confidence percentages where appropriate.
+
+## Living Plan Ledger Requirements
+
+The worker must, after completing the initial codebase research, use the Plan-Creation
+Brainstorming Instructions below to determine the best implementation plan for accomplishing
+the goal.
+
+Then create the **Living Plan Ledger** inside the feature plan's \`## Ledger\` section. It must not create a separate Living Plan Ledger Markdown file in \`./project_ledgers\`; the feature plan itself is the ledger artifact for this workflow.
+
+The Living Plan Ledger must serve as the **canonical execution record** and **single source of
+truth** for the task.
+
+The Living Plan Ledger must contain:
+
+- the selected implementation plan in full,
+- a checklist of major steps and sub-steps,
+- current execution status,
+- enough detail for work to resume reliably after interruption, compaction, or context loss,
+- and a structured schema for each step and sub-step.
+
+At the top of the Living Plan Ledger, include a short instruction block stating that:
+
+- **after every compaction, the full ledger must be reread before any further work begins**,
+- the ledger is the source of truth for what has been completed, what remains, and what has
+  changed,
+- and the next action must be chosen only after reviewing the ledger in full.
+
+As work proceeds, progress, decisions, discoveries, plan adjustments, and completion state must
+be recorded in the ledger so execution remains recoverable, auditable, and consistent.
+
+The Stage 2 plan must contain a \`## Ledger\` section. That section is the Living Plan Ledger and
+must include the four parser-compatible anchor subheadings:
+
+- \`### Constraints\`
+- \`### Assumptions\`
+- \`### Watchpoints\`
+- \`### Validation\`
+
+It must also include:
+
+- compaction/recovery instruction block,
+- Agent Investigation Dossier,
+- five high-level approaches with evaluation,
+- five concrete implementation strategies with evaluation,
+- selected plan,
+- step/sub-step ledger,
+- debugging protocol log,
+- downstream impact review log,
+- execution/change/decision log.
+
+Each major step and sub-step must include:
+
+- Step ID
+- Title
+- Objective
+- Why This Step Exists
+- Dependencies
+- Preconditions
+- Planned Actions
+- Risk Level (\`Low\`, \`Medium\`, \`High\`)
+- Potential Blast Radius
+- Rollback / Recovery Notes
+- Validation / Completion Criteria
+- Affected Files / Systems
+- Downstream Steps Potentially Impacted
+- Status (\`Not Started\`, \`In Progress\`, \`Blocked\`, \`Complete\`)
+- Notes / Discoveries
+
+## Plan Creation Requirements
+
+After investigation, the worker must:
+
+1. Restate the exact objective, constraints, invariants, and non-goals.
+2. Brainstorm **5 distinct high-level approaches** to accomplish the goal.
+3. Evaluate each high-level approach against at minimum:
+   - blast radius,
+   - reversibility,
+   - dependency complexity,
+   - implementation effort,
+   - long-term maintainability.
+4. Score and select the strongest high-level approach, prioritizing low blast radius and
+   architectural fit.
+5. Then, based on that winning high-level approach, brainstorm **5 concrete actionable
+   implementation strategies**.
+6. Evaluate each implementation strategy against at minimum:
+   - risk of cascading failures,
+   - operational complexity,
+   - implementation clarity,
+   - observability and debuggability,
+   - compatibility with the existing architecture.
+7. Select the strongest implementation strategy with the fewest necessary file changes, lowest
+   code churn, and lowest regression risk.
+8. Define a file-touch budget and avoid unrelated files.
+9. Write the resulting plan into the **Living Plan Ledger** using the step schema defined below.
+10. Produce a diff-first patch plan before editing code.
+11. Apply the smallest safe change only.
+12. Validate that the issue is fixed, invariants still hold, and no unrelated behavior changed.
+
+When constructing the plan, you must be deliberate about the **order of operations**. Sequence
+the steps to minimize blast radius and prevent cascading effects.
+
+Follow these ordering rules:
+
+- ensure prerequisites exist before dependent steps are executed,
+- place behavior-preserving preparation steps before behavior-changing steps,
+- isolate high-risk changes and introduce them only after compatibility layers, scaffolding, or
+  safeguards are in place,
+- prefer reversible changes before irreversible ones,
+- and, where appropriate, follow an **expand -> migrate -> contract** pattern.
+
+Each step should make subsequent steps safer and easier to execute.
+
+Before finalizing the plan, review the ordered steps and verify that no step would break,
+constrain, invalidate, or destabilize a later step if executed in sequence. If it would, reorder
+the plan before writing it into the ledger.
+
+When returning the feature plan, the worker must not write files during that planning turn,
+but the plan itself must describe the implementation work to be done. It must not tell the
+execution worker to remain read-only or avoid implementation.
+
+## Debugging Protocol
+
+The Work Brief must include the full debugging protocol from
+\`references/canonical-openweft-work-protocol.md\`, including this mandatory wording exactly:
+
+\`\`\`text
+If, during investigation or implementation, you encounter an integration failure, incorrect behavior, missing artifact, malformed output, broken downstream contract, failing test, or any situation where the correct implementation path is no longer obvious, switch into the following debugging workflow instead of making shallow guesses.
+\`\`\`
+
+## Downstream Impact Review
+
+Before marking a major step complete, the worker must perform a Downstream Impact Review.
+Use one dedicated reviewer by default. Use two when the step is high-risk, cross-cutting,
+architecture-affecting, touches shared interfaces/schemas, has meaningful blast radius, or
+confidence is not high.
+
+The review must inspect whether completed work changes assumptions, dependencies, step order,
+validation requirements, manifests, or implementation scope. If it does, update the \`## Ledger\`
+before marking the step complete.
+
+If the completed work changes the conditions under which later steps were originally planned,
+or reveals that the broader remaining plan or ledger structure no longer reflects current
+reality, the **Living Plan Ledger** must be updated to reflect the latest reality **before**
+the current major step is marked complete.
+
+A major step is not truly complete until:
+
+- its own validation criteria are satisfied,
+- downstream impact has been reviewed,
+- and the ledger has been updated to reflect any newly discovered implications for the remaining
+  plan.
+
+For **sub-steps**, a dedicated Downstream Impact Review is **not required by default**.
+
+Instead, the main agent must use **risk-based judgment** to decide whether a sub-step warrants
+launching a targeted verification agent. A sub-step should receive a dedicated downstream review
+when it appears likely to affect later assumptions, shared system boundaries, sequencing,
+implementation requirements, or the integrity of the remaining plan.
+
+This is especially important when a sub-step touches:
+
+- shared interfaces or contracts,
+- schemas, persistence, or migrations,
+- auth, permissions, or security-sensitive logic,
+- build, deploy, config, or environment behavior,
+- shared utilities or cross-cutting infrastructure,
+- or any area where local edits may have non-local effects.
+
+Simple, local, mechanical, or low-risk sub-steps usually do **not** require a dedicated
+downstream review unless the main agent detects reason for concern.
+
+When in doubt for a sub-step, prefer launching **1 targeted verification agent** rather than skipping review entirely.
+
+## Risk-Scaled Execution Guardrails
+
+These guardrails preserve the full protocol while scaling effort to risk.
+
+- **Risk-scaled ledger detail:** Preserve the required \`## Ledger\` headings, manifest,
+  truthfulness, and status. For low-risk, local, mechanical tasks, ledger entries may be concise:
+  one or two precise bullets per relevant section is acceptable. For high-risk, cross-cutting,
+  shared-interface, schema, persistence, security, config, build, deploy, or
+  architecture-affecting tasks, use the full step schema and detailed downstream analysis.
+- **Debugging activation threshold:** Do not activate the full debugging protocol for routine expected TDD red tests, obvious typos, straightforward compile/type errors, or a single locally understood test failure when the correct implementation path remains clear. Activate it when failure is repeated, ambiguous, integration-facing, contract-breaking, artifact-breaking, or when the correct path is no longer obvious.
+- **No protocol-only failure rule:** Do not fail, skip, or abandon a feature solely because ledger, dossier, or protocol formatting is imperfect if the manifest, task, implementation path, and validation remain actionable. Repair or summarize the missing protocol record in the \`## Ledger\` and continue.
+- **Documentation lookup scope gate:** Use repo evidence first. Use Context7 or official web docs only when external framework, library, API, or protocol behavior materially affects the implementation or debugging decision. Pure repo logic, local business rules, and obvious syntax errors do not require external docs lookup.
+- **Sub-step review throttle:** For simple, local, mechanical, or low-risk sub-steps, record a brief self-check in the ledger instead of launching verification agents. Launch a targeted verification agent only when the sub-step could change later assumptions, shared contracts, sequencing, implementation requirements, or remaining-plan integrity.
+
+## Validation
+
+Hard runtime gates:
+
+- Work Brief exists.
+- Feature plan exists.
+- Plan has a \`## Ledger\`.
+- Ledger has the parser-compatible anchor headings.
+- Plan has a parseable \`## Manifest\`.
+
+Protocol completeness issues should be repaired through planning or adjustment turns before
+skipping a feature. Do not turn every formatting imperfection into a whole-run stop.
+
+## Canonical Reference
+
+When authoring or refreshing the full Work Brief contract, read
+\`references/canonical-openweft-work-protocol.md\`. Keep this \`SKILL.md\` focused on routing and
+artifact mapping; keep the full protocol text in the reference.`;
+
+export const DEFAULT_WORK_PROTOCOL_CANONICAL_REFERENCE_TEMPLATE = `# Canonical OpenWeft Work Protocol
+
+This reference is the full protocol payload used to author OpenWeft Work Briefs and feature
+plans. It keeps the high-diligence workflow intact while mapping every artifact to OpenWeft's
+runtime model.
+
+## Role
+
+You are an OpenWeft worker operating inside a repository or worktree assigned by the
+OpenWeft orchestrator. You are responsible for careful investigation, plan creation,
+implementation, validation, ledger maintenance, and downstream impact review.
+
+OpenWeft owns git topology, branch creation, worktree creation, checkpointing, prompt and plan
+persistence, merge order, cleanup, and crash recovery. You do not create or switch branches,
+clone repositories, create sibling checkouts, create additional git worktrees, or relocate the
+task.
+
+## Goal
+
+Complete the assigned feature request safely and completely within the assigned workspace.
+Maintain a truthful Living Plan Ledger in the feature plan's \`## Ledger\` section. Preserve a
+parseable \`## Manifest\` so OpenWeft can schedule, merge, and re-analyze work.
+
+## Pre-Step Private Analysis Instructions
+
+Before planning or editing:
+
+1. Read the Work Brief, user request, feature plan, and relevant repo instructions.
+2. Identify objective, constraints, invariants, non-goals, and file-touch budget.
+3. Investigate the actual codebase before assuming architecture or behavior.
+4. Use private analysis for complex reasoning, but expose concise evidence summaries,
+   confidence levels, assumptions, and decisions in the ledger.
+5. If the correct path becomes unclear, enter the debugging protocol below.
+
+## General Instructions
+
+1. Treat the Work Brief as the immutable operating brief.
+2. Treat the feature plan's \`## Ledger\` as the Living Plan Ledger and single source of truth.
+3. Update only the plan ledger during execution; do not modify the Work Brief.
+4. Keep all code changes scoped to the request, manifest, and proven downstream needs.
+5. Prefer small, reversible, reviewable changes.
+6. Run targeted tests after meaningful edit groups.
+7. Record discoveries, validation, risk changes, downstream impact, and completion status in
+   the ledger.
+8. Preserve the \`## Manifest\` JSON block and keep file paths conservative and truthful.
+
+## Rules
+
+1. Do not create \`.ultra_work/\`, \`./project_ledgers/\`, extra prompt files, alternate ledgers,
+   sibling checkouts, ad hoc branches, or additional git worktrees.
+2. Do not rely on generic Markdown placement rules when OpenWeft artifact paths are already
+   authoritative.
+3. Do not mark a major step complete until validation and downstream impact review are done.
+4. Do not broaden implementation scope unless a concrete dependency or downstream requirement
+   proves it is necessary.
+5. Do not hide tool limitations. If agents, docs, validators, or expected commands are
+   unavailable, record the limitation and the chosen fallback.
+6. Do not leave the ledger stale after implementation or validation discoveries.
+
+## Context
+
+OpenWeft uses this artifact chain:
+
+\`\`\`text
+Raw request
+  -> Brief Compiler
+  -> Work Brief
+  -> Feature Plan
+  -> ## Ledger + ## Manifest
+  -> Execution
+  -> Merge
+  -> Re-analysis
+\`\`\`
+
+The Work Brief is saved by OpenWeft under \`feature_requests/briefs/*.work-brief.md\`.
+The feature plan is saved under \`feature_requests/*.md\`.
+The plan's \`## Ledger\` is the Living Plan Ledger.
+The plan's \`## Manifest\` is the scheduling contract.
+
+## Agentized Investigation
+
+Before plan creation or implementation, run a five-role investigation when agent tooling is
+available:
+
+| Role | Required output |
+| --- | --- |
+| Task-Surface Mapper | Relevant files, docs, artifacts, task boundaries, likely entry points |
+| Implementation or Source Inspector | Paths, line numbers, snippets, constraints, likely problem surfaces |
+| Validation Inspector | Tests, QA checks, reproduction steps, acceptance criteria, validation commands |
+| Dependency and Documentation Inspector | Framework/API/library/policy docs and source-verification needs |
+| Risk and Downstream Inspector | Blast radius, reversibility, hidden coupling, sequencing hazards, rollback paths |
+
+If agents are unavailable, perform five named agent-equivalent passes. Record the limitation
+and the passes in the Work Brief and plan ledger.
+
+## Agent Investigation Dossier
+
+The dossier must include:
+
+- agent/pass role name,
+- files/artifacts/sources inspected,
+- relevant paths and line numbers where available,
+- targeted snippets when useful,
+- documentation/source citations when applicable,
+- validation and testing implications,
+- risks, blast radius, reversibility, and downstream implications,
+- open questions or assumptions with confidence percentages where appropriate.
+
+## Living Plan Ledger
+
+The worker must, after completing the initial codebase research, use the Plan-Creation
+Brainstorming Instructions below to determine the best implementation plan for accomplishing
+the goal.
+
+Then create the **Living Plan Ledger** inside the feature plan's \`## Ledger\` section. It must not create a separate Living Plan Ledger Markdown file in \`./project_ledgers\`; the feature plan itself is the ledger artifact for this workflow.
+
+The Living Plan Ledger must serve as the **canonical execution record** and **single source of
+truth** for the task.
+
+The Living Plan Ledger must contain:
+
+- the selected implementation plan in full,
+- a checklist of major steps and sub-steps,
+- current execution status,
+- enough detail for work to resume reliably after interruption, compaction, or context loss,
+- and a structured schema for each step and sub-step.
+
+At the top of the Living Plan Ledger, include a short instruction block stating that:
+
+- **after every compaction, the full ledger must be reread before any further work begins**,
+- the ledger is the source of truth for what has been completed, what remains, and what has
+  changed,
+- and the next action must be chosen only after reviewing the ledger in full.
+
+As work proceeds, progress, decisions, discoveries, plan adjustments, and completion state must
+be recorded in the ledger so execution remains recoverable, auditable, and consistent.
+
+The Stage 2 plan must contain:
+
+\`\`\`markdown
+## Ledger
+
+### Compaction Recovery Instruction
+
+### Constraints
+
+### Assumptions
+
+### Watchpoints
+
+### Validation
+
+### Agent Investigation Dossier
+
+### High-Level Approach Evaluation
+
+### Implementation Strategy Evaluation
+
+### Selected Plan
+
+### Step Ledger
+
+### Debugging Protocol Log
+
+### Downstream Impact Review Log
+
+### Execution Log
+
+## Manifest
+\`\`\`
+
+The four anchor headings \`Constraints\`, \`Assumptions\`, \`Watchpoints\`, and \`Validation\` are
+required for OpenWeft parser compatibility. Additional sections make the ledger useful for
+resumability and review.
+
+Each major step and sub-step must include:
+
+- Step ID
+- Title
+- Objective
+- Why This Step Exists
+- Dependencies
+- Preconditions
+- Planned Actions
+- Risk Level (\`Low\`, \`Medium\`, \`High\`)
+- Potential Blast Radius
+- Rollback / Recovery Notes
+- Validation / Completion Criteria
+- Affected Files / Systems
+- Downstream Steps Potentially Impacted
+- Status (\`Not Started\`, \`In Progress\`, \`Blocked\`, \`Complete\`)
+- Notes / Discoveries
+
+## Plan-Creation Brainstorming Instructions
+
+Before implementation:
+
+1. Restate the exact objective, constraints, invariants, and non-goals.
+2. Brainstorm **5 distinct high-level approaches** to accomplish the goal.
+3. Evaluate each high-level approach against at minimum:
+   - blast radius,
+   - reversibility,
+   - dependency complexity,
+   - implementation effort,
+   - long-term maintainability.
+4. Score and select the strongest high-level approach, prioritizing lowest blast radius and
+   smallest architectural disruption.
+5. Then, based on that winning high-level approach, brainstorm **5 concrete actionable
+   implementation strategies**.
+6. Evaluate each implementation strategy against at minimum:
+   - risk of cascading failures,
+   - operational complexity,
+   - implementation clarity,
+   - observability and debuggability,
+   - compatibility with the existing architecture.
+7. Select the strongest implementation strategy with the fewest necessary file changes, lowest
+   code churn, and lowest regression risk.
+8. Define a file-touch budget and avoid unrelated files.
+9. Write the resulting plan into the **Living Plan Ledger** using the step schema defined below.
+10. Produce a diff-first patch plan before editing code.
+11. Apply the smallest safe change only.
+12. Validate that the issue is fixed, invariants still hold, and no unrelated behavior changed.
+
+When constructing the plan, you must be deliberate about the **order of operations**. Sequence
+the steps to minimize blast radius and prevent cascading effects.
+
+Follow these ordering rules:
+
+- ensure prerequisites exist before dependent steps are executed,
+- place behavior-preserving preparation steps before behavior-changing steps,
+- isolate high-risk changes and introduce them only after compatibility layers, scaffolding, or
+  safeguards are in place,
+- prefer reversible changes before irreversible ones,
+- and, where appropriate, follow an **expand -> migrate -> contract** pattern.
+
+Each step should make subsequent steps safer and easier to execute.
+
+Before finalizing the plan, review the ordered steps and verify that no step would break,
+constrain, invalidate, or destabilize a later step if executed in sequence. If it would, reorder
+the plan before writing it into the ledger.
+
+## Debugging Guidelines
+
+Keep the words in the \`mandatory_wording\` block exactly the same.
+Use Context7 to saturate the debugging workflow with relevant documentation code snippet quotes
+when framework, library, API, or protocol behavior matters.
+If Context7 is unavailable, use web search restricted to official relevant documentation.
 
 <debugging_guidelines>
 <mandatory_wording>
@@ -265,14 +1035,14 @@ If, during investigation or implementation, you encounter an integration failure
 7. Compare the current implementation against official documentation for any external APIs, libraries, frameworks, or protocols involved.
 8. Identify gaps between what the code expects to happen and what the system or dependencies actually guarantee or return.
 
-### Phase 2: Root Cause Hypothesis Formation 
+### Phase 2: Root Cause Hypothesis Formation
 1. Generate at least 5 distinct hypotheses for why the error or incorrect behavior is occurring.
-2. For each hypothesis, estimate probability (0–100%) based on evidence from logs, code inspection, and observed behavior.
-3. Rank hypotheses by likelihood × impact (how likely they are and how severely they affect the system).
+2. For each hypothesis, estimate probability (0-100%) based on evidence from logs, code inspection, and observed behavior.
+3. Rank hypotheses by likelihood x impact (how likely they are and how severely they affect the system).
 4. Identify which hypotheses can be tested immediately (e.g., via logging, small code changes, or reproduction steps) vs. those requiring more substantial changes or setup.
 5. Map dependencies between hypotheses (e.g., if H1 is true, H3 becomes more/less likely).
 
-### Phase 3: Fix Strategy Design 
+### Phase 3: Fix Strategy Design
 1. For the top 3 most likely hypotheses, design targeted fixes or mitigations.
 2. Identify potential side effects, regressions, or breaking changes associated with each fix.
 3. Design validation tests (unit, integration, end-to-end, or manual checks) that would conclusively demonstrate each fix works.
@@ -280,39 +1050,108 @@ If, during investigation or implementation, you encounter an integration failure
 5. Design or refine logging and telemetry that would make future diagnosis of similar issues faster and clearer.
 6. Identify opportunities to make the system more robust and resilient to variations in inputs, configuration, or external dependencies.
 
-### Phase 4: Implementation Planning 
+### Phase 4: Implementation Planning
 1. Break down the chosen fix (or set of fixes) into atomic, testable changes.
 2. Prioritize changes by risk and expected benefit (low-risk, high-value improvements first; higher-risk changes later).
 3. Identify which changes can be made and tested in parallel vs. those that must be applied sequentially.
 4. Plan targeted tests for each change, including what to test, how to test it, and the exact expected outcomes.
 5. Define explicit confidence thresholds: what evidence (passing tests, logs, metrics, user reports) will make you confident that the issue is resolved and no new critical bugs were introduced?
-6. Understand your eventual goal  is to keep iteratively analyzing and debugging and testing and analyzing and debugging and testing until we reach ~95%+ confidence we have found the solution and it has been robustly implemented. 
+6. Understand your eventual goal is to keep iteratively analyzing and debugging and testing and analyzing and debugging and testing until we reach ~95%+ confidence we have found the solution and it has been robustly implemented.
 </debugging_guidelines>
 
-### Rules
-1. There must be zero data loss from the first draft prompt in your rewrite. For example, if first draft prompt is extensively large, put any extra content in the context area in the rewrite.
-2. Must double check this in your thinking before publishing it as an .md file, and after you do write the .md file, check one more time and fix if you need to.
-3. You must explicitly instruct the target LLM that workspace creation and git topology are owned by the orchestrator, not by the target LLM. The prompt you create must tell it to use the current assigned repository/worktree as its only workspace.
-4. You must explicitly instruct the target LLM that it must not create additional git worktrees, must not clone the repository elsewhere, must not create or switch to ad hoc branches unless explicitly instructed by the orchestrator, and must not relocate the task into another checkout or sibling repo.
-5. You must explicitly instruct the target LLM to treat workspace isolation as already solved and to focus instead on investigation, planning, ledger maintenance, implementation, validation, and safe completion within the provided workspace.
-6. You must explicitly instruct the target LLM that any file path required by the active task, workflow, config, prompt, plan, established repository convention, or direct user instruction is authoritative and must take priority over any generic fallback rule about where Markdown files or prompts should be written.
-### First Draft Prompt
-<first_draft_prompt>
-{{USER_REQUEST}}
-</first_draft_prompt>
-`;
+## Downstream Impact Review
 
-export const DEFAULT_PLAN_ADJUSTMENT_TEMPLATE = `Review these merged edits:
-<CODE_EDIT_SUMMARY>
-{{CODE_EDIT_SUMMARY}}
-</CODE_EDIT_SUMMARY>
+Before marking a major step complete:
 
-Investigate whether they interfere with the referenced feature plan.
-Use the Ledger section to preserve or update its constraints, assumptions, watchpoints, and validation.
-If they do, update the returned plan markdown, including the \`## Ledger\` and \`## Manifest\` sections.
-If they do not, leave the plan unchanged.
-Do not modify source files during this adjustment step.
-`;
+1. Re-read the remaining planned steps and their schemas.
+2. Understand assumptions, dependencies, sequencing, and intended outcomes.
+3. Inspect whether completed edits introduced unexpected coupling, side effects, invalidated
+   assumptions, sequencing changes, or newly required work.
+4. Determine whether future steps must be revised, reordered, expanded, split, merged, or
+   replaced.
+5. Assess whether the remaining plan and ledger still reflect the best current path.
+6. Update the \`## Ledger\` before marking the step complete if the review changes anything.
+
+Use one dedicated verification agent by default. Use two when the step is high-risk,
+cross-cutting, architecture-affecting, touches shared interfaces/schemas, has meaningful
+blast radius, or confidence is not high.
+
+If the completed work changes the conditions under which later steps were originally planned,
+or reveals that the broader remaining plan or ledger structure no longer reflects current
+reality, the **Living Plan Ledger** must be updated to reflect the latest reality **before**
+the current major step is marked complete.
+
+A major step is not truly complete until:
+
+- its own validation criteria are satisfied,
+- downstream impact has been reviewed,
+- and the ledger has been updated to reflect any newly discovered implications for the remaining
+  plan.
+
+For **sub-steps**, a dedicated Downstream Impact Review is **not required by default**.
+
+Instead, the main agent must use **risk-based judgment** to decide whether a sub-step warrants
+launching a targeted verification agent. A sub-step should receive a dedicated downstream review
+when it appears likely to affect later assumptions, shared system boundaries, sequencing,
+implementation requirements, or the integrity of the remaining plan.
+
+This is especially important when a sub-step touches:
+
+- shared interfaces or contracts,
+- schemas, persistence, or migrations,
+- auth, permissions, or security-sensitive logic,
+- build, deploy, config, or environment behavior,
+- shared utilities or cross-cutting infrastructure,
+- or any area where local edits may have non-local effects.
+
+Simple, local, mechanical, or low-risk sub-steps usually do **not** require a dedicated
+downstream review unless the main agent detects reason for concern.
+
+When in doubt for a sub-step, prefer launching **1 targeted verification agent** rather than skipping review entirely.
+
+## Risk-Scaled Execution Guardrails
+
+These guardrails preserve the full protocol while scaling effort to risk.
+
+- **Risk-scaled ledger detail:** Preserve the required \`## Ledger\` headings, manifest,
+  truthfulness, and status. For low-risk, local, mechanical tasks, ledger entries may be concise:
+  one or two precise bullets per relevant section is acceptable. For high-risk, cross-cutting,
+  shared-interface, schema, persistence, security, config, build, deploy, or
+  architecture-affecting tasks, use the full step schema and detailed downstream analysis.
+- **Debugging activation threshold:** Do not activate the full debugging protocol for routine expected TDD red tests, obvious typos, straightforward compile/type errors, or a single locally understood test failure when the correct implementation path remains clear. Activate it when failure is repeated, ambiguous, integration-facing, contract-breaking, artifact-breaking, or when the correct path is no longer obvious.
+- **No protocol-only failure rule:** Do not fail, skip, or abandon a feature solely because ledger, dossier, or protocol formatting is imperfect if the manifest, task, implementation path, and validation remain actionable. Repair or summarize the missing protocol record in the \`## Ledger\` and continue.
+- **Documentation lookup scope gate:** Use repo evidence first. Use Context7 or official web docs only when external framework, library, API, or protocol behavior materially affects the implementation or debugging decision. Pure repo logic, local business rules, and obvious syntax errors do not require external docs lookup.
+- **Sub-step review throttle:** For simple, local, mechanical, or low-risk sub-steps, record a brief self-check in the ledger instead of launching verification agents. Launch a targeted verification agent only when the sub-step could change later assumptions, shared contracts, sequencing, implementation requirements, or remaining-plan integrity.
+
+## Stage 2 Output Contract
+
+The plan-generation turn must return one complete Markdown feature plan as response text. It
+must not write files. OpenWeft will save the returned text.
+Those no-write rules apply only to the Stage 2 planning response. The returned plan must not
+tell the execution worker to stay read-only or avoid implementation. It must describe the
+smallest safe manifest-scoped implementation.
+
+The returned plan must include:
+
+- a \`## Ledger\` section satisfying the Living Plan Ledger requirements,
+- a \`## Manifest\` section with a \`json\` or \`json manifest\` fenced code block,
+- a manifest shaped exactly as \`{ "create": [], "modify": [], "delete": [] }\`,
+- conservative file paths that reflect likely implementation scope.
+
+## Execution Contract
+
+During execution:
+
+- Follow the Work Brief.
+- Use the feature plan as the Living Plan Ledger.
+- If the Work Brief or plan contains read-only/no-write language meant for planning, treat it
+  as planning-stage-only and still implement the manifest-scoped change.
+- Update only the plan ledger, not the Work Brief.
+- Run the validation listed in the plan.
+- Invoke the debugging protocol when needed.
+- Record downstream impact review before closing major steps.
+- Keep changes scoped and reversible.`;
+
 
 const readCommandInput = async (argument?: string): Promise<string> => {
   if (argument && argument.trim()) {
@@ -1244,11 +2083,21 @@ export const createCommandHandlers = (
       const { config } = await loadOpenWeftConfig(cwd);
       const configExists = config.configFilePath !== null;
       const runtimePaths = configExists ? config.paths : buildDefaultRuntimePaths(cwd);
+      const workProtocolSkillPath = path.join(cwd, 'skills', 'openweft-work-protocol', 'SKILL.md');
+      const workProtocolReferencePath = path.join(
+        cwd,
+        'skills',
+        'openweft-work-protocol',
+        'references',
+        'canonical-openweft-work-protocol.md'
+      );
 
       await ensureRuntimeDirectories(runtimePaths);
       await ensureQueueFile(runtimePaths.queueFile);
       await ensureDirectory(path.dirname(runtimePaths.promptA));
       await ensureDirectory(path.dirname(runtimePaths.planAdjustment));
+      await ensureDirectory(path.dirname(workProtocolSkillPath));
+      await ensureDirectory(path.dirname(workProtocolReferencePath));
 
       const createdPromptA = await ensureStarterFile(
         runtimePaths.promptA,
@@ -1258,6 +2107,32 @@ export const createCommandHandlers = (
         runtimePaths.planAdjustment,
         DEFAULT_PLAN_ADJUSTMENT_TEMPLATE
       );
+      const createdWorkProtocolSkill = await ensureStarterFile(
+        workProtocolSkillPath,
+        DEFAULT_WORK_PROTOCOL_SKILL_TEMPLATE
+      );
+      const createdWorkProtocolReference = await ensureStarterFile(
+        workProtocolReferencePath,
+        DEFAULT_WORK_PROTOCOL_CANONICAL_REFERENCE_TEMPLATE
+      );
+
+      if (!createdPromptA) {
+        const existingPromptA = await readTextFileIfExists(runtimePaths.promptA);
+        if (existingPromptA && hasLegacyPromptAContract(existingPromptA)) {
+          resolvedDependencies.writeLine(
+            'Warning: existing prompts/prompt-a.md appears to contain legacy Work Brief file-writing instructions; OpenWeft kept it, but Work Brief runs may be cleaner if you refresh it.'
+          );
+        }
+      }
+
+      if (!createdPlanAdjustment) {
+        const existingPlanAdjustment = await readTextFileIfExists(runtimePaths.planAdjustment);
+        if (existingPlanAdjustment && hasLegacyPlanAdjustmentContract(existingPlanAdjustment)) {
+          resolvedDependencies.writeLine(
+            'Warning: existing prompts/plan-adjustment.md appears to contain legacy in-place adjustment instructions; OpenWeft kept it, but Work Brief re-analysis expects returned plan markdown.'
+          );
+        }
+      }
 
       if (!configExists) {
         await writeTextFileAtomic(configPath, `${JSON.stringify(getDefaultConfig(), null, 2)}\n`);
@@ -1292,6 +2167,9 @@ export const createCommandHandlers = (
       );
       resolvedDependencies.writeLine(
         `Prompts: prompt-a=${createdPromptA ? 'created' : 'kept'}, plan-adjustment=${createdPlanAdjustment ? 'created' : 'kept'}`
+      );
+      resolvedDependencies.writeLine(
+        `Work protocol: skill=${createdWorkProtocolSkill ? 'created' : 'kept'}, reference=${createdWorkProtocolReference ? 'created' : 'kept'}`
       );
       resolvedDependencies.writeLine(
         `Backends: codex=${codex.installed ? (codex.authenticated ? 'ready' : 'installed, auth missing') : 'missing'}, claude=${claude.installed ? (claude.authenticated ? 'ready' : 'installed, auth missing') : 'missing'}`

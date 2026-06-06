@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -47,6 +47,20 @@ const run = async () => {
     await execa(process.execPath, [installedCli, '--help'], {
       cwd: workingRoot
     });
+
+    await execa('git', ['init', '-b', 'main'], {
+      cwd: workingRoot
+    });
+    await execa(process.execPath, [installedCli, 'init'], {
+      cwd: workingRoot
+    });
+    const installedSkill = await readFile(
+      path.join(workingRoot, 'skills', 'openweft-work-protocol', 'SKILL.md'),
+      'utf8'
+    );
+    if (!installedSkill.includes('OpenWeft Work Protocol')) {
+      throw new Error('Packaged CLI init did not scaffold the OpenWeft Work Protocol skill.');
+    }
 
     await rm(tarballPath, { force: true });
   } finally {

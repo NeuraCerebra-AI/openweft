@@ -154,11 +154,11 @@ describe('createEventHandler', () => {
       type: 'agent:text',
       agentId: '001',
       stage: 'planning-s1',
-      text: 'Runtime-generated Prompt B for 001'
+      text: 'Runtime-generated Work Brief for 001'
     });
 
     const agent = store.getState().agents[0];
-    expect(agent?.outputLines[0]?.content).toContain('Planning stage 1');
+    expect(agent?.outputLines[0]?.content).toContain('Brief generation complete');
     expect(agent?.outputLines[0]?.content).not.toContain('Prompt B');
   });
 });

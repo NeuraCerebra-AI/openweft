@@ -84,16 +84,17 @@ describe('openweft CLI dry-run flow', () => {
 
     const firstPlan = await readFile(checkpoint.features['001']?.planFile ?? '', 'utf8');
     const firstPromptB = await readFile(checkpoint.features['001']?.promptBFile ?? '', 'utf8');
+    expect(checkpoint.features['001']?.promptBFile).toMatch(/\.work-brief\.md$/);
     expect(checkpoint.features['001']?.manifest.create).toEqual([
-      'src/features/001-runtime-generated-prompt-b-for-001.ts'
+      'src/features/001-runtime-generated-work-brief-for-001.ts'
     ]);
     expect(firstPlan).toContain('## Ledger');
     expect(firstPlan).toContain('## Manifest');
-    expect(firstPlan).toContain('src/features/001-runtime-generated-prompt-b-for-001.ts');
-    expect(firstPromptB).toContain('Runtime-generated Prompt B');
+    expect(firstPlan).toContain('src/features/001-runtime-generated-work-brief-for-001.ts');
+    expect(firstPromptB).toContain('Runtime-generated Work Brief');
 
     await expect(
-      readFile(path.join(repoRoot, 'src', 'features', '001-runtime-generated-prompt-b-for-001.ts'), 'utf8')
+      readFile(path.join(repoRoot, 'src', 'features', '001-runtime-generated-work-brief-for-001.ts'), 'utf8')
     ).rejects.toThrow();
 
     const statusOutput = await runCli(repoRoot, ['status']);

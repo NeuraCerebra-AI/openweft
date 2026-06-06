@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import os from 'node:os';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import PQueue from 'p-queue';
@@ -13,6 +12,7 @@ import {
   injectPromptTemplate,
   USER_REQUEST_MARKER
 } from '../adapters/prompts.js';
+import { prepareCodexWorkerHome } from '../adapters/codexHome.js';
 import type { AgentAdapter, AdapterCommandSpec, AdapterTurnRequest, AdapterTurnResult } from '../adapters/types.js';
 import type { OrchestratorEventHandler } from '../ui/events.js';
 import type { ResolvedOpenWeftConfig } from '../config/index.js';
@@ -86,7 +86,7 @@ const PROMPT_B_HEADING_PATTERN = /^#{1,6}\s+\S/m;
 const RECOVERABLE_PLANNING_ERROR_PATTERNS = [
   'Claude output did not include a result string.',
   'Planning stage 1 returned too little output',
-  'returned a save-failure complaint instead of Prompt B content',
+  'returned a save-failure complaint instead of Work Brief content',
   'No ledger section found under a "## Ledger" heading.',
   'Failed to extract manifest for feature'
 ] as const;
@@ -169,6 +169,17 @@ interface OrchestratorOutput {
   finalizationSummary?: TerminalRunSummary;
 }
 
+interface GitMergeDependencies {
+  abortMerge: typeof abortMerge;
+  assertNoUnresolvedConflictState: typeof assertNoUnresolvedConflictState;
+  commitAllChanges: typeof commitAllChanges;
+  getWorktreeStatusSummary: typeof getWorktreeStatusSummary;
+  mergeBranchIntoCurrent: typeof mergeBranchIntoCurrent;
+  mergeBranchIntoWorktree: typeof mergeBranchIntoWorktree;
+  removeWorktree: typeof removeWorktree;
+  resetWorktreeToHead: typeof resetWorktreeToHead;
+}
+
 interface RealRunInput {
   config: ResolvedOpenWeftConfig;
   configHash: string;
@@ -182,6 +193,7 @@ interface RealRunInput {
   sleep?: (ms: number) => Promise<void>;
   onEvent?: OrchestratorEventHandler;
   approvalController?: ApprovalController;
+  gitMergeDependencies?: Partial<GitMergeDependencies>;
 }
 
 interface RealRunContext extends RealRunInput {
@@ -331,6 +343,15 @@ const createPromptBArtifactPath = (
   return path.join(config.paths.promptBArtifactsDir, promptBFilename);
 };
 
+const createLegacyPromptBArtifactPath = (
+  config: ResolvedOpenWeftConfig,
+  featureId: string,
+  request: string
+): string => {
+  const promptBFilename = `${featureId}_${slugifyFeatureRequest(request)}.prompt-b.md`;
+  return path.join(config.paths.promptBArtifactsDir, promptBFilename);
+};
+
 const countFeatureStatuses = (
   checkpoint: OrchestratorCheckpoint,
   statuses: FeatureCheckpoint['status'][]
@@ -369,6 +390,18 @@ const resolveReusableSessionId = (
 ): string | null => {
   return feature.sessionId && feature.sessionScope === desiredScope ? feature.sessionId : null;
 };
+
+const getGitMergeDependencies = (input: Pick<RealRunInput, 'gitMergeDependencies'>): GitMergeDependencies => ({
+  abortMerge: input.gitMergeDependencies?.abortMerge ?? abortMerge,
+  assertNoUnresolvedConflictState:
+    input.gitMergeDependencies?.assertNoUnresolvedConflictState ?? assertNoUnresolvedConflictState,
+  commitAllChanges: input.gitMergeDependencies?.commitAllChanges ?? commitAllChanges,
+  getWorktreeStatusSummary: input.gitMergeDependencies?.getWorktreeStatusSummary ?? getWorktreeStatusSummary,
+  mergeBranchIntoCurrent: input.gitMergeDependencies?.mergeBranchIntoCurrent ?? mergeBranchIntoCurrent,
+  mergeBranchIntoWorktree: input.gitMergeDependencies?.mergeBranchIntoWorktree ?? mergeBranchIntoWorktree,
+  removeWorktree: input.gitMergeDependencies?.removeWorktree ?? removeWorktree,
+  resetWorktreeToHead: input.gitMergeDependencies?.resetWorktreeToHead ?? resetWorktreeToHead
+});
 
 const writeShadowPlan = async (
   config: ResolvedOpenWeftConfig,
@@ -931,17 +964,12 @@ const loadOrCreateCheckpoint = async (
     }
 
     const canonicalPromptBFile = createPromptBArtifactPath(input.config, feature.id, feature.request);
+    const legacyPromptBFile = createLegacyPromptBArtifactPath(input.config, feature.id, feature.request);
     const configuredPromptBExists = feature.promptBFile ? await pathExists(feature.promptBFile) : false;
     const canonicalPromptBExists = await pathExists(canonicalPromptBFile);
+    const legacyPromptBExists = await pathExists(legacyPromptBFile);
 
     if (configuredPromptBExists) {
-      if (feature.promptBFile !== canonicalPromptBFile && canonicalPromptBExists) {
-        updateFeatureCheckpoint(checkpoint, feature.id, {
-          promptBFile: canonicalPromptBFile
-        });
-        repairedPromptBFiles = true;
-        needsCheckpointSave = true;
-      }
       continue;
     }
 
@@ -954,13 +982,22 @@ const loadOrCreateCheckpoint = async (
       continue;
     }
 
+    if (legacyPromptBExists) {
+      updateFeatureCheckpoint(checkpoint, feature.id, {
+        promptBFile: legacyPromptBFile
+      });
+      repairedPromptBFiles = true;
+      needsCheckpointSave = true;
+      continue;
+    }
+
     if (repairedPromptBFiles) {
       await saveCheckpointSnapshot(input.config, checkpoint);
       repairedPromptBFiles = false;
       needsCheckpointSave = false;
     }
 
-    throw new Error(`Prompt B artifact is missing for actionable feature ${feature.id}.`);
+    throw new Error(`Work Brief artifact is missing for actionable feature ${feature.id}.`);
   }
 
   if (repairedPromptBFiles) {
@@ -1134,7 +1171,7 @@ const buildWorktreePlanFilePath = (planFile: string, worktreePath: string): stri
 };
 
 const buildWorktreePromptBFilePath = (promptBFile: string, worktreePath: string): string => {
-  return path.join(worktreePath, '.openweft', 'prompt-b-briefs', path.basename(promptBFile));
+  return path.join(worktreePath, '.openweft', 'work-briefs', path.basename(promptBFile));
 };
 
 const buildEvolvedPlanPath = (config: ResolvedOpenWeftConfig, featureId: string): string => {
@@ -1336,20 +1373,15 @@ const runTurnAndRecord = async (
   request: AdapterTurnRequest
 ): Promise<AdapterTurnResult> => {
   if (request.isolatedHomeDir) {
-    await mkdir(request.isolatedHomeDir, { recursive: true });
-
-    if (input.adapter.backend === 'codex' && request.auth.method === 'subscription') {
-      const defaultCodexHome = path.join(os.homedir(), '.codex');
-      const authFile = path.join(defaultCodexHome, 'auth.json');
-      const configFile = path.join(defaultCodexHome, 'config.toml');
-
-      if (await pathExists(authFile)) {
-        await copyFile(authFile, path.join(request.isolatedHomeDir, 'auth.json'));
-      }
-
-      if (await pathExists(configFile)) {
-        await copyFile(configFile, path.join(request.isolatedHomeDir, 'config.toml'));
-      }
+    if (input.adapter.backend === 'codex') {
+      await prepareCodexWorkerHome({
+        homeDir: request.isolatedHomeDir,
+        cwd: request.cwd,
+        auth: request.auth,
+        ...(request.sandboxMode !== undefined ? { sandboxMode: request.sandboxMode } : {})
+      });
+    } else {
+      await mkdir(request.isolatedHomeDir, { recursive: true });
     }
   }
 
@@ -1362,6 +1394,8 @@ const runTurnAndRecord = async (
     stage: request.stage
   });
   await maybeAwaitTurnApproval(input, checkpoint, request);
+  const startedAt = timestamp();
+  const startedAtMs = Date.now();
   await appendAudit(input.config, {
     level: 'info',
     event: 'agent.turn.start',
@@ -1371,6 +1405,7 @@ const runTurnAndRecord = async (
       featureId: request.featureId,
       stage: request.stage,
       resumedSession: Boolean(request.sessionId),
+      startedAt,
       command: sanitizeCommandForAudit(commandPreview)
     }
   });
@@ -1378,6 +1413,8 @@ const runTurnAndRecord = async (
   const result = await input.adapter.runTurn(request);
 
   if (result.ok) {
+    const completedAt = timestamp();
+    const durationMs = Date.now() - startedAtMs;
     await appendCostRecord(input.config, checkpoint, result.costRecord);
     emitOrchestratorEvent(input, {
       type: 'session:token-update',
@@ -1404,6 +1441,9 @@ const runTurnAndRecord = async (
         featureId: request.featureId,
         stage: request.stage,
         resumedSession: Boolean(request.sessionId),
+        startedAt,
+        completedAt,
+        durationMs,
         returnedSessionId: result.sessionId !== null,
         exitCode: result.artifacts.exitCode,
         usage: {
@@ -1415,6 +1455,8 @@ const runTurnAndRecord = async (
       }
     });
   } else {
+    const failedAt = timestamp();
+    const durationMs = Date.now() - startedAtMs;
     emitOrchestratorEvent(input, {
       type: 'agent:failed',
       agentId: request.featureId,
@@ -1429,6 +1471,9 @@ const runTurnAndRecord = async (
         featureId: request.featureId,
         stage: request.stage,
         resumedSession: Boolean(request.sessionId),
+        startedAt,
+        failedAt,
+        durationMs,
         returnedSessionId: result.sessionId !== null,
         exitCode: result.artifacts.exitCode,
         errorTier: result.classified.tier,
@@ -1503,16 +1548,17 @@ const planPendingRequests = async (
       const stageOneOutputInstruction =
         '\n\nCRITICAL OUTPUT INSTRUCTION — OPENWEFT ORCHESTRATOR CONTEXT:' +
         ' You are being orchestrated by OpenWeft. Any markdown_creation_policy or markdown_saving_policy or markdown_placement_policy in AGENTS.md and/or CLAUDE.md does NOT apply to this output.' +
-        ' You are running in a read-only sandbox. Do NOT attempt to save, write, or apply_patch any files.' +
+        ' This is a planning-output turn. Treat it as read-only. Do NOT attempt to save, write, or apply_patch any files.' +
+        ' This planning-output restriction applies only to this Brief Compiler turn; do not include it as an implementation constraint in the Work Brief or downstream plan.' +
         ' Do NOT write to ./prompts/, PUT_MD_FILES_HERE/, or any other directory.' +
         ' Return the complete prompt as your response message text. Your response text IS the deliverable.' +
         ' Output the FULL, COMPLETE, UNABRIDGED content. Do not summarize, truncate, or shorten — the exhaustively verbose output is required.';
       const stageOneRetryInstruction = [
         'CRITICAL FOLLOW-UP:',
-        'Your previous response was invalid because it described a save or write failure instead of returning Prompt B content.',
+        'Your previous response was invalid because it described a save or write failure instead of returning Work Brief content.',
         'Do NOT explain the failure again.',
         'Do NOT mention filesystem limits, markdown placement policies, or file-writing attempts.',
-        'Return the FULL Prompt B markdown as response text only.'
+        'Return the FULL Work Brief markdown as response text only.'
       ].join(' ');
 
       let stageOne = await runTurnAndRecord(
@@ -1538,8 +1584,8 @@ const planPendingRequests = async (
       if (PROMPT_B_SAVE_FAILURE_PATTERN.test(promptBMarkdown) && !PROMPT_B_HEADING_PATTERN.test(promptBMarkdown)) {
         await appendAudit(context.config, {
           level: 'warn',
-          event: 'planner.prompt-b.retrying',
-          message: `Retrying Prompt B generation for feature ${featureId} after complaint-only stage-one output.`,
+          event: 'planner.work-brief.retrying',
+          message: `Retrying Work Brief generation for feature ${featureId} after complaint-only stage-one output.`,
           data: {
             featureId,
             promptBFile: promptBFilePath
@@ -1566,7 +1612,7 @@ const planPendingRequests = async (
         promptBMarkdown = sanitizePromptBMarkdown(stageOne.finalMessage);
         if (PROMPT_B_SAVE_FAILURE_PATTERN.test(promptBMarkdown) && !PROMPT_B_HEADING_PATTERN.test(promptBMarkdown)) {
           throw new Error(
-            `Planning stage 1 for feature ${featureId} returned a save-failure complaint instead of Prompt B content.` +
+            `Planning stage 1 for feature ${featureId} returned a save-failure complaint instead of Work Brief content.` +
             ' The agent likely tried to write a file in a read-only sandbox.'
           );
         }
@@ -1574,8 +1620,8 @@ const planPendingRequests = async (
       await writeTextFileAtomic(promptBFilePath, promptBMarkdown);
       await appendAudit(context.config, {
         level: 'info',
-        event: 'planner.prompt-b.persisted',
-        message: `Persisted Prompt B artifact for feature ${featureId}.`,
+        event: 'planner.work-brief.persisted',
+        message: `Persisted Work Brief artifact for feature ${featureId}.`,
         data: {
           featureId,
           promptBFile: promptBFilePath
@@ -1586,17 +1632,19 @@ const planPendingRequests = async (
         'CRITICAL INSTRUCTION: Your response text must BE the full Markdown plan document.',
         'Include a "## Ledger" section covering constraints, assumptions, watchpoints, and validation.',
         'Include a "## Manifest" heading with a ```json code block containing { "create": [], "modify": [], "delete": [] }.',
-        'Do NOT write files. Do NOT use Write, Edit, or ExitPlanMode tools. Return the plan as your response text ONLY.'
+        'Do NOT write files. Do NOT use Write, Edit, or ExitPlanMode tools. Return the plan as your response text ONLY.',
+        'These no-write instructions apply only to this Stage 2 planning response; do not put planning-only read-only/no-write constraints into the implementation plan or Ledger.',
+        'The execution worker must be allowed to make manifest-scoped file changes.'
       ].join(' ');
 
       const stageTwoPrompt = [
-        'IMPORTANT: You are receiving Prompt B, the generated worker brief for this feature.',
-        `IMPORTANT: The Prompt B artifact has been saved at ${promptBFilePath}.`,
+        'IMPORTANT: You are receiving the Work Brief, the generated operating brief for this feature.',
+        `IMPORTANT: The Work Brief artifact has been saved at ${promptBFilePath}.`,
         manifestInstruction,
         '',
-        '=== PROMPT B START ===',
+        '=== WORK BRIEF START ===',
         promptBMarkdown.trim(),
-        '=== PROMPT B END ===',
+        '=== WORK BRIEF END ===',
         '',
         manifestInstruction
       ].join('\n');
@@ -1745,8 +1793,9 @@ const planPendingRequests = async (
       evolvedPlanFile: null,
       branchName: null,
       worktreePath: null,
-      sessionId: repairedPlan.sessionId,
-      sessionScope: repairedPlan.sessionId ? 'repo' : null,
+      // Planning turns are non-persistent, so repair session ids are not reusable.
+      sessionId: null,
+      sessionScope: null,
       backend: context.adapter.backend,
       manifest: repairedPlan.manifest,
       rerunEligible: true,
@@ -2329,7 +2378,7 @@ const runFeatureExecutionAttempt = async (
       sessionId: null,
       baselineCommit: worktreeState.baselineCommit,
       evolvedPlanFile: null,
-      error: 'Prompt B artifact is missing.'
+      error: 'Work Brief artifact is missing.'
     };
   }
 
@@ -2635,6 +2684,7 @@ const executePhases = async (
   const checkpoint = cloneCheckpoint(context.checkpoint);
   const baseBranch = (await simpleGit(context.config.repoRoot).revparse(['--abbrev-ref', 'HEAD'])).trim();
   const scoreById = new Map(scores.map((score) => [score.id, score]));
+  const gitMerge = getGitMergeDependencies(context);
   let mergedCount = 0;
   const previousGc = await getAutoGcSetting(context.config.repoRoot);
   const gcBreadcrumbFile = getAutoGcBreadcrumbFile(context.config);
@@ -2968,7 +3018,7 @@ const executePhases = async (
 
         let merged: Awaited<ReturnType<typeof mergeBranchIntoCurrent>>;
         try {
-          merged = await mergeBranchIntoCurrent(context.config.repoRoot, feature.branchName);
+          merged = await gitMerge.mergeBranchIntoCurrent(context.config.repoRoot, feature.branchName);
         } catch (error) {
           if (error instanceof PostMergeAutoStashRestoreError) {
             await recordPostMergeAutoStashFailure(context, checkpoint, {
@@ -3001,9 +3051,9 @@ const executePhases = async (
             let resetCommitForNextConflictResolutionRound: string | null = null;
 
             for (let round = 1; round <= MAX_MERGE_RESOLUTION_ROUNDS; round += 1) {
-              await abortMerge(feature.worktreePath).catch(() => {});
+              await gitMerge.abortMerge(feature.worktreePath).catch(() => {});
               if (round > 1) {
-                await resetWorktreeToHead(
+                await gitMerge.resetWorktreeToHead(
                   feature.worktreePath,
                   resetCommitForNextConflictResolutionRound ?? 'HEAD'
                 );
@@ -3014,7 +3064,7 @@ const executePhases = async (
               });
               await saveCheckpointSnapshot(context.config, checkpoint);
 
-              const mergeIntoWorktree = await mergeBranchIntoWorktree(feature.worktreePath, baseBranch);
+              const mergeIntoWorktree = await gitMerge.mergeBranchIntoWorktree(feature.worktreePath, baseBranch);
               if (mergeIntoWorktree.status === 'conflict') {
                 const conflictFiles = mergeIntoWorktree.conflicts.map((conflict) => conflict.file);
                 updateFeatureCheckpoint(checkpoint, featureId, {
@@ -3095,7 +3145,7 @@ const executePhases = async (
                       mergedCount
                     };
                   }
-                  await abortMerge(feature.worktreePath).catch(() => {});
+                  await gitMerge.abortMerge(feature.worktreePath).catch(() => {});
                   lastConflictFiles = conflictResolutionFiles;
                   lastFailureStage = 'conflict-resolution-approval';
                   lastFailureReason = error.message;
@@ -3158,7 +3208,7 @@ const executePhases = async (
               });
 
               if (!conflictResolution.ok) {
-                await abortMerge(feature.worktreePath).catch(() => {});
+                await gitMerge.abortMerge(feature.worktreePath).catch(() => {});
                 lastConflictFiles = conflictResolutionFiles;
                 lastFailureStage = 'conflict-resolution-turn';
                 lastFailureReason = conflictResolution.error ?? 'Conflict resolution failed.';
@@ -3217,12 +3267,12 @@ const executePhases = async (
                 break;
               }
 
-              const conflictResolutionChangedFiles = (await getWorktreeStatusSummary(feature.worktreePath)).changedFiles;
+              const conflictResolutionChangedFiles = (await gitMerge.getWorktreeStatusSummary(feature.worktreePath)).changedFiles;
               const conflictResolutionSanityFiles = [
                 ...new Set([...conflictResolutionFiles, ...conflictResolutionChangedFiles])
               ];
               try {
-                await assertNoUnresolvedConflictState(feature.worktreePath, conflictResolutionSanityFiles);
+                await gitMerge.assertNoUnresolvedConflictState(feature.worktreePath, conflictResolutionSanityFiles);
               } catch (error) {
                 const errorMessage = error instanceof Error ? error.message : String(error);
                 lastConflictFiles = conflictResolutionFiles;
@@ -3284,7 +3334,7 @@ const executePhases = async (
                 break;
               }
 
-              await commitAllChanges(
+              await gitMerge.commitAllChanges(
                 feature.worktreePath,
                 `openweft: resolve merge conflict for feature ${featureId}`
               );
@@ -3298,7 +3348,7 @@ const executePhases = async (
 
               let retryMerge: Awaited<ReturnType<typeof mergeBranchIntoCurrent>>;
               try {
-                retryMerge = await mergeBranchIntoCurrent(context.config.repoRoot, feature.branchName);
+                retryMerge = await gitMerge.mergeBranchIntoCurrent(context.config.repoRoot, feature.branchName);
               } catch (error) {
                 if (error instanceof PostMergeAutoStashRestoreError) {
                   await recordPostMergeAutoStashFailure(context, checkpoint, {
@@ -3401,7 +3451,7 @@ const executePhases = async (
                 editSummary: retryMerge.editSummary
               });
               await announceProgress(context, `Feature ${getFeatureLabel(feature)} complete.`);
-              await removeWorktree({
+              await gitMerge.removeWorktree({
                 repoRoot: context.config.repoRoot,
                 worktreePath: feature.worktreePath,
                 branchName: feature.branchName,
@@ -3471,7 +3521,7 @@ const executePhases = async (
         await announceProgress(context, `Feature ${getFeatureLabel(feature)} complete.`);
 
         if (feature.worktreePath) {
-          await removeWorktree({
+          await gitMerge.removeWorktree({
             repoRoot: context.config.repoRoot,
             worktreePath: feature.worktreePath,
             branchName: feature.branchName,

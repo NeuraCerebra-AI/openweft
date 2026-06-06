@@ -194,10 +194,10 @@ const planPendingRequests = async (
       cwd: input.config.repoRoot,
       prompt: [
         `IMPORTANT: Dry-run planning stage 2 for: ${pending.request}`,
-        `IMPORTANT: The Prompt B artifact has been saved at ${promptBFilePath}.`,
-        '=== PROMPT B START ===',
+        `IMPORTANT: The Work Brief artifact has been saved at ${promptBFilePath}.`,
+        '=== WORK BRIEF START ===',
         promptBMarkdown.trim(),
-        '=== PROMPT B END ==='
+        '=== WORK BRIEF END ==='
       ].join('\n'),
       model: DRY_RUN_MODEL,
       auth: { method: 'subscription' },

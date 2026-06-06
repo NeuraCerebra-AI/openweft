@@ -43,7 +43,7 @@ const isMetaInstruction = (line: string): boolean => {
 
 const extractPlannerOutput = (prompt: string): string | null => {
   const match = prompt.match(
-    /=== (?:PLANNER OUTPUT|PROMPT B) START ===\n([\s\S]*?)\n=== (?:PLANNER OUTPUT|PROMPT B) END ===/
+    /=== (?:PLANNER OUTPUT|PROMPT B|WORK BRIEF) START ===\n([\s\S]*?)\n=== (?:PLANNER OUTPUT|PROMPT B|WORK BRIEF) END ===/
   );
   return match?.[1]?.trim() ?? null;
 };
@@ -180,7 +180,7 @@ const resolveMockConflicts = async (cwd: string): Promise<void> => {
 const buildDefaultFinalMessage = (request: AdapterTurnRequest): string => {
   switch (request.stage) {
     case 'planning-s1':
-      return `Runtime-generated Prompt B for ${request.featureId}`;
+      return `Runtime-generated Work Brief for ${request.featureId}`;
     case 'planning-s2':
       return buildMockPlanMarkdown(request);
     case 'execution':

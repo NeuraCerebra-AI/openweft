@@ -57,7 +57,7 @@ const appendLedgerNoteToPlan = async (planPath: string, note: string): Promise<v
 
 const extractExecutionPlanPath = (prompt: string): string => {
   const match = prompt.match(
-    /The supporting implementation plan is also provided below and is available at ([\s\S]+?)\.\nUse Prompt B/
+    /The supporting implementation plan is also provided below and is available at ([\s\S]+?)\.\nUse the Work Brief/
   );
   if (!match?.[1]) {
     throw new Error('Execution prompt did not expose the worktree plan path.');
@@ -770,7 +770,7 @@ const seedInterruptedExecutionFeature = async (input: {
 `,
     'utf8'
   );
-  await writeFile(promptBFile, `Prompt B for ${request}.\n`, 'utf8');
+  await writeFile(promptBFile, `Work Brief for ${request}.\n`, 'utf8');
 
   await createWorktree({
     repoRoot: input.repoRoot,
@@ -869,7 +869,7 @@ const seedPlannedPromptBRecoveryFeature = async (input: {
 - Keep the change set small.
 
 ### Assumptions
-- Prompt B recovery should be deterministic.
+- Work Brief recovery should be deterministic.
 
 ### Watchpoints
 - Preserve orchestrator state.
@@ -891,7 +891,7 @@ const seedPlannedPromptBRecoveryFeature = async (input: {
   );
 
   if (input.writeCanonicalPromptB ?? true) {
-    await writeFile(canonicalPromptBFile, `Prompt B for ${request}.\n`, 'utf8');
+    await writeFile(canonicalPromptBFile, `Work Brief for ${request}.\n`, 'utf8');
   }
 
   const checkpoint = createEmptyCheckpoint({
@@ -1037,6 +1037,9 @@ describe('runRealOrchestration', () => {
             stage?: string;
             resumedSession?: boolean;
             returnedSessionId?: boolean;
+            startedAt?: string;
+            completedAt?: string;
+            durationMs?: number;
             command?: {
               command?: string;
               args?: string[];
@@ -1062,10 +1065,10 @@ describe('runRealOrchestration', () => {
     );
 
     expect(adjustmentRequest?.prompt).toContain(featureTwo?.planFile ?? '');
-    expect(executionRequest?.prompt).toContain('=== PROMPT B START ===');
+    expect(executionRequest?.prompt).toContain('=== WORK BRIEF START ===');
     expect(executionRequest?.prompt).toContain(promptBContent.trim());
     expect(executionRequest?.prompt).toContain(path.basename(featureTwo?.promptBFile ?? ''));
-    expect(executionRequest?.prompt).toContain('.openweft/prompt-b-briefs');
+    expect(executionRequest?.prompt).toContain('.openweft/work-briefs');
     expect(adjustmentRequest?.prompt).toContain('=== CURRENT PLAN START ===');
     expect(adjustmentRequest?.prompt).toContain(planContent.trim());
     expect(adjustmentRequest?.prompt).toContain('"merge_commit"');
@@ -1074,7 +1077,12 @@ describe('runRealOrchestration', () => {
     expect(result.checkpoint.cost.totalEstimatedUsd).toBe(Number.parseFloat(totalEstimatedUsd.toFixed(6)));
     expect(adjustmentAudit?.data?.returnedSessionId).toBe(true);
     expect(adjustmentAudit?.data?.command?.command).toBe('codex');
+    expect(adjustmentAudit?.data?.startedAt).toEqual(expect.any(String));
+    expect(adjustmentAudit?.data?.completedAt).toEqual(expect.any(String));
+    expect(adjustmentAudit?.data?.durationMs).toEqual(expect.any(Number));
+    expect(adjustmentAudit?.data?.durationMs ?? -1).toBeGreaterThanOrEqual(0);
     expect(freshExecutionAudit?.data?.command?.args).toEqual(['execution']);
+    expect(freshExecutionAudit?.data?.startedAt).toEqual(expect.any(String));
 
     expect(progressLines).toContain('OpenWeft run starting with backend codex.');
     expect(progressLines.some((line) => line.includes('Phase 1 starting'))).toBe(true);
@@ -1089,6 +1097,44 @@ describe('runRealOrchestration', () => {
     expect(events).toContain('agent:completed');
     expect(events).toContain('session:token-update');
     expect(events).not.toContain('session:cost-update');
+  });
+
+  it('creates minimal isolated Codex configs instead of copying personal config into worker homes', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters'],
+      configOverrides: {
+        runtime: {
+          codexHomeRetention: 'preserve'
+        }
+      }
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new DeterministicScoringAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+
+    const workerConfig = await readFile(
+      path.join(config.paths.codexHomeDir, '001-session', 'config.toml'),
+      'utf8'
+    );
+
+    expect(workerConfig).toContain('approval_policy = "never"');
+    expect(workerConfig).toContain('sandbox_mode = "danger-full-access"');
+    expect(workerConfig).toContain('.openweft/worktrees/001');
+    expect(workerConfig).not.toContain('mcp_servers');
+    expect(workerConfig).not.toContain('notify');
+    expect(workerConfig).not.toContain('plugins');
+    expect(workerConfig).not.toContain('superpowers');
   });
 
   it('copies back an evolved worktree plan ledger after successful execution', async () => {
@@ -1155,16 +1201,14 @@ describe('runRealOrchestration', () => {
       return originalRunTurn(request);
     };
 
-    vi.doUnmock('../../src/git/index.js');
-    vi.doUnmock('../../src/git/index.js');
-    vi.resetModules();
-    vi.doMock('../../src/git/index.js', async () => {
-      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
-        '../../src/git/index.js'
-      );
-
-      return {
-        ...actual,
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      stopController,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {},
+      gitMergeDependencies: {
         mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => ({
           status: 'conflict' as const,
           branch,
@@ -1177,39 +1221,21 @@ describe('runRealOrchestration', () => {
           preMergeCommit: 'pre-merge-commit',
           conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
         }))
-      };
+      }
     });
 
-    try {
-      const { runRealOrchestration: runWithFailedMergeProbe } = await import(
-        '../../src/orchestrator/realRun.js'
-      );
-
-      const result = await runWithFailedMergeProbe({
-        config,
-        configHash,
-        adapter,
-        stopController,
-        notificationDependencies: createNotificationRecorder().dependencies,
-        sleep: async () => {}
-      });
-
-      expect(result.checkpoint.status).toBe('failed');
-      expect(executionAttempts).toBe(1);
-      expect(result.checkpoint.features['001']?.status).toBe('failed');
-      expect(result.checkpoint.features['001']?.rerunEligible).toBe(false);
-      expect(result.checkpoint.features['001']?.evolvedPlanFile).toBe(buildEvolvedPlanPath(config, '001'));
-      const planFile = result.checkpoint.features['001']?.planFile;
-      expect(planFile).toBeDefined();
-      expect(await readFile(planFile ?? '', 'utf8')).not.toContain(ledgerNote);
-      expect(await readFile(path.join(config.paths.shadowPlansDir, '001.md'), 'utf8')).not.toContain(
-        ledgerNote
-      );
-      expect(await readFile(buildEvolvedPlanPath(config, '001'), 'utf8')).toContain(ledgerNote);
-    } finally {
-      vi.doUnmock('../../src/git/index.js');
-      vi.resetModules();
-    }
+    expect(result.checkpoint.status).toBe('failed');
+    expect(executionAttempts).toBe(1);
+    expect(result.checkpoint.features['001']?.status).toBe('failed');
+    expect(result.checkpoint.features['001']?.rerunEligible).toBe(false);
+    expect(result.checkpoint.features['001']?.evolvedPlanFile).toBe(buildEvolvedPlanPath(config, '001'));
+    const planFile = result.checkpoint.features['001']?.planFile;
+    expect(planFile).toBeDefined();
+    expect(await readFile(planFile ?? '', 'utf8')).not.toContain(ledgerNote);
+    expect(await readFile(path.join(config.paths.shadowPlansDir, '001.md'), 'utf8')).not.toContain(
+      ledgerNote
+    );
+    expect(await readFile(buildEvolvedPlanPath(config, '001'), 'utf8')).toContain(ledgerNote);
   });
 
   it('uses Claude plan permission mode for repo-scoped planning requests', async () => {
@@ -1319,6 +1345,19 @@ describe('runRealOrchestration', () => {
       sandboxMode: 'danger-full-access'
     });
     expect(repoScopedTurns.every((request) => request.sandboxMode === 'read-only')).toBe(true);
+
+    const stageOneRequest = adapter.requests.find((request) => request.stage === 'planning-s1');
+    const stageTwoRequest = adapter.requests.find((request) => request.stage === 'planning-s2');
+
+    expect(stageOneRequest?.prompt).toContain(
+      'This planning-output restriction applies only to this Brief Compiler turn'
+    );
+    expect(stageTwoRequest?.prompt).toContain(
+      'These no-write instructions apply only to this Stage 2 planning response'
+    );
+    expect(stageTwoRequest?.prompt).toContain(
+      'The execution worker must be allowed to make manifest-scoped file changes'
+    );
   });
 
   it('saves planned features to the checkpoint before scoring starts', async () => {
@@ -1383,7 +1422,7 @@ describe('runRealOrchestration', () => {
       backend: 'mock'
     });
     expect(savedFeature?.promptBFile).toBeTruthy();
-    await expect(readFile(savedFeature?.promptBFile ?? '', 'utf8')).resolves.toContain('Runtime-generated Prompt B');
+    await expect(readFile(savedFeature?.promptBFile ?? '', 'utf8')).resolves.toContain('Runtime-generated Work Brief');
     expect(savedFeature?.planFile).toBeTruthy();
     await expect(readFile(savedFeature?.planFile ?? '', 'utf8')).resolves.toContain('## Manifest');
     await expect(readFile(savedFeature?.planFile ?? '', 'utf8')).resolves.toContain('## Ledger');
@@ -1511,7 +1550,7 @@ describe('runRealOrchestration', () => {
     expect(capturedCheckpointDuringStageOne.checkpoint?.features).toEqual({});
   });
 
-  it('sanitizes fenced markdown from contaminated stage-one Prompt B output before persisting it', async () => {
+  it('sanitizes fenced markdown from contaminated stage-one Work Brief output before persisting it', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -1573,7 +1612,7 @@ describe('runRealOrchestration', () => {
     await expect(readFile(promptBFile ?? '', 'utf8')).resolves.toBe('# Role\nSanitized prompt body.\n');
   });
 
-  it('sanitizes read-only save preambles that wrap a fenced Prompt B brief', async () => {
+  it('sanitizes read-only save preambles that wrap a fenced Work Brief brief', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -1699,7 +1738,7 @@ describe('runRealOrchestration', () => {
     );
   });
 
-  it('retries complaint-only stage-one output once and continues when the follow-up returns Prompt B content', async () => {
+  it('retries complaint-only stage-one output once and continues when the follow-up returns Work Brief content', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -1719,7 +1758,7 @@ describe('runRealOrchestration', () => {
             ok: true,
             backend: 'codex',
             sessionId: 'recovered-prompt-b',
-            finalMessage: '## Role\nRecovered Prompt B body.\n',
+            finalMessage: '## Role\nRecovered Work Brief body.\n',
             model: request.model,
             usage: {
               inputTokens: 10,
@@ -1804,8 +1843,13 @@ describe('runRealOrchestration', () => {
     const promptBFile = feature?.promptBFile;
     expect(promptBFile).toBeTruthy();
     await expect(readFile(promptBFile ?? '', 'utf8')).resolves.toBe(
-      '## Role\nRecovered Prompt B body.\n'
+      '## Role\nRecovered Work Brief body.\n'
     );
+    const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+    expect(auditEntries.some((entry) => entry.event === 'planner.work-brief.retrying')).toBe(true);
+    expect(auditEntries.some((entry) => entry.event === 'planner.work-brief.persisted')).toBe(true);
+    expect(auditEntries.some((entry) => entry.event === 'planner.prompt-b.retrying')).toBe(false);
+    expect(auditEntries.some((entry) => entry.event === 'planner.prompt-b.persisted')).toBe(false);
   });
 
   it('skips a malformed stage-two planning result and keeps the rest of the queue moving', async () => {
@@ -1994,6 +2038,111 @@ describe('runRealOrchestration', () => {
     );
   });
 
+  it('does not reuse a planning repair session for later plan adjustment', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters', 'add export controls']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(
+      new DeterministicManifestAdapter({
+        '001': ['src/shared.ts'],
+        '002': ['src/shared.ts']
+      })
+    );
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+    let featureTwoPlanningStageTwoAttempts = 0;
+
+    adapter.runTurn = async (request) => {
+      if (request.featureId === '002' && request.stage === 'planning-s2') {
+        adapter.requests.push(request);
+        featureTwoPlanningStageTwoAttempts += 1;
+
+        const finalMessage =
+          featureTwoPlanningStageTwoAttempts === 1
+            ? `# Feature Plan: ${request.featureId}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/shared.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`
+            : `# Feature Plan: ${request.featureId}
+
+${TEST_LEDGER_SECTION}
+
+## Manifest
+
+\`\`\`json manifest
+{
+  "create": ["src/shared.ts"],
+  "modify": [],
+  "delete": []
+}
+\`\`\`
+`;
+
+        return {
+          ok: true,
+          backend: 'codex',
+          sessionId: `planning-repair-session-${featureTwoPlanningStageTwoAttempts}`,
+          finalMessage,
+          model: request.model,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 5,
+            cachedInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            cacheReadInputTokens: 0,
+            totalCostUsd: 0,
+            raw: null
+          },
+          costRecord: {
+            featureId: request.featureId,
+            stage: request.stage,
+            model: request.model,
+            inputTokens: 10,
+            outputTokens: 5,
+            estimatedCostUsd: 0,
+            timestamp: new Date().toISOString()
+          },
+          artifacts: {
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+            command: adapter.buildCommand(request)
+          }
+        };
+      }
+
+      return originalRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    const adjustmentRequest = adapter.requests.find(
+      (request) => request.featureId === '002' && request.stage === 'adjustment'
+    );
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(featureTwoPlanningStageTwoAttempts).toBe(2);
+    expect(adjustmentRequest).toBeDefined();
+    expect(adjustmentRequest?.sessionId).toBeNull();
+  });
+
   it('recovers planned work after a crash that happens after queue rewrite but before the planning checkpoint is saved', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
@@ -2113,7 +2262,107 @@ describe('runRealOrchestration', () => {
     expect(saved.checkpoint?.features['001']?.promptBFile).toBe(canonicalPromptBFile);
   });
 
-  it('fails closed when an actionable feature has no usable Prompt B artifact to recover', async () => {
+  it('repairs a missing promptBFile from a legacy prompt-b artifact before execution resumes', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    await seedPlannedPromptBRecoveryFeature({
+      config,
+      configHash,
+      promptBFile: null,
+      writeCanonicalPromptB: false
+    });
+    const legacyPromptBFile = path.join(
+      config.paths.promptBArtifactsDir,
+      '001_add-dashboard-filters.prompt-b.md'
+    );
+    await mkdir(config.paths.promptBArtifactsDir, { recursive: true });
+    await writeFile(legacyPromptBFile, 'Legacy Work Brief for add dashboard filters.\n', 'utf8');
+
+    vi.resetModules();
+    vi.doMock('../../src/domain/scoring.js', async () => {
+      const actual = await vi.importActual<typeof import('../../src/domain/scoring.js')>(
+        '../../src/domain/scoring.js'
+      );
+
+      return {
+        ...actual,
+        scoreQueue: vi.fn(() => {
+          throw new Error('scoring stage probe');
+        })
+      };
+    });
+
+    try {
+      const { runRealOrchestration: runWithScoringProbe } = await import(
+        '../../src/orchestrator/realRun.js'
+      );
+
+      await expect(
+        runWithScoringProbe({
+          config,
+          configHash,
+          adapter: new RecordingAdapter(new MockAgentAdapter()),
+          notificationDependencies: createNotificationRecorder().dependencies,
+          sleep: async () => {}
+        })
+      ).rejects.toThrow('scoring stage probe');
+    } finally {
+      vi.doUnmock('../../src/domain/scoring.js');
+      vi.resetModules();
+    }
+
+    const saved = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    expect(saved.checkpoint?.features['001']?.promptBFile).toBe(legacyPromptBFile);
+  });
+
+  it('keeps an existing configured legacy prompt-b artifact even when the work-brief artifact also exists', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const legacyPromptBFile = path.join(
+      config.paths.promptBArtifactsDir,
+      '001_add-dashboard-filters.prompt-b.md'
+    );
+    const { canonicalPromptBFile } = await seedPlannedPromptBRecoveryFeature({
+      config,
+      configHash,
+      promptBFile: legacyPromptBFile,
+      writeCanonicalPromptB: true
+    });
+    await writeFile(legacyPromptBFile, 'Configured legacy Work Brief.\n', 'utf8');
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    const saved = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(canonicalPromptBFile).not.toBe(legacyPromptBFile);
+    expect(saved.checkpoint?.features['001']?.promptBFile).toBe(legacyPromptBFile);
+  });
+
+  it('fails closed when an actionable feature has no usable Work Brief artifact to recover', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -2136,10 +2385,10 @@ describe('runRealOrchestration', () => {
         notificationDependencies: createNotificationRecorder().dependencies,
         sleep: async () => {}
       })
-    ).rejects.toThrow(/Prompt B artifact/i);
+    ).rejects.toThrow(/Work Brief artifact/i);
   });
 
-  it('persists earlier Prompt B repairs before failing on a later missing artifact', async () => {
+  it('persists earlier Work Brief repairs before failing on a later missing artifact', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -2167,7 +2416,7 @@ describe('runRealOrchestration', () => {
 - Keep the change set small.
 
 ### Assumptions
-- Prompt B recovery should be deterministic.
+- Work Brief recovery should be deterministic.
 
 ### Watchpoints
 - Preserve orchestrator state.
@@ -2236,7 +2485,7 @@ describe('runRealOrchestration', () => {
         notificationDependencies: createNotificationRecorder().dependencies,
         sleep: async () => {}
       })
-    ).rejects.toThrow(/Prompt B artifact/i);
+    ).rejects.toThrow(/Work Brief artifact/i);
 
     const savedAfter = await loadCheckpoint({
       checkpointFile: config.paths.checkpointFile,
@@ -2246,7 +2495,7 @@ describe('runRealOrchestration', () => {
     expect(savedAfter.checkpoint?.features['001']?.promptBFile).toBe(canonicalPromptBFile);
   });
 
-  it('recovers a reusable interrupted execution even if its Prompt B artifact is missing', async () => {
+  it('recovers a reusable interrupted execution even if its Work Brief artifact is missing', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -3548,7 +3797,7 @@ ${TEST_LEDGER_SECTION}
       total_lines_removed: 1,
       files: [
         {
-          path: 'src/features/001-runtime-generated-prompt-b-for-001.ts',
+          path: 'src/features/001-runtime-generated-work-brief-for-001.ts',
           change_type: 'modified' as const,
           lines_added: 2,
           lines_removed: 1,
@@ -3568,7 +3817,7 @@ ${TEST_LEDGER_SECTION}
         isCommitAncestor: vi.fn(async (_repoRoot: string, ancestorCommit: string) => {
           return ancestorCommit === 'merge-commit';
         }),
-        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
+        mergeBranchIntoCurrent: vi.fn(async (mergeRepoRoot: string, branch: string) => {
           throw new actual.PostMergeAutoStashRestoreError({
             branch,
             preMergeCommit: 'pre-merge-commit',
@@ -3662,7 +3911,7 @@ ${TEST_LEDGER_SECTION}
       total_lines_removed: 1,
       files: [
         {
-          path: 'src/features/001-runtime-generated-prompt-b-for-001.ts',
+          path: 'src/features/001-runtime-generated-work-brief-for-001.ts',
           change_type: 'modified' as const,
           lines_added: 2,
           lines_removed: 1,
@@ -3671,19 +3920,24 @@ ${TEST_LEDGER_SECTION}
       ]
     };
 
-    vi.resetModules();
-    vi.doMock('../../src/git/index.js', async () => {
-      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
-        '../../src/git/index.js'
-      );
-      let mergeAttempts = 0;
+    let mergeAttempts = 0;
 
-      return {
-        ...actual,
-        isCommitAncestor: vi.fn(async (_repoRoot: string, ancestorCommit: string) => {
-          return ancestorCommit === 'merge-commit';
-        }),
-        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {},
+      gitMergeDependencies: {
+        getWorktreeStatusSummary: vi.fn(async () => ({
+          ahead: 0,
+          behind: 0,
+          dirty: true,
+          changedFiles: ['src/conflicted.ts']
+        })),
+        assertNoUnresolvedConflictState: vi.fn(async () => {}),
+        commitAllChanges: vi.fn(async () => 'resolved-commit'),
+        mergeBranchIntoCurrent: vi.fn(async (mergeRepoRoot: string, branch: string) => {
           mergeAttempts += 1;
           if (mergeAttempts === 1) {
             return {
@@ -3698,7 +3952,7 @@ ${TEST_LEDGER_SECTION}
             status: 'merged' as const,
             branch,
             preMergeCommit: 'pre-merge-commit',
-            mergeCommit: 'merge-commit',
+            mergeCommit: (await simpleGit(mergeRepoRoot).revparse(['HEAD'])).trim(),
             editSummary: mergedEditSummary
           };
         }),
@@ -3708,41 +3962,23 @@ ${TEST_LEDGER_SECTION}
           preMergeCommit: 'pre-merge-commit',
           mergeHeadCommit: 'merge-head-commit',
           conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
-        })),
-        commitAllChanges: vi.fn(async () => 'resolved-commit')
-      };
+        }))
+      }
     });
 
-    try {
-      const { runRealOrchestration: runRealOrchestrationWithConflictMocks } = await import(
-        '../../src/orchestrator/realRun.js'
-      );
-
-      const result = await runRealOrchestrationWithConflictMocks({
-        config,
-        configHash,
-        adapter,
-        notificationDependencies: createNotificationRecorder().dependencies,
-        sleep: async () => {}
-      });
-
-      expect(result.checkpoint.status).toBe('completed');
-      expect(result.mergedCount).toBe(1);
-      expect(adapter.requests.some((request) => request.stage === 'conflict-resolution')).toBe(true);
-      const planFile = result.checkpoint.features['001']?.planFile;
-      expect(planFile).toBeDefined();
-      expect(result.checkpoint.features['001']?.evolvedPlanFile).toBeNull();
-      await expect(readFile(buildEvolvedPlanPath(config, '001'), 'utf8')).rejects.toMatchObject({
-        code: 'ENOENT'
-      });
-      expect(await readFile(planFile ?? '', 'utf8')).toContain(ledgerNote);
-      expect(await readFile(path.join(config.paths.shadowPlansDir, '001.md'), 'utf8')).toContain(
-        ledgerNote
-      );
-    } finally {
-      vi.doUnmock('../../src/git/index.js');
-      vi.resetModules();
-    }
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.mergedCount).toBe(1);
+    expect(adapter.requests.some((request) => request.stage === 'conflict-resolution')).toBe(true);
+    const planFile = result.checkpoint.features['001']?.planFile;
+    expect(planFile).toBeDefined();
+    expect(result.checkpoint.features['001']?.evolvedPlanFile).toBeNull();
+    await expect(readFile(buildEvolvedPlanPath(config, '001'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT'
+    });
+    expect(await readFile(planFile ?? '', 'utf8')).toContain(ledgerNote);
+    expect(await readFile(path.join(config.paths.shadowPlansDir, '001.md'), 'utf8')).toContain(
+      ledgerNote
+    );
   });
 
   it('retries merge conflict reconciliation until round 2 succeeds', async () => {
@@ -3780,7 +4016,7 @@ ${TEST_LEDGER_SECTION}
       total_lines_removed: 1,
       files: [
         {
-          path: 'src/features/001-runtime-generated-prompt-b-for-001.ts',
+          path: 'src/features/001-runtime-generated-work-brief-for-001.ts',
           change_type: 'modified' as const,
           lines_added: 2,
           lines_removed: 1,
@@ -3789,22 +4025,17 @@ ${TEST_LEDGER_SECTION}
       ]
     };
 
-    vi.doUnmock('../../src/git/index.js');
-    vi.resetModules();
-    vi.doMock('../../src/git/index.js', async () => {
-      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
-        '../../src/git/index.js'
-      );
-      const abortMerge = vi.fn(async () => {});
-      let mergeAttempts = 0;
-
-      return {
-        ...actual,
-        abortMerge,
-        isCommitAncestor: vi.fn(async (_repoRoot: string, ancestorCommit: string) => {
-          return ancestorCommit === 'merge-commit';
-        }),
-        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
+    const abortMergeMock = vi.fn(async () => {});
+    let mergeAttempts = 0;
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {},
+      gitMergeDependencies: {
+        abortMerge: abortMergeMock,
+        mergeBranchIntoCurrent: vi.fn(async (mergeRepoRoot: string, branch: string) => {
           mergeAttempts += 1;
           if (mergeAttempts <= 2) {
             return {
@@ -3819,7 +4050,7 @@ ${TEST_LEDGER_SECTION}
             status: 'merged' as const,
             branch,
             preMergeCommit: 'pre-merge-commit',
-            mergeCommit: 'merge-commit',
+            mergeCommit: (await simpleGit(mergeRepoRoot).revparse(['HEAD'])).trim(),
             editSummary: mergedEditSummary
           };
         }),
@@ -3830,35 +4061,16 @@ ${TEST_LEDGER_SECTION}
           mergeHeadCommit: 'merge-head-commit',
           conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
         }))
-      };
+      }
     });
 
-    try {
-      const gitModule = await import('../../src/git/index.js');
-      const abortMergeMock = vi.mocked(gitModule.abortMerge);
-      const { runRealOrchestration: runRealOrchestrationWithConflictMocks } = await import(
-        '../../src/orchestrator/realRun.js'
-      );
-
-      const result = await runRealOrchestrationWithConflictMocks({
-        config,
-        configHash,
-        adapter,
-        notificationDependencies: createNotificationRecorder().dependencies,
-        sleep: async () => {}
-      });
-
-      expect(result.checkpoint.status).toBe('completed');
-      expect(result.checkpoint.features['001']).toMatchObject({
-        status: 'completed',
-        mergeResolutionAttempts: 0
-      });
-      expect(adapter.requests.filter((request) => request.stage === 'conflict-resolution')).toHaveLength(2);
-      expect(abortMergeMock.mock.calls.length).toBeGreaterThanOrEqual(2);
-    } finally {
-      vi.doUnmock('../../src/git/index.js');
-      vi.resetModules();
-    }
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'completed',
+      mergeResolutionAttempts: 0
+    });
+    expect(adapter.requests.filter((request) => request.stage === 'conflict-resolution')).toHaveLength(2);
+    expect(abortMergeMock.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it('retries conflict resolution when unresolved conflict sanity checks fail', async () => {
@@ -3887,7 +4099,7 @@ ${TEST_LEDGER_SECTION}
       total_lines_removed: 1,
       files: [
         {
-          path: 'src/features/001-runtime-generated-prompt-b-for-001.ts',
+          path: 'src/features/001-runtime-generated-work-brief-for-001.ts',
           change_type: 'modified' as const,
           lines_added: 2,
           lines_removed: 1,
@@ -3896,34 +4108,31 @@ ${TEST_LEDGER_SECTION}
       ]
     };
 
-    vi.resetModules();
-    vi.doMock('../../src/git/index.js', async () => {
-      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
-        '../../src/git/index.js'
-      );
-      const resetWorktreeToHead = vi.fn(async () => {});
-      let mergeAttempts = 0;
-      let sanityAttempts = 0;
-      const assertNoUnresolvedConflictState = vi.fn(async () => {
-        sanityAttempts += 1;
-        if (sanityAttempts === 1) {
-          throw new Error('Conflict markers remain in resolved files: src/conflicted.ts');
-        }
-      });
+    const resetWorktreeToHeadMock = vi.fn(async () => {});
+    let mergeAttempts = 0;
+    let sanityAttempts = 0;
+    const assertNoUnresolvedConflictStateMock = vi.fn(async () => {
+      sanityAttempts += 1;
+      if (sanityAttempts === 1) {
+        throw new Error('Conflict markers remain in resolved files: src/conflicted.ts');
+      }
+    });
 
-      return {
-        ...actual,
-        resetWorktreeToHead,
-        isCommitAncestor: vi.fn(async (_repoRoot: string, ancestorCommit: string) => {
-          return ancestorCommit === 'merge-commit';
-        }),
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {},
+      gitMergeDependencies: {
+        resetWorktreeToHead: resetWorktreeToHeadMock,
         getWorktreeStatusSummary: vi.fn(async () => ({
           ahead: 0,
           behind: 0,
           dirty: true,
           changedFiles: ['src/conflicted.ts', 'src/extra-marker.ts']
         })),
-        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
+        mergeBranchIntoCurrent: vi.fn(async (mergeRepoRoot: string, branch: string) => {
           mergeAttempts += 1;
           if (mergeAttempts === 1) {
             return {
@@ -3938,7 +4147,7 @@ ${TEST_LEDGER_SECTION}
             status: 'merged' as const,
             branch,
             preMergeCommit: 'pre-merge-commit',
-            mergeCommit: 'merge-commit',
+            mergeCommit: (await simpleGit(mergeRepoRoot).revparse(['HEAD'])).trim(),
             editSummary: mergedEditSummary
           };
         }),
@@ -3949,55 +4158,35 @@ ${TEST_LEDGER_SECTION}
           mergeHeadCommit: 'merge-head-commit',
           conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
         })),
-        assertNoUnresolvedConflictState,
+        assertNoUnresolvedConflictState: assertNoUnresolvedConflictStateMock,
         commitAllChanges: vi.fn(async () => 'resolved-commit')
-      };
+      }
     });
 
-    try {
-      const gitModule = await import('../../src/git/index.js');
-      const assertNoUnresolvedConflictStateMock = vi.mocked(gitModule.assertNoUnresolvedConflictState);
-      const resetWorktreeToHeadMock = vi.mocked(gitModule.resetWorktreeToHead);
-      const { runRealOrchestration: runRealOrchestrationWithSanityRetry } = await import(
-        '../../src/orchestrator/realRun.js'
-      );
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'completed',
+      mergeResolutionAttempts: 0
+    });
+    expect(adapter.requests.filter((request) => request.stage === 'conflict-resolution')).toHaveLength(2);
+    expect(assertNoUnresolvedConflictStateMock).toHaveBeenCalledWith(
+      expect.any(String),
+      ['src/conflicted.ts', 'src/extra-marker.ts']
+    );
+    expect(resetWorktreeToHeadMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'pre-merge-commit'
+    );
 
-      const result = await runRealOrchestrationWithSanityRetry({
-        config,
-        configHash,
-        adapter,
-        notificationDependencies: createNotificationRecorder().dependencies,
-        sleep: async () => {}
-      });
-
-      expect(result.checkpoint.status).toBe('completed');
-      expect(result.checkpoint.features['001']).toMatchObject({
-        status: 'completed',
-        mergeResolutionAttempts: 0
-      });
-      expect(adapter.requests.filter((request) => request.stage === 'conflict-resolution')).toHaveLength(2);
-      expect(assertNoUnresolvedConflictStateMock).toHaveBeenCalledWith(
-        expect.any(String),
-        ['src/conflicted.ts', 'src/extra-marker.ts']
-      );
-      expect(resetWorktreeToHeadMock).toHaveBeenCalledWith(
-        expect.any(String),
-        'pre-merge-commit'
-      );
-
-      const auditEntries = await readAuditEntries(config.paths.auditLogFile);
-      const retryAudit = auditEntries.find(
-        (entry) =>
-          entry.event === 'merge.conflict-resolution.retry-scheduled' &&
-          entry.data?.failureStage === 'conflict-resolution-sanity'
-      );
-      expect(retryAudit?.data?.error).toEqual(
-        expect.stringContaining('Conflict markers remain')
-      );
-    } finally {
-      vi.doUnmock('../../src/git/index.js');
-      vi.resetModules();
-    }
+    const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+    const retryAudit = auditEntries.find(
+      (entry) =>
+        entry.event === 'merge.conflict-resolution.retry-scheduled' &&
+        entry.data?.failureStage === 'conflict-resolution-sanity'
+    );
+    expect(retryAudit?.data?.error).toEqual(
+      expect.stringContaining('Conflict markers remain')
+    );
   });
 
   it('resets the worktree to a clean baseline before retrying a later conflict-resolution round', async () => {
@@ -4026,7 +4215,7 @@ ${TEST_LEDGER_SECTION}
       total_lines_removed: 1,
       files: [
         {
-          path: 'src/features/001-runtime-generated-prompt-b-for-001.ts',
+          path: 'src/features/001-runtime-generated-work-brief-for-001.ts',
           change_type: 'modified' as const,
           lines_added: 2,
           lines_removed: 1,
@@ -4035,23 +4224,28 @@ ${TEST_LEDGER_SECTION}
       ]
     };
 
-    vi.resetModules();
-    vi.doMock('../../src/git/index.js', async () => {
-      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
-        '../../src/git/index.js'
-      );
-      const abortMerge = vi.fn(async () => {});
-      const resetWorktreeToHead = vi.fn(async () => {});
-      let mergeAttempts = 0;
+    const abortMergeMock = vi.fn(async () => {});
+    const resetWorktreeToHeadMock = vi.fn(async () => {});
+    let mergeAttempts = 0;
 
-      return {
-        ...actual,
-        abortMerge,
-        isCommitAncestor: vi.fn(async (_repoRoot: string, ancestorCommit: string) => {
-          return ancestorCommit === 'merge-commit';
-        }),
-        resetWorktreeToHead,
-        mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => {
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {},
+      gitMergeDependencies: {
+        abortMerge: abortMergeMock,
+        resetWorktreeToHead: resetWorktreeToHeadMock,
+        getWorktreeStatusSummary: vi.fn(async () => ({
+          ahead: 0,
+          behind: 0,
+          dirty: true,
+          changedFiles: ['src/conflicted.ts']
+        })),
+        assertNoUnresolvedConflictState: vi.fn(async () => {}),
+        commitAllChanges: vi.fn(async () => 'resolved-commit'),
+        mergeBranchIntoCurrent: vi.fn(async (mergeRepoRoot: string, branch: string) => {
           mergeAttempts += 1;
           if (mergeAttempts <= 2) {
             return {
@@ -4066,7 +4260,7 @@ ${TEST_LEDGER_SECTION}
             status: 'merged' as const,
             branch,
             preMergeCommit: 'pre-merge-commit',
-            mergeCommit: 'merge-commit',
+            mergeCommit: (await simpleGit(mergeRepoRoot).revparse(['HEAD'])).trim(),
             editSummary: mergedEditSummary
           };
         }),
@@ -4077,33 +4271,14 @@ ${TEST_LEDGER_SECTION}
           mergeHeadCommit: 'merge-head-commit',
           conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
         }))
-      };
+      }
     });
 
-    try {
-      const gitModule = await import('../../src/git/index.js');
-      const resetWorktreeToHeadMock = vi.mocked(gitModule.resetWorktreeToHead);
-      const { runRealOrchestration: runRealOrchestrationWithConflictMocks } = await import(
-        '../../src/orchestrator/realRun.js'
-      );
-
-      const result = await runRealOrchestrationWithConflictMocks({
-        config,
-        configHash,
-        adapter,
-        notificationDependencies: createNotificationRecorder().dependencies,
-        sleep: async () => {}
-      });
-
-      expect(result.checkpoint.status).toBe('completed');
-      expect(resetWorktreeToHeadMock).toHaveBeenCalledWith(
-        result.checkpoint.features['001']?.worktreePath ?? expect.any(String),
-        'HEAD'
-      );
-    } finally {
-      vi.doUnmock('../../src/git/index.js');
-      vi.resetModules();
-    }
+    expect(result.checkpoint.status).toBe('completed');
+    expect(resetWorktreeToHeadMock).toHaveBeenCalledWith(
+      result.checkpoint.features['001']?.worktreePath ?? expect.any(String),
+      'HEAD'
+    );
   });
 
   it('fails truthfully after exhausting all merge conflict reconciliation rounds', async () => {
@@ -4127,16 +4302,16 @@ ${TEST_LEDGER_SECTION}
       return innerRunTurn(request);
     };
 
-    vi.resetModules();
-    vi.doMock('../../src/git/index.js', async () => {
-      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
-        '../../src/git/index.js'
-      );
-      const abortMerge = vi.fn(async () => {});
+    const abortMergeMock = vi.fn(async () => {});
 
-      return {
-        ...actual,
-        abortMerge,
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {},
+      gitMergeDependencies: {
+        abortMerge: abortMergeMock,
         mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => ({
           status: 'conflict' as const,
           branch,
@@ -4150,36 +4325,17 @@ ${TEST_LEDGER_SECTION}
           mergeHeadCommit: 'merge-head-commit',
           conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
         }))
-      };
+      }
     });
 
-    try {
-      const gitModule = await import('../../src/git/index.js');
-      const abortMergeMock = vi.mocked(gitModule.abortMerge);
-      const { runRealOrchestration: runRealOrchestrationWithConflictMocks } = await import(
-        '../../src/orchestrator/realRun.js'
-      );
-
-      const result = await runRealOrchestrationWithConflictMocks({
-        config,
-        configHash,
-        adapter,
-        notificationDependencies: createNotificationRecorder().dependencies,
-        sleep: async () => {}
-      });
-
-      expect(result.checkpoint.status).toBe('failed');
-      expect(result.checkpoint.features['001']).toMatchObject({
-        status: 'failed',
-        rerunEligible: false,
-        mergeResolutionAttempts: 3
-      });
-      expect(adapter.requests.filter((request) => request.stage === 'conflict-resolution')).toHaveLength(3);
-      expect(abortMergeMock.mock.calls.length).toBeGreaterThanOrEqual(3);
-    } finally {
-      vi.doUnmock('../../src/git/index.js');
-      vi.resetModules();
-    }
+    expect(result.checkpoint.status).toBe('failed');
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'failed',
+      rerunEligible: false,
+      mergeResolutionAttempts: 3
+    });
+    expect(adapter.requests.filter((request) => request.stage === 'conflict-resolution')).toHaveLength(3);
+    expect(abortMergeMock.mock.calls.length).toBeGreaterThanOrEqual(3);
   });
 
   it('aborts preserved merge state when conflict resolution fails after a merge-into-worktree conflict', async () => {
@@ -4215,16 +4371,16 @@ ${TEST_LEDGER_SECTION}
       return originalRunTurn(request);
     };
 
-    vi.resetModules();
-    vi.doMock('../../src/git/index.js', async () => {
-      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
-        '../../src/git/index.js'
-      );
-      const abortMerge = vi.fn(async () => {});
+    const abortMergeMock = vi.fn(async () => {});
 
-      return {
-        ...actual,
-        abortMerge,
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {},
+      gitMergeDependencies: {
+        abortMerge: abortMergeMock,
         mergeBranchIntoCurrent: vi.fn(async (_repoRoot: string, branch: string) => ({
           status: 'conflict' as const,
           branch,
@@ -4238,38 +4394,19 @@ ${TEST_LEDGER_SECTION}
           mergeHeadCommit: 'merge-head-commit',
           conflicts: [{ file: 'src/conflicted.ts', reason: 'content' }]
         }))
-      };
+      }
     });
 
-    try {
-      const gitModule = await import('../../src/git/index.js');
-      const abortMergeMock = vi.mocked(gitModule.abortMerge);
-      const { runRealOrchestration: runRealOrchestrationWithConflictMocks } = await import(
-        '../../src/orchestrator/realRun.js'
-      );
-
-      const result = await runRealOrchestrationWithConflictMocks({
-        config,
-        configHash,
-        adapter,
-        notificationDependencies: createNotificationRecorder().dependencies,
-        sleep: async () => {}
-      });
-
-      expect(result.checkpoint.status).toBe('failed');
-      expect(result.mergedCount).toBe(0);
-      expect(result.checkpoint.features['001']).toMatchObject({
-        status: 'failed',
-        lastError: 'resolution failed'
-      });
-      expect(adapter.requests.some((request) => request.stage === 'conflict-resolution')).toBe(true);
-      expect(abortMergeMock).toHaveBeenCalledWith(
-        result.checkpoint.features['001']?.worktreePath ?? expect.any(String)
-      );
-    } finally {
-      vi.doUnmock('../../src/git/index.js');
-      vi.resetModules();
-    }
+    expect(result.checkpoint.status).toBe('failed');
+    expect(result.mergedCount).toBe(0);
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'failed',
+      lastError: 'resolution failed'
+    });
+    expect(adapter.requests.some((request) => request.stage === 'conflict-resolution')).toBe(true);
+    expect(abortMergeMock).toHaveBeenCalledWith(
+      result.checkpoint.features['001']?.worktreePath ?? expect.any(String)
+    );
   });
 
   it('persists a merged feature as completed before cleanup can fail', async () => {
@@ -4284,38 +4421,20 @@ ${TEST_LEDGER_SECTION}
     await mkdir(config.paths.codexHomeDir, { recursive: true });
     await writeFile(residueFile, 'test\n', 'utf8');
 
-    vi.resetModules();
-    vi.doMock('../../src/git/index.js', async () => {
-      const actual = await vi.importActual<typeof import('../../src/git/index.js')>(
-        '../../src/git/index.js'
-      );
-
-      return {
-        ...actual,
-        removeWorktree: vi.fn(async (...args: Parameters<typeof actual.removeWorktree>) => {
-          throw new Error('post-merge cleanup probe');
-        })
-      };
-    });
-
-    try {
-      const { runRealOrchestration: runRealOrchestrationWithCleanupProbe } = await import(
-        '../../src/orchestrator/realRun.js'
-      );
-
-      await expect(
-        runRealOrchestrationWithCleanupProbe({
-          config,
-          configHash,
-          adapter: new DeterministicScoringAdapter(),
-          notificationDependencies: createNotificationRecorder().dependencies,
-          sleep: async () => {}
-        })
-      ).rejects.toThrow('post-merge cleanup probe');
-    } finally {
-      vi.doUnmock('../../src/git/index.js');
-      vi.resetModules();
-    }
+    await expect(
+      runRealOrchestration({
+        config,
+        configHash,
+        adapter: new DeterministicScoringAdapter(),
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {},
+        gitMergeDependencies: {
+          removeWorktree: vi.fn(async () => {
+            throw new Error('post-merge cleanup probe');
+          })
+        }
+      })
+    ).rejects.toThrow('post-merge cleanup probe');
 
     const saved = await loadCheckpoint({
       checkpointFile: config.paths.checkpointFile,
@@ -4858,7 +4977,7 @@ ${TEST_LEDGER_SECTION}
 `,
       'utf8'
     );
-    await writeFile(featureTwoPromptBFile, 'Prompt B for second change.\n', 'utf8');
+    await writeFile(featureTwoPromptBFile, 'Work Brief for second change.\n', 'utf8');
 
     const loaded = await loadCheckpoint({
       checkpointFile: config.paths.checkpointFile,

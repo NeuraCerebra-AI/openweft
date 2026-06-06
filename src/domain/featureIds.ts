@@ -81,5 +81,5 @@ export const createPromptBFilename = (
 ): string => {
   const id = formatFeatureId(featureId);
   const slug = slugifyFeatureRequest(request, maxSlugLength);
-  return `${id}_${slug}.prompt-b.md`;
+  return `${id}_${slug}.work-brief.md`;
 };

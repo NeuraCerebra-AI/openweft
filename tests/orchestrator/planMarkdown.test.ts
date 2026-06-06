@@ -30,7 +30,7 @@ const validPlan = `# Plan
 `;
 
 describe('planMarkdown', () => {
-  it('includes validator error, rejected markdown, and prompt b context in the first repair prompt', async () => {
+  it('includes validator error, rejected markdown, and Work Brief context in the first repair prompt', async () => {
     const prompts: string[] = [];
 
     const repaired = await repairPlanMarkdownIfNeeded({
@@ -56,7 +56,7 @@ describe('planMarkdown', () => {
     );
     expect(prompts[0]).toContain('=== REJECTED PLAN MARKDOWN START ===');
     expect(prompts[0]).toContain('# Summary only');
-    expect(prompts[0]).toContain('=== PROMPT B START ===');
+    expect(prompts[0]).toContain('=== WORK BRIEF START ===');
     expect(prompts[0]).toContain('# 1. Role');
   });
 

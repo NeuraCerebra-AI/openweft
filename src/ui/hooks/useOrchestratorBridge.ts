@@ -6,9 +6,9 @@ import type { UIStore } from '../store.js';
 const getPlanningSummary = (stage: Extract<OrchestratorEvent, { type: 'agent:text' }>['stage']): string | null => {
   switch (stage) {
     case 'planning-s1':
-      return 'Planning stage 1 complete: prepared the implementation prompt.';
+      return 'Brief generation complete: prepared the Work Brief.';
     case 'planning-s2':
-      return 'Planning stage 2 complete: generated the feature plan.';
+      return 'Plan generation complete: generated the feature plan.';
     default:
       return null;
   }

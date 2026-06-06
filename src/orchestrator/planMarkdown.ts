@@ -75,9 +75,9 @@ export const repairPlanMarkdownIfNeeded = async (input: {
       `Feature request: ${input.request}`,
       `Previous validation error: ${lastValidationError}`,
       '',
-      'Use the original Prompt B context below to regenerate the plan faithfully.',
+      'Use the original Work Brief context below to regenerate the plan faithfully.',
       input.promptBMarkdown
-        ? ['=== PROMPT B START ===', input.promptBMarkdown.trimEnd(), '=== PROMPT B END ===', ''].join('\n')
+        ? ['=== WORK BRIEF START ===', input.promptBMarkdown.trimEnd(), '=== WORK BRIEF END ===', ''].join('\n')
         : '',
       'Use the rejected plan markdown below to correct the exact structural problems that were detected.',
       '=== REJECTED PLAN MARKDOWN START ===',
@@ -88,6 +88,8 @@ export const repairPlanMarkdownIfNeeded = async (input: {
       'The plan MUST include a "## Ledger" section covering constraints, assumptions, watchpoints, and validation.',
       'The plan MUST include a "## Manifest" heading followed by a ```json code block containing { "create": [], "modify": [], "delete": [] }.',
       'Do NOT write any files. Do NOT enter plan mode. Do NOT use Write, Edit, or ExitPlanMode tools.',
+      'These no-write instructions apply only to this repair planning response; do not put planning-only read-only/no-write constraints into the implementation plan or Ledger.',
+      'The execution worker must be allowed to make manifest-scoped file changes.',
       'Return the full plan document as plain text in your response.'
     ]
       .filter((line) => line.length > 0)

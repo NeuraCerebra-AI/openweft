@@ -19,18 +19,20 @@ export const buildExecutionPrompt = (input: {
   planFilePath: string;
   planContent: string;
 }): string => {
-  return `You are executing a feature implementation using Prompt B, the primary worker brief for this feature.
-Prompt B is provided below and is also available at ${input.promptBFilePath}.
+  return `You are executing a feature implementation using the Work Brief, the primary operating brief for this feature.
+The Work Brief is provided below and is also available at ${input.promptBFilePath}.
 
 The supporting implementation plan is also provided below and is available at ${input.planFilePath}.
-Use Prompt B as the main execution brief. Use the plan as the supporting artifact that defines the manifest boundaries and required validation.
+Use the Work Brief as the main execution brief. The plan file is the Living Plan Ledger: it defines the manifest boundaries, required validation, current assumptions, watchpoints, implementation decisions, and execution record.
 
 Execute the work completely. Follow the brief carefully. Run all tests specified in the plan.
-Do not skip steps. Do not modify the Prompt B file. Only update the plan file to keep its ## Ledger truthful about constraints, assumptions, watchpoints, validation, and implementation decisions. Stay within this repository.
+If the Work Brief or plan contains read-only/no-write language meant for planning, treat it as planning-stage-only and still implement the manifest-scoped change.
+Do not skip steps. Do not modify the Work Brief file. Only update the plan file to keep its ## Ledger truthful about constraints, assumptions, watchpoints, validation, implementation decisions, debugging protocol activations, and downstream impact reviews. Stay within this repository.
+Do not create alternate ledgers, extra prompt files, sibling checkouts, ad hoc branches, or additional git worktrees; OpenWeft owns artifact persistence and git topology.
 
-=== PROMPT B START ===
+=== WORK BRIEF START ===
 ${input.promptBContent}
-=== PROMPT B END ===
+=== WORK BRIEF END ===
 
 === PLAN START ===
 ${input.planContent}

@@ -23,10 +23,10 @@ describe('featureIds', () => {
     ).toBe('001_add-dark-mode-toggle-3.md');
   });
 
-  it('creates stable prompt b filenames for a feature id and request', () => {
+  it('creates stable work brief filenames for a feature id and request', () => {
     expect(
       createPromptBFilename(1, 'Add dark mode toggle')
-    ).toBe('001_add-dark-mode-toggle.prompt-b.md');
+    ).toBe('001_add-dark-mode-toggle.work-brief.md');
   });
 
   it('finds the next feature id from existing ids', () => {
