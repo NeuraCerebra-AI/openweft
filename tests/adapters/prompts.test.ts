@@ -24,6 +24,20 @@ describe('adapter prompt helpers', () => {
     expect(result).toBe('x and also x');
   });
 
+  it('injects replacements verbatim even when they contain $ replacement patterns', () => {
+    // Real user requests and code edit summaries (diffs) routinely contain `$`
+    // sequences. String replacement must not interpret `$&`, `` $` ``, `$'`, or `$$`.
+    const tricky = "fix $& and $` and $' and $$ and $1 in regex";
+    expect(
+      injectPromptTemplate(`Plan this: ${USER_REQUEST_MARKER}`, USER_REQUEST_MARKER, tricky)
+    ).toBe(`Plan this: ${tricky}`);
+
+    const diffSummary = "- const x = a.replace(/foo/, '$&bar');";
+    expect(
+      injectPromptTemplate(`Adjust: ${CODE_EDIT_SUMMARY_MARKER}`, CODE_EDIT_SUMMARY_MARKER, diffSummary)
+    ).toBe(`Adjust: ${diffSummary}`);
+  });
+
   it('fails when the requested marker is missing', () => {
     expect(() =>
       injectPromptTemplate('No marker here', USER_REQUEST_MARKER, 'x')

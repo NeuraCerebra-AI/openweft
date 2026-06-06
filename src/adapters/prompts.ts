@@ -10,7 +10,11 @@ export const injectPromptTemplate = (
     throw new Error(`Prompt template is missing marker ${marker}.`);
   }
 
-  return template.replaceAll(marker, replacement);
+  // Use a replacer function so `$` sequences in the replacement (e.g. `$&`, `$\``,
+  // `$'`, `$$`) are injected verbatim instead of being interpreted as special
+  // replacement patterns. User requests and code edit summaries (diffs) routinely
+  // contain such sequences.
+  return template.replaceAll(marker, () => replacement);
 };
 
 export const buildExecutionPrompt = (input: {
