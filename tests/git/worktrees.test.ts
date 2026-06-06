@@ -642,6 +642,31 @@ describe('git worktree infrastructure', () => {
     await expect(readFile(path.join(strayPath, 'note.txt'), 'utf8')).rejects.toThrow();
   });
 
+  it('does not delete a retained branch even when its worktree path is being pruned', async () => {
+    const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
+    const relocatablePath = path.join(worktreesDir, '999');
+
+    // A feature can be retained (its branch must survive) while its worktree
+    // directory is not in the retained-path set — e.g. it is being relocated or
+    // re-created. The branch name is the durable handle, so it must be honored.
+    await createWorktree({
+      repoRoot,
+      worktreePath: relocatablePath,
+      branchName: 'openweft-001-retained'
+    });
+
+    const result = await pruneOrphanedOpenWeftArtifacts({
+      repoRoot,
+      worktreesDir,
+      retainedWorktreePaths: [],
+      retainedBranchNames: ['openweft-001-retained']
+    });
+
+    expect(result.removedBranchNames).not.toContain('openweft-001-retained');
+    const branches = await simpleGit(repoRoot).branchLocal();
+    expect(branches.all).toContain('openweft-001-retained');
+  });
+
   it('preserves detached openweft-prefixed branches during orphan pruning', async () => {
     const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
     await mkdir(worktreesDir, { recursive: true });

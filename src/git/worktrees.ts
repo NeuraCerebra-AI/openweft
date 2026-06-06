@@ -656,16 +656,21 @@ export const pruneOrphanedOpenWeftArtifacts = async (
       continue;
     }
 
+    // Never delete a branch the caller explicitly asked to retain, even when its
+    // worktree directory is being pruned (e.g. the worktree is being relocated).
+    const branchToRemove =
+      worktree.branch && !retainedBranchNames.has(worktree.branch) ? worktree.branch : null;
+
     await removeWorktree({
       repoRoot: input.repoRoot,
       worktreePath: worktree.path,
-      branchName: worktree.branch,
+      branchName: branchToRemove,
       force: true,
       worktreesDir: input.worktreesDir
     });
     removedWorktreePaths.add(worktree.path);
-    if (worktree.branch) {
-      removedBranchNames.add(worktree.branch);
+    if (branchToRemove) {
+      removedBranchNames.add(branchToRemove);
     }
   }
 
