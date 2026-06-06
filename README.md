@@ -1,6 +1,6 @@
 # OpenWeft — coding-agent batch scheduling and recovery
 
-OpenWeft is a batch scheduler and recovery layer for coding agents: it turns a **backlog into durable Work Briefs, runs non-conflicting Claude Code/Codex tasks in isolated worktrees, and preserves enough state to recover through crashes, conflicts, and merge reconciliation.**
+OpenWeft is a batch scheduler and recovery layer for coding agents: it turns a **list of your entered goals into durable Work Briefs, runs non-conflicting Claude Code/Codex tasks in isolated worktrees, and preserves enough state to recover through crashes, conflicts, and merge reconciliation.**
 
 **You write a list. You walk away. You come back to commits.**
 
