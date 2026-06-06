@@ -1,10 +1,14 @@
-# OpenWeft — fire-and-forget AI agent orchestration
+# OpenWeft — coding-agent batch scheduling and recovery
+
+OpenWeft is a batch scheduler and recovery layer for coding agents: it turns a backlog into durable Work Briefs, runs non-conflicting Claude Code/Codex tasks in isolated worktrees, and preserves enough state to recover through crashes, conflicts, and merge reconciliation.
 
 **You write a list. You walk away. You come back to commits.**
 
-OpenWeft orchestrates [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex CLI](https://github.com/openai/codex) — **queuing features**, **detecting file conflicts**, **running safe work in parallel**, and **merging results** automatically.
+OpenWeft orchestrates [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex CLI](https://github.com/openai/codex) — **compiling raw feature requests into worker briefs**, **detecting file conflicts before execution**, **running safe work in parallel**, and **merging completed branches in priority order**.
 
 **It runs on your existing subscription by default. No API keys required unless you opt into API-key auth.**
+
+It is not a replacement for Claude Code or Codex. It is the missing batch-control layer around them: planning, phasing, worktree isolation, checkpoint recovery, merge reconciliation, and auditability.
 
 > **Architecture deep dive:** OpenWeft is designed as a real orchestration system, not a prompt wrapper. See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full breakdown of the planning compiler, scoring algorithm, phase scheduler, worktree isolation, checkpoint recovery, finalization, and runtime diagnostics.
 
@@ -82,7 +86,11 @@ Requires Node.js `>=24`, Git, and one or both of `codex` / `claude` already logg
 
 ## What OpenWeft proves
 
-OpenWeft is an agentic workflow orchestrator, not a prompt wrapper. It turns raw feature requests into durable plans, schedules them by file-level risk, executes each feature in a separate git worktree, merges completed branches in priority order, and keeps enough state on disk to recover after interruptions.
+OpenWeft is an orchestration layer for coding agents, not a prompt wrapper and not another general-purpose agent framework.
+
+Its core claim is narrow: when you have a backlog of coding tasks, the hard part is not merely launching several agents. The hard part is deciding which tasks can safely run together, preserving enough state to recover after failure, and merging the finished work without losing context.
+
+OpenWeft turns raw feature requests into durable Work Briefs and execution plans, schedules them by file-level risk, executes each feature in a separate git worktree, merges completed branches in priority order, and keeps enough state on disk to recover after interruptions.
 
 The core design separates model cognition from orchestration control:
 
