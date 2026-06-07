@@ -541,7 +541,7 @@ At the end of a real run, `finalizeRun()` collects runtime diagnostics before wr
 - whether recorded merge commits for completed features are reachable from final `HEAD`
 - whether `.openweft/codex-home/` still exists and how much residue it contains
 
-If a run reaches `completed` but merge durability fails, OpenWeft marks affected features and the run as `failed`. If Codex-home cleanup fails under the default `on-success-clean` policy, finalization also downgrades the run instead of reporting a false success.
+If a run reaches `completed` but merge durability fails, OpenWeft marks affected features and the run as `failed`. If Codex-home cleanup fails under the default `on-success-clean` policy, finalization retries briefly, scrubs any copied worker credentials (`auth.json`), and records a `cleanup-failed` warning in the terminal audit event — but the run stays `completed` because the merged code is durable. Only merge-durability failures downgrade a completed run.
 
 ---
 

@@ -44,6 +44,38 @@ describe('errors', () => {
     expect(classifyError(new Error('ENOENT: no such file or directory')).tier).toBe('fatal');
   });
 
+  it('D2: classifies a SIGKILL signal termination as transient', () => {
+    expect(classifyError(new Error('killed'), { signal: 'SIGKILL' }).tier).toBe('transient');
+  });
+
+  it('D2: classifies a SIGTERM signal termination as transient', () => {
+    expect(classifyError(new Error('killed'), { signal: 'SIGTERM' }).tier).toBe('transient');
+  });
+
+  it('D2: classifies a timed-out subprocess as transient', () => {
+    expect(classifyError(new Error(''), { timedOut: true }).tier).toBe('transient');
+  });
+
+  it('D2: classifies a signal termination as transient even when the message looks fatal (ordering)', () => {
+    expect(
+      classifyError(new Error('authentication failed'), { signal: 'SIGKILL' }).tier
+    ).toBe('transient');
+  });
+
+  it('D2: classifies a SIGINT termination as transient (orchestrator separately maps genuine Ctrl+C to aborted)', () => {
+    expect(classifyError(new Error('interrupted'), { signal: 'SIGINT' }).tier).toBe('transient');
+  });
+
+  it('D2: a null signal with a fatal message remains fatal', () => {
+    expect(
+      classifyError(new Error('Authentication failed: not logged in'), { signal: null }).tier
+    ).toBe('fatal');
+  });
+
+  it('D2: no termination info with an agent-ish message stays agent (backward-compatible optional param)', () => {
+    expect(classifyError(new Error('Model produced malformed patch output')).tier).toBe('agent');
+  });
+
   it('A3: does not trip the circuit breaker when exactly half of attempts failed', () => {
     // Exactly half failing should not trip a >half breaker.
     expect(circuitBreakerTripped(2, 4)).toBe(false);

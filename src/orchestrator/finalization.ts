@@ -1,4 +1,5 @@
-import { rm } from 'node:fs/promises';
+import { readdir, rm } from 'node:fs/promises';
+import path from 'node:path';
 
 import type { ResolvedOpenWeftConfig } from '../config/index.js';
 import type { OrchestratorCheckpoint } from '../state/checkpoint.js';
@@ -15,6 +16,9 @@ export interface RuntimeCleanupSummary {
   policy: 'on-success-clean' | 'preserve';
   action: 'cleaned' | 'preserved' | 'nothing-to-clean' | 'cleanup-failed';
   error: string | null;
+  retryAttempts?: number;
+  credentialScrub?: 'not-needed' | 'scrubbed' | 'scrub-failed';
+  credentialResidueCount?: number;
 }
 
 export interface TerminalRunSummary {
@@ -28,6 +32,53 @@ export interface TerminalRunSummary {
 }
 
 const timestamp = (): string => new Date().toISOString();
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Best-effort scrub of copied worker credentials (`auth.json`) left behind when
+ * codex-home cleanup fails. Recursively walks the codex-home tree, removing every
+ * file named exactly `auth.json`. Symbolic links encountered during the walk are
+ * skipped (never followed out of the directory). Missing directories (ENOENT) and
+ * any other error are tolerated — this function never throws. Returns the number
+ * of credential files removed and how many remain present after the attempt.
+ *
+ * Note: only ever called with OpenWeft's own `config.paths.codexHomeDir`
+ * (`.openweft/codex-home`), never the operator's real `~/.codex`, so the walk root
+ * is a trusted, OpenWeft-managed path.
+ */
+export const scrubCodexHomeCredentials = async (
+  codexHomeDir: string
+): Promise<{ removed: number; remaining: number }> => {
+  let removed = 0;
+  let remaining = 0;
+
+  const walk = async (rootDir: string): Promise<void> => {
+    const entries = await readdir(rootDir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      const absolutePath = path.join(rootDir, entry.name);
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        await walk(absolutePath);
+        continue;
+      }
+      if (entry.name === 'auth.json') {
+        try {
+          await rm(absolutePath, { force: true });
+          removed += 1;
+        } catch {
+          remaining += 1;
+        }
+      }
+    }
+  };
+
+  await walk(codexHomeDir).catch(() => undefined);
+
+  return { removed, remaining };
+};
 
 const saveCheckpointSnapshot = async (
   config: ResolvedOpenWeftConfig,
@@ -128,20 +179,35 @@ const buildRuntimeCleanupSummary = async (input: {
     };
   }
 
-  try {
-    await rm(input.config.paths.codexHomeDir, { recursive: true, force: true });
-    return {
-      policy,
-      action: 'cleaned',
-      error: null
-    };
-  } catch (error) {
-    return {
-      policy,
-      action: 'cleanup-failed',
-      error: error instanceof Error ? error.message : String(error)
-    };
+  const maxAttempts = 3;
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await rm(input.config.paths.codexHomeDir, { recursive: true, force: true });
+      return {
+        policy,
+        action: 'cleaned',
+        error: null,
+        retryAttempts: attempt
+      };
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts) {
+        await delay(150);
+      }
+    }
   }
+
+  const scrub = await scrubCodexHomeCredentials(input.config.paths.codexHomeDir);
+  return {
+    policy,
+    action: 'cleanup-failed',
+    error: lastError instanceof Error ? lastError.message : String(lastError),
+    retryAttempts: maxAttempts,
+    credentialScrub: scrub.remaining === 0 ? 'scrubbed' : 'scrub-failed',
+    credentialResidueCount: scrub.remaining
+  };
 };
 
 export const finalizeRun = async (input: {
@@ -173,30 +239,29 @@ export const finalizeRun = async (input: {
     diagnostics
   });
 
-  if (runtimeCleanup.action === 'cleanup-failed' && terminalStatus === 'completed') {
-    input.checkpoint.status = 'failed';
-    input.checkpoint.currentState = 'idle';
-    input.checkpoint.currentPhase = null;
-    await saveCheckpointSnapshot(input.config, input.checkpoint);
-    terminalStatus = input.checkpoint.status;
-  }
+  // Behavior change C2: a codex-home cleanup failure no longer downgrades a
+  // completed run to failed. The merged code is durable, so the run stays
+  // completed; the failure is surfaced loudly (warn) in the terminal audit and
+  // any copied worker credentials are best-effort scrubbed. (Block A downgrade
+  // removed — merge-durability downgrade above is intentionally preserved.)
 
+  // Re-collect diagnostics so the residue re-check below reflects the state
+  // after the cleanup attempt.
   diagnostics = await collectDiagnostics(input.config, input.checkpoint);
 
   if (runtimeCleanup.action === 'cleaned' && diagnostics.runtimeArtifacts.codexHomePresent) {
+    // Cleanup reported success but a re-collected diagnostic still shows
+    // codex-home present. Scrub copied credentials and surface the failure
+    // without downgrading the run (Block B downgrade removed).
+    const scrub = await scrubCodexHomeCredentials(input.config.paths.codexHomeDir);
     runtimeCleanup = {
       ...runtimeCleanup,
       action: 'cleanup-failed',
-      error: 'codex-home still exists after cleanup attempt'
+      error: 'codex-home still exists after cleanup attempt',
+      credentialScrub: scrub.remaining === 0 ? 'scrubbed' : 'scrub-failed',
+      credentialResidueCount: scrub.remaining
     };
-    if (terminalStatus === 'completed') {
-      input.checkpoint.status = 'failed';
-      input.checkpoint.currentState = 'idle';
-      input.checkpoint.currentPhase = null;
-      await saveCheckpointSnapshot(input.config, input.checkpoint);
-      terminalStatus = input.checkpoint.status;
-      diagnostics = await collectDiagnostics(input.config, input.checkpoint);
-    }
+    diagnostics = await collectDiagnostics(input.config, input.checkpoint);
   }
 
   const unresolvedFailedFeatureIds = Object.values(input.checkpoint.features)
@@ -204,11 +269,16 @@ export const finalizeRun = async (input: {
     .map((feature) => feature.id);
   const event = toTerminalEvent(terminalStatus);
 
+  const cleanupFailed = runtimeCleanup.action === 'cleanup-failed';
+  const auditMessage = cleanupFailed
+    ? `OpenWeft process ended with status ${terminalStatus}. Codex-home cleanup failed (${runtimeCleanup.error ?? 'unknown error'}); copied worker credentials were ${runtimeCleanup.credentialScrub ?? 'not scrubbed'}.`
+    : `OpenWeft process ended with status ${terminalStatus}.`;
+
   await appendAuditEntry(input.config.paths.auditLogFile, {
     timestamp: timestamp(),
-    level: terminalStatus === 'failed' ? 'warn' : 'info',
+    level: terminalStatus === 'failed' || cleanupFailed ? 'warn' : 'info',
     event,
-    message: `OpenWeft process ended with status ${terminalStatus}.`,
+    message: auditMessage,
     data: {
       status: terminalStatus,
       finalHead: diagnostics.headCommit,

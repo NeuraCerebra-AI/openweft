@@ -10,6 +10,7 @@ import type {
   AdapterUsage,
   CommandExecutionResult
 } from './types.js';
+import type { CommandExecutionResultWithSignal } from './runner.js';
 
 const PLANNING_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const EXECUTION_IDLE_TIMEOUT_MS = 90 * 60 * 1000;
@@ -107,7 +108,7 @@ export const createAdapterFailure = (input: {
   backend: AdapterFailure['backend'];
   request: AdapterTurnRequest;
   command: AdapterCommandSpec;
-  execution?: CommandExecutionResult;
+  execution?: CommandExecutionResultWithSignal;
   error?: unknown;
   sessionId?: string | null;
 }): AdapterFailure => {
@@ -122,7 +123,7 @@ export const createAdapterFailure = (input: {
     sessionId: input.sessionId ?? input.request.sessionId ?? null,
     model: input.request.model,
     error: message,
-    classified: classifyError(message),
+    classified: classifyError(message, input.execution),
     artifacts: buildArtifacts(
       input.command,
       input.execution ?? {

@@ -227,7 +227,7 @@ Fire-and-forget only works if the process can survive bad timing: terminal exits
 | `feature_requests/*.md` | Validated Markdown execution plans. |
 | `feature_requests/briefs/*.work-brief.md` | Durable Work Briefs. |
 | `.openweft/shadow-plans/` | Internal mirrors used during execution and recovery. |
-| `.openweft/codex-home/` | Minimal isolated Codex homes for worker turns; cleaned after successful runs by default. |
+| `.openweft/codex-home/` | Minimal isolated Codex homes for worker turns; cleaned after successful runs by default. If cleanup fails, copied worker credentials (`auth.json`) are scrubbed and the run is flagged with a `cleanup-failed` warning rather than marked failed. |
 
 Checkpoint writes are atomic and Zod-validated. Loading prefers the primary checkpoint, falls back to the backup if the primary is corrupt, and rejects unexpected schema fields. On resume, in-flight features reset to `planned` unless OpenWeft can prove there is already a reusable completion or recorded merge. Clean re-execution from the persisted Work Brief, plan, and checkpoint is safer than trying to resurrect half-valid model context.
 

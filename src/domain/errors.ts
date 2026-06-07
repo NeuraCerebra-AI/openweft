@@ -5,6 +5,11 @@ export interface ClassifiedError {
   reason: string;
 }
 
+export interface TerminationInfo {
+  signal?: NodeJS.Signals | null;
+  timedOut?: boolean;
+}
+
 const TRANSIENT_PATTERNS = [
   /429/,
   /rate limit/i,
@@ -42,7 +47,20 @@ const toMessage = (error: unknown): string => {
   return JSON.stringify(error);
 };
 
-export const classifyError = (error: unknown): ClassifiedError => {
+export const classifyError = (error: unknown, termination?: TerminationInfo): ClassifiedError => {
+  // A subprocess terminated by a signal (SIGKILL/SIGTERM/etc.) or that timed out is
+  // a transient termination, not an agent-logic error. Evaluate this BEFORE message
+  // pattern-matching so a signal-killed process whose partial stderr happens to
+  // mention a fatal token (e.g. "authentication") is still treated as transient.
+  if (termination && (termination.signal != null || termination.timedOut === true)) {
+    return {
+      tier: 'transient',
+      reason: termination.timedOut
+        ? 'Agent subprocess timed out'
+        : `Agent subprocess terminated by signal ${termination.signal}`
+    };
+  }
+
   const message = toMessage(error);
 
   // Prefer transient classification: a genuine network/5xx failure (e.g. a 503 or

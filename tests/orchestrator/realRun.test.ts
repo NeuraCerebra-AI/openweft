@@ -962,12 +962,12 @@ const createNotificationRecorder = () => {
 
 const readAuditEntries = async (
   auditLogFile: string
-): Promise<Array<{ event: string; data?: Record<string, unknown> }>> => {
+): Promise<Array<{ event: string; level?: string; data?: Record<string, unknown> }>> => {
   return (await readFile(auditLogFile, 'utf8'))
     .trim()
     .split('\n')
     .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as { event: string; data?: Record<string, unknown> });
+    .map((line) => JSON.parse(line) as { event: string; level?: string; data?: Record<string, unknown> });
 };
 
 describe('runRealOrchestration', () => {
@@ -4700,7 +4700,7 @@ ${TEST_LEDGER_SECTION}
     }
   });
 
-  it('downgrades a completed run to failed when codex-home cleanup does not stick', async () => {
+  it('keeps a completed run completed but warns when codex-home cleanup does not stick', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -4708,8 +4708,13 @@ ${TEST_LEDGER_SECTION}
     });
 
     const { config, configHash } = await loadOpenWeftConfig(repoRoot);
-    await mkdir(config.paths.codexHomeDir, { recursive: true });
+    await mkdir(path.join(config.paths.codexHomeDir, '001'), { recursive: true });
     await writeFile(path.join(config.paths.codexHomeDir, 'state.sqlite'), 'test\n', 'utf8');
+    // Real copied worker credential that the scrub must remove. The mocked
+    // diagnostics keep codexHomePresent true so finalization treats the cleanup
+    // as not having stuck, which triggers the credential scrub.
+    const authPath = path.join(config.paths.codexHomeDir, '001', 'auth.json');
+    await writeFile(authPath, '{"token":"secret"}\n', 'utf8');
 
     vi.resetModules();
     vi.doMock('../../src/status/runtimeDiagnostics.js', async () => {
@@ -4738,7 +4743,8 @@ ${TEST_LEDGER_SECTION}
           },
           runtimeArtifacts: {
             codexHomePresent: true,
-            residueFileCount: 1
+            residueFileCount: 1,
+            authResidueCount: 1
           }
         }))
       };
@@ -4757,15 +4763,21 @@ ${TEST_LEDGER_SECTION}
         sleep: async () => {}
       });
 
-      expect(result.checkpoint.status).toBe('failed');
+      // C2: cleanup failure no longer downgrades the run; it stays completed.
+      expect(result.checkpoint.status).toBe('completed');
+
+      // The copied worker credential must have been best-effort scrubbed.
+      await expect(access(authPath)).rejects.toThrow();
 
       const auditEntries = await readAuditEntries(config.paths.auditLogFile);
-      const terminalAudit = auditEntries.find((entry) => entry.event === 'run.failed');
+      const terminalAudit = auditEntries.find((entry) => entry.event === 'run.completed');
 
+      expect(terminalAudit?.level).toBe('warn');
       expect(terminalAudit?.data).toEqual(expect.objectContaining({
-        status: 'failed',
+        status: 'completed',
         runtimeCleanup: expect.objectContaining({
-          action: 'cleanup-failed'
+          action: 'cleanup-failed',
+          credentialScrub: expect.any(String)
         })
       }));
     } finally {

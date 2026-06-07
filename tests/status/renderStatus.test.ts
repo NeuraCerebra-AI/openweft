@@ -23,7 +23,8 @@ describe('renderStatusReport', () => {
     },
     runtimeArtifacts: {
       codexHomePresent: false,
-      residueFileCount: 0
+      residueFileCount: 0,
+      authResidueCount: 0
     }
   } as const;
 
@@ -208,7 +209,8 @@ describe('renderStatusReport', () => {
         ...diagnostics,
         runtimeArtifacts: {
           codexHomePresent: true,
-          residueFileCount: 7
+          residueFileCount: 7,
+          authResidueCount: 0
         }
       }
     });

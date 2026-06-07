@@ -85,7 +85,8 @@ describe('stream start behavior', () => {
           },
           runtimeArtifacts: {
             codexHomePresent: false,
-            residueFileCount: 0
+            residueFileCount: 0,
+            authResidueCount: 0
           }
         }
       }

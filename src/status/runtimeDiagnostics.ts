@@ -26,6 +26,7 @@ export interface RuntimeDiagnostics {
   runtimeArtifacts: {
     codexHomePresent: boolean;
     residueFileCount: number;
+    authResidueCount: number;
   };
 }
 
@@ -64,6 +65,32 @@ const countResidueFiles = async (rootDir: string): Promise<number> => {
       entry.name.endsWith('.sqlite-wal') ||
       entry.name.endsWith('.jsonl')
     ) {
+      total += 1;
+    }
+  }
+
+  return total;
+};
+
+export const countAuthResidueFiles = async (rootDir: string): Promise<number> => {
+  // Mirror countResidueFiles' concurrent-deletion tolerance: a failed readdir
+  // contributes 0 instead of throwing. Counts files named exactly 'auth.json',
+  // skips symlinks so we never follow out of the codex-home tree, and tolerates
+  // the directory being missing entirely (→ 0).
+  const entries = await readdir(rootDir, { withFileTypes: true }).catch(() => []);
+  let total = 0;
+
+  for (const entry of entries) {
+    const absolutePath = path.join(rootDir, entry.name);
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+    if (entry.isDirectory()) {
+      total += await countAuthResidueFiles(absolutePath);
+      continue;
+    }
+
+    if (entry.name === 'auth.json') {
       total += 1;
     }
   }
@@ -123,11 +150,12 @@ export const collectRuntimeDiagnostics = async (input: {
   completedFeatures: FeatureCheckpoint[];
 }): Promise<RuntimeDiagnostics> => {
   const headCommit = await getHeadCommit(input.repoRoot).then((value) => value.trim()).catch(() => null);
-  const [primaryUpdatedAt, backupUpdatedAt, codexHomePresent, residueFileCount, checks] = await Promise.all([
+  const [primaryUpdatedAt, backupUpdatedAt, codexHomePresent, residueFileCount, authResidueCount, checks] = await Promise.all([
     readCheckpointUpdatedAt(input.checkpointFile),
     readCheckpointUpdatedAt(input.checkpointBackupFile),
     readdir(input.codexHomeDir).then(() => true).catch(() => false),
     countResidueFiles(input.codexHomeDir).catch(() => 0),
+    countAuthResidueFiles(input.codexHomeDir).catch(() => 0),
     buildMergeDurabilityChecks({
       repoRoot: input.repoRoot,
       headCommit,
@@ -150,7 +178,8 @@ export const collectRuntimeDiagnostics = async (input: {
     },
     runtimeArtifacts: {
       codexHomePresent,
-      residueFileCount
+      residueFileCount,
+      authResidueCount
     }
   };
 };

@@ -250,4 +250,38 @@ describe('claude adapter', () => {
       expect(result.classified.tier).toBe('fatal');
     }
   });
+
+  it('D2: classifies a signal-killed subprocess as transient even with fatal-sounding stderr', async () => {
+    const adapter = new ClaudeCliAdapter(async () => ({
+      stdout: '',
+      stderr: 'authentication',
+      exitCode: 1,
+      signal: 'SIGKILL',
+      timedOut: false
+    }));
+
+    const result = await adapter.runTurn(baseRequest());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.classified.tier).toBe('transient');
+    }
+  });
+
+  it('D2: classifies a timed-out subprocess as transient', async () => {
+    const adapter = new ClaudeCliAdapter(async () => ({
+      stdout: '',
+      stderr: 'authentication',
+      exitCode: 1,
+      signal: null,
+      timedOut: true
+    }));
+
+    const result = await adapter.runTurn(baseRequest());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.classified.tier).toBe('transient');
+    }
+  });
 });
