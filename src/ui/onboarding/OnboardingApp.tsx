@@ -29,7 +29,14 @@ export interface OnboardingAppProps {
  */
 function buildCompletedItems(state: OnboardingState): readonly string[] {
   const items: string[] = [];
-  const { currentStep, selectedBackend, selectedModel, selectedEffort, queuedRequests } = state;
+  const {
+    currentStep,
+    selectedBackend,
+    selectedAuthMode,
+    selectedModel,
+    selectedEffort,
+    queuedRequests
+  } = state;
 
   // Step 1 complete when we're on step 2 or beyond
   if (currentStep >= 2) {
@@ -38,7 +45,7 @@ function buildCompletedItems(state: OnboardingState): readonly string[] {
 
   // Step 2 complete when we're on step 3 or beyond (and we have a backend selected)
   if (currentStep >= 3 && selectedBackend !== null) {
-    const selectionSummary = [selectedBackend, selectedModel, selectedEffort]
+    const selectionSummary = [selectedBackend, selectedAuthMode, selectedModel, selectedEffort]
       .filter((value): value is string => value !== null)
       .join(' · ');
     items.push(`Backend: ${selectionSummary}`);
@@ -136,10 +143,11 @@ export const OnboardingApp: React.FC<OnboardingAppProps> = ({
           <StepBackends
             codexStatus={state.codexStatus}
             claudeStatus={state.claudeStatus}
-            onAdvance={({ backend, model, effort }) => {
+            onAdvance={({ backend, authMode, model, effort }) => {
               setState((prev) => ({
                 ...prev,
                 selectedBackend: backend,
+                selectedAuthMode: authMode,
                 selectedModel: model,
                 selectedEffort: effort,
               }));
@@ -167,11 +175,13 @@ export const OnboardingApp: React.FC<OnboardingAppProps> = ({
       case 4: {
         // selectedBackend must be set by this point
         const backend = state.selectedBackend ?? 'codex';
+        const authMode = state.selectedAuthMode ?? 'subscription';
         const model = state.selectedModel ?? getDefaultModelForBackend(backend);
         const effort = state.selectedEffort ?? getDefaultEffortForBackend(backend);
         return (
           <StepInit
             selectedBackend={backend}
+            selectedAuthMode={authMode}
             selectedModel={model}
             selectedEffort={effort}
             initialized={state.initialized}
@@ -230,9 +240,11 @@ export const OnboardingApp: React.FC<OnboardingAppProps> = ({
 
       case 7: {
         const backend = state.selectedBackend ?? 'codex';
+        const authMode = state.selectedAuthMode ?? 'subscription';
         return (
           <StepLaunch
             selectedBackend={backend}
+            selectedAuthMode={authMode}
             queuedCount={state.queuedRequests.length}
             onLaunch={(decision) => {
               setState((prev) => ({

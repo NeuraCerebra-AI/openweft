@@ -5,9 +5,11 @@ import type { BackendEffortLevel } from '../../config/options.js';
 import { useTheme } from '../theme.js';
 import { WizardFooter } from './WizardFooter.js';
 import { WizardHeader } from './WizardHeader.js';
+import type { OnboardingAuthMode } from './types.js';
 
 export interface StepInitProps {
   readonly selectedBackend: 'codex' | 'claude';
+  readonly selectedAuthMode: OnboardingAuthMode;
   readonly selectedModel: string;
   readonly selectedEffort: BackendEffortLevel;
   readonly initialized: boolean;
@@ -16,6 +18,7 @@ export interface StepInitProps {
   readonly onExit: () => void;
   readonly onRunInit: (selection: {
     backend: 'codex' | 'claude';
+    authMode: OnboardingAuthMode;
     model: string;
     effort: BackendEffortLevel;
   }) => Promise<void>;
@@ -24,7 +27,7 @@ export interface StepInitProps {
 }
 
 const CREATED_ITEMS = [
-  { path: '.openweftrc.json', description: 'config (backend: {backend}, model: {model}, effort: {effort})' },
+  { path: '.openweftrc.json', description: 'config (backend: {backend}, auth: {auth}, model: {model}, effort: {effort})' },
   { path: '.openweft/', description: 'runtime directory' },
   { path: 'feature_requests/queue.txt', description: 'work queue' },
   { path: 'prompts/prompt-a.md', description: 'plan creation prompt' },
@@ -34,6 +37,7 @@ const CREATED_ITEMS = [
 
 export const StepInit: React.FC<StepInitProps> = ({
   selectedBackend,
+  selectedAuthMode,
   selectedModel,
   selectedEffort,
   initialized,
@@ -50,6 +54,7 @@ export const StepInit: React.FC<StepInitProps> = ({
   useEffect(() => {
     onRunInit({
       backend: selectedBackend,
+      authMode: selectedAuthMode,
       model: selectedModel,
       effort: selectedEffort
     }).then(
@@ -111,6 +116,7 @@ export const StepInit: React.FC<StepInitProps> = ({
             {CREATED_ITEMS.map((item) => {
               const description = item.description
                 .replace('{backend}', selectedBackend)
+                .replace('{auth}', selectedAuthMode)
                 .replace('{model}', selectedModel)
                 .replace('{effort}', selectedEffort);
               return (

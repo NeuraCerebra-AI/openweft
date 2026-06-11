@@ -5,6 +5,7 @@ export interface BackendDetection {
   authenticated: boolean;
 }
 
+export type OnboardingAuthMode = 'subscription' | 'api_key';
 export type StepKey = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export interface OnboardingState {
@@ -14,6 +15,7 @@ export interface OnboardingState {
   codexStatus: BackendDetection;
   claudeStatus: BackendDetection;
   selectedBackend: 'codex' | 'claude' | null;
+  selectedAuthMode: OnboardingAuthMode | null;
   selectedModel: string | null;
   selectedEffort: BackendEffortLevel | null;
   gitInitError: string | null;
@@ -27,6 +29,7 @@ export interface WizardCallbacks {
   onGitInit: () => Promise<void>;
   onRunInit: (selection: {
     backend: 'codex' | 'claude';
+    authMode: OnboardingAuthMode;
     model: string;
     effort: BackendEffortLevel;
   }) => Promise<void>;

@@ -427,6 +427,19 @@ npm run build
 npm run release:check
 ```
 
+## Release readiness
+
+`npm run release:check` is the package/repo readiness gate. It proves the TypeScript build, tests, packaged installed-CLI smoke, and `npm publish --dry-run` path are healthy for the current repository state.
+
+Live backend claims require separate smoke evidence from the same release window:
+
+```bash
+OPENWEFT_LIVE_SMOKE_TIMEOUT_MS=<timeout> npm run smoke:live:codex:resume
+npm run smoke:live:claude
+```
+
+Claim Codex-ready only after the Codex resume smoke passes. Claim Claude-ready only after the Claude live smoke passes. Claim both-backend readiness only when both commands pass in the same release window. CI and release documentation assume npm `11.6.0`, matching `packageManager`.
+
 ## License
 
 MIT

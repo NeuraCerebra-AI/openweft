@@ -2,6 +2,7 @@ import {
   assertLedgerSection,
   parseManifestDocument,
   type Manifest,
+  type ManifestParseMethod,
   updateManifestInMarkdown
 } from '../domain/manifest.js';
 
@@ -34,7 +35,7 @@ export const repairPlanMarkdownIfNeeded = async (input: {
   promptBMarkdown?: string;
   runRepairTurn: (prompt: string) => Promise<PlanRepairTurnResult>;
   onInvalidPlanAttempt?: (attempt: InvalidPlanAttempt) => Promise<void> | void;
-}): Promise<{ markdown: string; manifest: Manifest; sessionId: string | null }> => {
+}): Promise<{ markdown: string; manifest: Manifest; recoveryMethod: ManifestParseMethod; sessionId: string | null }> => {
   const lastKnownGoodOpts: { lastKnownGood?: Manifest } = {};
   if (input.shadowMarkdown) {
     try {
@@ -55,6 +56,7 @@ export const repairPlanMarkdownIfNeeded = async (input: {
     return {
       markdown: updateManifestInMarkdown(input.initialMarkdown, parsed.manifest),
       manifest: parsed.manifest,
+      recoveryMethod: parsed.recoveryMethod,
       sessionId: null
     };
   } catch (error) {
@@ -115,6 +117,7 @@ export const repairPlanMarkdownIfNeeded = async (input: {
       return {
         markdown: updateManifestInMarkdown(repairResult.finalMessage, repaired.manifest),
         manifest: repaired.manifest,
+        recoveryMethod: repaired.recoveryMethod,
         sessionId: repairResult.sessionId
       };
     } catch (parseError) {

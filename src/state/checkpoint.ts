@@ -13,8 +13,14 @@ export const FeatureStatusSchema = z.enum([
   'executing',
   'completed',
   'failed',
-  'skipped'
+  'skipped',
+  'planning-needs-review',
+  'adjustment-needs-review',
+  'blocked-by-failed-feature'
 ]);
+
+const ManifestRecoveryMethodSchema = z.enum(['json', 'jsonrepair', 'json5', 'last-known-good']);
+const ManifestConfidenceSchema = z.enum(['current', 'stale']);
 
 export const RunStatusSchema = z.enum([
   'idle',
@@ -51,6 +57,10 @@ export const FeatureCheckpointSchema = z
     sessionScope: z.enum(['repo', 'worktree']).nullable().optional(),
     backend: BackendSchema.nullable().optional(),
     manifest: ManifestSchema.nullable().optional(),
+    manifestRecoveryMethod: ManifestRecoveryMethodSchema.nullable().optional(),
+    manifestConfidence: ManifestConfidenceSchema.nullable().optional(),
+    reviewReason: z.string().nullable().optional(),
+    blockedByFeatureIds: z.array(z.string()).optional(),
     rerunEligible: z.boolean().optional().default(true),
     mergeResolutionAttempts: z.number().int().nonnegative().optional().default(0),
     priorityScore: z.number().nullable().optional(),
@@ -81,6 +91,17 @@ export const ApprovalStateCheckpointSchema = z
   .strict();
 
 export type ApprovalStateCheckpoint = z.infer<typeof ApprovalStateCheckpointSchema>;
+
+export const ReviewMetadataSchema = z
+  .object({
+    planningNeedsReviewFeatureIds: z.array(z.string()).optional().default([]),
+    adjustmentNeedsReviewFeatureIds: z.array(z.string()).optional().default([]),
+    blockedFeatureIds: z.array(z.string()).optional().default([]),
+    lastReviewReason: z.string().nullable().optional().default(null)
+  })
+  .strict();
+
+export type ReviewMetadataCheckpoint = z.infer<typeof ReviewMetadataSchema>;
 
 export const CheckpointSchema = z
   .object({
@@ -120,6 +141,12 @@ export const CheckpointSchema = z
     approvalState: ApprovalStateCheckpointSchema.optional().default({
       firstApprovalSatisfied: false,
       approvedFeatureIds: []
+    }),
+    review: ReviewMetadataSchema.optional().default({
+      planningNeedsReviewFeatureIds: [],
+      adjustmentNeedsReviewFeatureIds: [],
+      blockedFeatureIds: [],
+      lastReviewReason: null
     }),
     cost: CheckpointCostTotalsSchema
   })
@@ -214,6 +241,12 @@ export const createEmptyCheckpoint = (input: {
       firstApprovalSatisfied: false,
       approvedFeatureIds: []
     },
+    review: {
+      planningNeedsReviewFeatureIds: [],
+      adjustmentNeedsReviewFeatureIds: [],
+      blockedFeatureIds: [],
+      lastReviewReason: null
+    },
     cost: createEmptyCostTotals()
   };
 };
@@ -277,6 +310,14 @@ export const saveCheckpoint = async (
     } catch (backupError) {
       console.warn(
         `OpenWeft: failed to write checkpoint backup to ${paths.backupFile}: ${backupError instanceof Error ? backupError.message : String(backupError)}`
+      );
+    }
+  } else {
+    try {
+      await writeJsonFileAtomic(paths.backupFile, checkpoint);
+    } catch (backupError) {
+      console.warn(
+        `OpenWeft: failed to seed checkpoint backup at ${paths.backupFile}: ${backupError instanceof Error ? backupError.message : String(backupError)}`
       );
     }
   }

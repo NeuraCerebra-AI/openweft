@@ -120,12 +120,13 @@ export interface PruneOrphanedOpenWeftArtifactsInput {
 export interface PruneOrphanedOpenWeftArtifactsResult {
   removedWorktreePaths: string[];
   removedBranchNames: string[];
+  retainedBranchNames: string[];
 }
 
 export interface ReusableExecutionCommit {
   kind: 'reusable' | 'already-merged';
   branchName: string;
-  worktreePath: string;
+  worktreePath: string | null;
 }
 
 interface ManagedStashEntry {
@@ -460,40 +461,66 @@ export const findReusableExecutionCommit = async (input: {
   expectedCommitMessage: string;
 }): Promise<ReusableExecutionCommit | null> => {
   try {
-    if (!input.worktreePath || !input.branchName) {
+    if (!input.branchName) {
+      return null;
+    }
+    if (!input.branchName.startsWith('openweft-')) {
       return null;
     }
 
-    const normalizedWorktreesDir = await normalizeExistingPath(input.worktreesDir);
-    const normalizedWorktreePath = await normalizeExistingPath(input.worktreePath);
-    if (!isWithinDirectory(normalizedWorktreePath, normalizedWorktreesDir)) {
+    const repoGit = createGit(input.repoRoot);
+    const branchExists = await repoGit
+      .raw(['rev-parse', '--verify', input.branchName])
+      .then(() => true)
+      .catch(() => false);
+    if (!branchExists) {
       return null;
     }
 
+    let inspectedWorktreePath: string | null = null;
     let matchingWorktree: WorktreeRecord | undefined;
-    for (const worktree of await listWorktrees(input.repoRoot)) {
-      const normalizedListedPath = await normalizeExistingPath(worktree.path);
-      if (normalizedListedPath === normalizedWorktreePath) {
-        matchingWorktree = worktree;
-        break;
+    if (input.worktreePath) {
+      const normalizedWorktreesDir = await normalizeExistingPath(input.worktreesDir);
+      const normalizedWorktreePath = await normalizeExistingPath(input.worktreePath);
+      if (!isWithinDirectory(normalizedWorktreePath, normalizedWorktreesDir)) {
+        return null;
+      }
+
+      for (const worktree of await listWorktrees(input.repoRoot)) {
+        const normalizedListedPath = await normalizeExistingPath(worktree.path);
+        if (normalizedListedPath === normalizedWorktreePath) {
+          matchingWorktree = worktree;
+          break;
+        }
+      }
+
+      if (matchingWorktree && matchingWorktree.branch === input.branchName) {
+        inspectedWorktreePath = input.worktreePath;
       }
     }
 
-    if (!matchingWorktree || matchingWorktree.branch !== input.branchName) {
-      return null;
+    let ahead = 0;
+    if (inspectedWorktreePath) {
+      const status = await getWorktreeStatusSummary(inspectedWorktreePath, input.baseBranch);
+      if (status.dirty) {
+        return null;
+      }
+      ahead = status.ahead;
+    } else {
+      const revList = (await repoGit.raw(['rev-list', '--left-right', '--count', `${input.baseBranch}...${input.branchName}`]))
+        .trim()
+        .split(/\s+/);
+      ahead = Number.parseInt(revList[1] ?? '0', 10);
     }
 
-    const status = await getWorktreeStatusSummary(input.worktreePath, input.baseBranch);
-    if (status.dirty) {
-      return null;
-    }
-
-    const headSubject = (await createGit(input.worktreePath).raw(['log', '-1', '--pretty=%s'])).trim();
+    const inspectGit = inspectedWorktreePath ? createGit(inspectedWorktreePath) : repoGit;
+    const headRef = inspectedWorktreePath ? 'HEAD' : input.branchName;
+    const headSubject = (await inspectGit.raw(['log', '-1', '--pretty=%s', headRef])).trim();
     if (headSubject !== input.expectedCommitMessage) {
       return null;
     }
 
-    const changedPaths = (await createGit(input.worktreePath).raw(['diff-tree', '-r', '--no-commit-id', '--name-only', 'HEAD']))
+    const changedPaths = (await inspectGit.raw(['diff-tree', '-r', '--no-commit-id', '--name-only', headRef]))
       .split('\n')
       .map((entry) => normalizePathForComparison(entry.trim()))
       .filter(Boolean);
@@ -501,16 +528,16 @@ export const findReusableExecutionCommit = async (input: {
       return null;
     }
 
-    if (status.ahead === 1) {
+    if (ahead === 1) {
       return {
         kind: 'reusable',
         branchName: input.branchName,
-        worktreePath: input.worktreePath
+        worktreePath: inspectedWorktreePath
       };
     }
 
-    const alreadyMerged = await createGit(input.worktreePath)
-      .raw(['merge-base', '--is-ancestor', 'HEAD', input.baseBranch])
+    const alreadyMerged = await inspectGit
+      .raw(['merge-base', '--is-ancestor', headRef, input.baseBranch])
       .then(() => true)
       .catch(() => false);
     if (!alreadyMerged) {
@@ -520,7 +547,7 @@ export const findReusableExecutionCommit = async (input: {
     return {
       kind: 'already-merged',
       branchName: input.branchName,
-      worktreePath: input.worktreePath
+      worktreePath: inspectedWorktreePath
     };
   } catch {
     return null;
@@ -632,6 +659,7 @@ export const pruneOrphanedOpenWeftArtifacts = async (
 ): Promise<PruneOrphanedOpenWeftArtifactsResult> => {
   const removedWorktreePaths = new Set<string>();
   const removedBranchNames = new Set<string>();
+  const retainedBranchNamesSeen = new Set<string>();
   const normalizedWorktreesDir = await normalizeExistingPath(input.worktreesDir);
   const retainedWorktreePaths = new Set(
     await Promise.all(
@@ -653,6 +681,10 @@ export const pruneOrphanedOpenWeftArtifacts = async (
       continue;
     }
     if (retainedWorktreePaths.has(normalizedWorktreePath)) {
+      continue;
+    }
+    if (worktree.branch && retainedBranchNames.has(worktree.branch)) {
+      retainedBranchNamesSeen.add(worktree.branch);
       continue;
     }
 
@@ -696,7 +728,8 @@ export const pruneOrphanedOpenWeftArtifacts = async (
 
   return {
     removedWorktreePaths: [...removedWorktreePaths].sort(),
-    removedBranchNames: [...removedBranchNames].sort()
+    removedBranchNames: [...removedBranchNames].sort(),
+    retainedBranchNames: [...retainedBranchNamesSeen].sort()
   };
 };
 
@@ -908,6 +941,23 @@ export const mergeBranchIntoCurrent = async (
       );
     }
     const autoStashResult = await restoreAutoStash(git, autoStash);
+    if (!autoStashResult.restored) {
+      throw new PostMergeAutoStashRestoreError({
+        branch,
+        preMergeCommit,
+        mergeCommit: preMergeCommit,
+        editSummary: {
+          merge_commit: preMergeCommit,
+          branch,
+          pre_merge_commit: preMergeCommit,
+          total_files_changed: 0,
+          total_lines_added: 0,
+          total_lines_removed: 0,
+          files: []
+        },
+        autoStash: autoStashResult
+      });
+    }
 
     return {
       status: 'conflict',

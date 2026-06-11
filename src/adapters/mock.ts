@@ -233,13 +233,30 @@ export class MockAgentAdapter implements AgentAdapter {
       });
     }
 
-    if (request.stage === 'execution') {
-      const parsedPlan = parseManifestDocument(extractPlanMarkdownFromExecutionPrompt(request.prompt));
-      await applyManifestToWorkspace(request.cwd, parsedPlan.manifest);
-    }
+    try {
+      if (request.stage === 'execution') {
+        const parsedPlan = parseManifestDocument(extractPlanMarkdownFromExecutionPrompt(request.prompt));
+        await applyManifestToWorkspace(request.cwd, parsedPlan.manifest);
+      }
 
-    if (request.stage === 'conflict-resolution') {
-      await resolveMockConflicts(request.cwd);
+      if (request.stage === 'conflict-resolution') {
+        await resolveMockConflicts(request.cwd);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return createAdapterFailure({
+        backend: this.backend,
+        request,
+        command,
+        execution: {
+          stdout: '',
+          stderr: message,
+          exitCode: 1,
+          failed: true
+        },
+        error,
+        sessionId: buildMockSessionId(request)
+      });
     }
 
     const usage = {

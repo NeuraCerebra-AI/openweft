@@ -20,7 +20,7 @@ import { addCostRecordToTotals, type CostRecord } from '../domain/costs.js';
 import { listEditSummaryPaths, type EditSummary } from '../domain/editSummary.js';
 import { circuitBreakerTripped, classifyError } from '../domain/errors.js';
 import { createPlanFilename, createPromptBFilename, formatFeatureId, slugifyFeatureRequest } from '../domain/featureIds.js';
-import { assertLedgerSection, parseManifestDocument, type Manifest, updateManifestInMarkdown } from '../domain/manifest.js';
+import { assertLedgerSection, findManifestOverlap, parseManifestDocument, type Manifest, updateManifestInMarkdown } from '../domain/manifest.js';
 import { buildExecutionPhases } from '../domain/phases.js';
 import type { PriorityTier } from '../domain/primitives.js';
 import {
@@ -67,6 +67,13 @@ import {
   type FeatureCheckpoint,
   type OrchestratorCheckpoint
 } from '../state/checkpoint.js';
+import {
+  hasActionableUnfinishedWork,
+  isActionableFeature,
+  isReviewFeatureStatus,
+  isUnresolvedTerminalFeature,
+  syncReviewMetadata
+} from '../state/recovery.js';
 import { getTmuxSlotLogFile, type TmuxMonitor } from '../tmux/index.js';
 import { OPENWEFT_VERSION } from '../version.js';
 import { appendAuditEntry } from './audit.js';
@@ -115,16 +122,14 @@ const BINARY_SCORING_EXTENSIONS = new Set([
   '.woff2',
   '.zip'
 ]);
-const ACTIONABLE_CHECKPOINT_FEATURE_STATUSES = new Set<FeatureCheckpoint['status']>([
-  'pending',
-  'planned',
-  'executing',
-  'failed'
-]);
 const RECOVERABLE_EXECUTION_STATUSES = new Set<FeatureCheckpoint['status']>(['planned', 'executing']);
 const PROMPT_B_SAVE_FAILURE_PATTERN = /\b(?:could not|can't|cannot|failed to|unable to)\s+(?:save|write)\b/i;
 const PROMPT_B_WRITE_FAILURE_CONTEXT_PATTERN =
   /\b(?:read-only|operation not permitted|permission denied|sandbox)\b/i;
+
+const requiresExecutionResumeArtifacts = (feature: FeatureCheckpoint): boolean =>
+  RECOVERABLE_EXECUTION_STATUSES.has(feature.status) ||
+  (feature.status === 'failed' && feature.rerunEligible !== false);
 
 const looksLikeWrappedPromptBSaveFailure = (preamble: string): boolean => {
   if (preamble.trim().length === 0) {
@@ -212,7 +217,7 @@ interface RecoveredExecutionResult {
   status: 'completed';
   allowFullRerun: false;
   branchName: string;
-  worktreePath: string;
+  worktreePath: string | null;
   sessionId: null;
   baselineCommit: null;
   evolvedPlanFile: null;
@@ -256,6 +261,7 @@ const saveCheckpointSnapshot = async (
   config: ResolvedOpenWeftConfig,
   checkpoint: OrchestratorCheckpoint
 ): Promise<void> => {
+  syncReviewMetadata(checkpoint);
   checkpoint.updatedAt = timestamp();
   await saveCheckpoint({
     checkpoint,
@@ -294,14 +300,15 @@ const pruneOrphanedOpenWeftArtifactsAtStartup = async (
 ): Promise<{
   removedWorktreePaths: string[];
   removedBranchNames: string[];
+  retainedBranchNames: string[];
 }> => {
   const checkpointResult = await loadCheckpoint({
     checkpointFile: config.paths.checkpointFile,
     checkpointBackupFile: config.paths.checkpointBackupFile
   });
   const retainedFeatures = checkpointResult.checkpoint
-    ? Object.values(checkpointResult.checkpoint.features).filter((feature) =>
-        ACTIONABLE_CHECKPOINT_FEATURE_STATUSES.has(feature.status)
+    ? Object.values(checkpointResult.checkpoint.features).filter(
+        (feature) => isActionableFeature(feature) || isUnresolvedTerminalFeature(feature)
       )
     : [];
 
@@ -413,6 +420,16 @@ const writeShadowPlan = async (
   return shadowFile;
 };
 
+const writeRejectedAdjustmentPlan = async (
+  config: ResolvedOpenWeftConfig,
+  featureId: string,
+  markdown: string
+): Promise<string> => {
+  const rejectedFile = path.join(config.paths.shadowPlansDir, `${featureId}.rejected-adjustment.md`);
+  await writeTextFileAtomic(rejectedFile, markdown);
+  return rejectedFile;
+};
+
 const maybeReadShadowPlan = async (
   config: ResolvedOpenWeftConfig,
   featureId: string
@@ -449,15 +466,83 @@ const updateQueueOrdering = (
 };
 
 const isExecutionEligibleFeature = (
-  feature: Pick<FeatureCheckpoint, 'status' | 'rerunEligible'>
+  feature: Pick<FeatureCheckpoint, 'status' | 'rerunEligible' | 'manifest' | 'manifestRecoveryMethod' | 'manifestConfidence'>
 ): boolean => {
-  return feature.status === 'planned' || (feature.status === 'failed' && feature.rerunEligible);
+  const hasSchedulableManifest =
+    feature.manifest !== null &&
+    feature.manifest !== undefined &&
+    feature.manifestRecoveryMethod !== 'last-known-good' &&
+    feature.manifestConfidence !== 'stale';
+
+  return hasSchedulableManifest && (feature.status === 'planned' || (feature.status === 'failed' && feature.rerunEligible));
 };
 
 const getExecutionEligibleFeatures = (
   checkpoint: OrchestratorCheckpoint
 ): FeatureCheckpoint[] => {
   return Object.values(checkpoint.features).filter((feature) => isExecutionEligibleFeature(feature));
+};
+
+const isBlockingUnresolvedFeature = (feature: FeatureCheckpoint): boolean =>
+  isReviewFeatureStatus(feature.status) || (feature.status === 'failed' && feature.rerunEligible === false);
+
+const markUnschedulableManifestFeaturesForReview = (checkpoint: OrchestratorCheckpoint): string[] => {
+  const markedFeatureIds: string[] = [];
+
+  for (const feature of Object.values(checkpoint.features)) {
+    if (feature.status !== 'planned' && !(feature.status === 'failed' && feature.rerunEligible)) {
+      continue;
+    }
+
+    if (isExecutionEligibleFeature(feature)) {
+      continue;
+    }
+
+    updateFeatureCheckpoint(checkpoint, feature.id, {
+      status: 'planning-needs-review',
+      manifestConfidence: feature.manifestRecoveryMethod === 'last-known-good' ? 'stale' : feature.manifestConfidence ?? null,
+      reviewReason: feature.manifest
+        ? 'Feature does not have a current execution-schedulable manifest.'
+        : 'Feature is missing an execution manifest.',
+      lastError: feature.manifest
+        ? 'Feature does not have a current execution-schedulable manifest.'
+        : 'Feature is missing an execution manifest.'
+    });
+    markedFeatureIds.push(feature.id);
+  }
+
+  return markedFeatureIds;
+};
+
+const blockFeaturesOverlappingUnresolvedWork = (checkpoint: OrchestratorCheckpoint): string[] => {
+  const blockingFeatures = Object.values(checkpoint.features)
+    .filter((feature) => isBlockingUnresolvedFeature(feature) && feature.manifest);
+  const blockedFeatureIds: string[] = [];
+
+  for (const candidate of getExecutionEligibleFeatures(checkpoint)) {
+    const blockers = blockingFeatures.filter((blocker) => {
+      if (blocker.id === candidate.id || !blocker.manifest || !candidate.manifest) {
+        return false;
+      }
+
+      return findManifestOverlap(blocker.manifest, candidate.manifest).length > 0;
+    });
+
+    if (blockers.length === 0) {
+      continue;
+    }
+
+    const blockerIds = blockers.map((blocker) => blocker.id).sort();
+    updateFeatureCheckpoint(checkpoint, candidate.id, {
+      status: 'blocked-by-failed-feature',
+      blockedByFeatureIds: blockerIds,
+      reviewReason: `Overlaps unresolved feature${blockerIds.length === 1 ? '' : 's'} ${blockerIds.join(', ')}.`,
+      lastError: `Blocked by unresolved overlapping feature${blockerIds.length === 1 ? '' : 's'} ${blockerIds.join(', ')}.`
+    });
+    blockedFeatureIds.push(candidate.id);
+  }
+
+  return blockedFeatureIds;
 };
 
 const getBackendAuth = (
@@ -802,6 +887,22 @@ const sanitizeCommandForAudit = (command: AdapterCommandSpec): Record<string, un
   };
 };
 
+const buildCommandPreviewForAudit = (
+  adapter: AgentAdapter,
+  request: AdapterTurnRequest
+): AdapterCommandSpec => {
+  try {
+    return adapter.buildCommand(request);
+  } catch {
+    return {
+      command: adapter.backend,
+      args: [],
+      cwd: request.cwd,
+      input: request.prompt
+    };
+  }
+};
+
 const loadOrCreateCheckpoint = async (
   input: RealRunInput
 ): Promise<{
@@ -822,9 +923,12 @@ const loadOrCreateCheckpoint = async (
     };
   }
 
+  const existingQueueContent = (await readTextFileIfExists(input.config.paths.queueFile)) ?? '';
+  const existingQueue = parseQueueFile(existingQueueContent);
+
   if (
     existing.checkpoint.configHash !== input.configHash &&
-    countFeatureStatuses(existing.checkpoint, ['planned', 'executing', 'failed']) > 0
+    hasActionableUnfinishedWork(existing.checkpoint, existingQueue.pending)
   ) {
     throw new Error(
       'OpenWeft configuration changed while unfinished work remains. Resolve or clear the checkpoint before resuming.'
@@ -855,8 +959,30 @@ const loadOrCreateCheckpoint = async (
     needsCheckpointSave = true;
   }
 
+  if (
+    checkpoint.status === 'stopped' &&
+    hasActionableUnfinishedWork(checkpoint, existingQueue.pending)
+  ) {
+    checkpoint.status = 'in-progress';
+    checkpoint.currentState = 'idle';
+    checkpoint.updatedAt = timestamp();
+    needsCheckpointSave = true;
+    await appendAudit(input.config, {
+      level: 'info',
+      event: 'run.resumed_from_stopped',
+      message: 'Reopened stopped checkpoint with actionable unfinished work.',
+      data: {
+        checkpointId: checkpoint.checkpointId,
+        pendingQueueCount: existingQueue.pending.length,
+        pendingMergeSummaryCount: checkpoint.pendingMergeSummaries.length,
+        actionableFeatureIds: Object.values(checkpoint.features)
+          .filter((feature) => isActionableFeature(feature))
+          .map((feature) => feature.id)
+      }
+    });
+  }
+
   if (existing.checkpoint.currentState === 'planning') {
-    const existingQueueContent = (await readTextFileIfExists(input.config.paths.queueFile)) ?? '';
     const recoveredQueueContent = buildQueueContentFromCheckpointState({
       existingContent: existingQueueContent,
       processed: Object.values(existing.checkpoint.features).map((feature) => ({
@@ -959,7 +1085,7 @@ const loadOrCreateCheckpoint = async (
 
   let repairedPromptBFiles = false;
   for (const feature of Object.values(checkpoint.features)) {
-    if (!ACTIONABLE_CHECKPOINT_FEATURE_STATUSES.has(feature.status) || recoveredExecutions.has(feature.id)) {
+    if (!requiresExecutionResumeArtifacts(feature) || recoveredExecutions.has(feature.id)) {
       continue;
     }
 
@@ -1007,6 +1133,10 @@ const loadOrCreateCheckpoint = async (
 
   let repairedEvolvedPlanFiles = false;
   for (const feature of Object.values(checkpoint.features)) {
+    if (isReviewFeatureStatus(feature.status)) {
+      continue;
+    }
+
     const canonicalEvolvedPlanFile = buildEvolvedPlanPath(input.config, feature.id);
     const configuredEvolvedPlanExists = feature.evolvedPlanFile
       ? await pathExists(feature.evolvedPlanFile)
@@ -1385,7 +1515,7 @@ const runTurnAndRecord = async (
     }
   }
 
-  const commandPreview = input.adapter.buildCommand(request);
+  const commandPreview = buildCommandPreviewForAudit(input.adapter, request);
   emitOrchestratorEvent(input, {
     type: 'agent:started',
     agentId: request.featureId,
@@ -1535,9 +1665,11 @@ const planPendingRequests = async (
       | {
           markdown: string;
           manifest: Manifest;
+          recoveryMethod: 'json' | 'jsonrepair' | 'json5' | 'last-known-good';
           sessionId: string | null;
         }
       | null = null;
+    let lastRejectedPlanFile: string | null = null;
 
     try {
       const stageOnePrompt = injectPromptTemplate(
@@ -1670,6 +1802,7 @@ const planPendingRequests = async (
           const shadowPlanFile = attempt.markdown
             ? await writeShadowPlan(context.config, featureId, attempt.markdown)
             : null;
+          lastRejectedPlanFile = shadowPlanFile ?? lastRejectedPlanFile;
           await appendAudit(context.config, {
             level: 'warn',
             event: 'feature.planning.repair.rejected',
@@ -1706,18 +1839,22 @@ const planPendingRequests = async (
         id: featureId,
         title: summarizeQueueRequest(pending.request),
         request: pending.request,
-        status: 'skipped',
+        status: 'planning-needs-review',
         attempts: 0,
         planFile: null,
         promptBFile: promptBFilePath,
-        evolvedPlanFile: null,
+        evolvedPlanFile: lastRejectedPlanFile,
         branchName: null,
         worktreePath: null,
         sessionId: null,
         sessionScope: null,
         backend: context.adapter.backend,
         manifest: null,
-        rerunEligible: false,
+        manifestRecoveryMethod: null,
+        manifestConfidence: null,
+        reviewReason: message,
+        blockedByFeatureIds: [],
+        rerunEligible: true,
         mergeResolutionAttempts: 0,
         priorityScore: null,
         priorityTier: null,
@@ -1742,18 +1879,20 @@ const planPendingRequests = async (
 
       await appendAudit(context.config, {
         level: 'error',
-        event: 'feature.planning.skipped',
-        message: `Skipped feature ${featureId} after planning failed.`,
+        event: 'feature.planning.needs_review',
+        message: `Feature ${featureId} needs review after planning failed.`,
         data: {
           featureId,
           request: pending.request,
           error: message,
-          promptBFile: promptBFilePath
+          promptBFile: promptBFilePath,
+          rejectedPlanFile: lastRejectedPlanFile,
+          retryable: true
         }
       });
       await announceProgress(
         context,
-        `Skipping feature ${featureId} because planning failed: ${message}`
+        `Feature ${featureId} needs review because planning failed: ${message}`
       );
       await saveCheckpointSnapshot(context.config, checkpoint);
       await writeTextFileAtomic(
@@ -1782,11 +1921,12 @@ const planPendingRequests = async (
       pending.request
     );
 
+    const recoveredStaleManifest = repairedPlan.recoveryMethod === 'last-known-good';
     checkpoint.features[featureId] = {
       id: featureId,
       title: summarizeQueueRequest(pending.request),
       request: pending.request,
-      status: 'planned',
+      status: recoveredStaleManifest ? 'planning-needs-review' : 'planned',
       attempts: 0,
       planFile: planFilePath,
       promptBFile: promptBFilePath,
@@ -1798,6 +1938,10 @@ const planPendingRequests = async (
       sessionScope: null,
       backend: context.adapter.backend,
       manifest: repairedPlan.manifest,
+      manifestRecoveryMethod: repairedPlan.recoveryMethod,
+      manifestConfidence: recoveredStaleManifest ? 'stale' : 'current',
+      reviewReason: recoveredStaleManifest ? 'Manifest was recovered from a last-known-good fallback and needs review before execution.' : null,
+      blockedByFeatureIds: [],
       rerunEligible: true,
       mergeResolutionAttempts: 0,
       priorityScore: null,
@@ -1846,7 +1990,39 @@ const scoreAndPhaseCheckpoint = async (
   phases: ReturnType<typeof buildExecutionPhases>;
 }> => {
   const checkpoint = cloneCheckpoint(context.checkpoint);
+  const manifestReviewFeatureIds = markUnschedulableManifestFeaturesForReview(checkpoint);
+  const blockedFeatureIds = blockFeaturesOverlappingUnresolvedWork(checkpoint);
   const executableFeatures = getExecutionEligibleFeatures(checkpoint);
+
+  if (manifestReviewFeatureIds.length > 0) {
+    await appendAudit(context.config, {
+      level: 'warn',
+      event: 'feature.manifest.needs_review',
+      message: 'Moved features without current manifests to review before scheduling.',
+      data: {
+        featureIds: manifestReviewFeatureIds
+      }
+    });
+  }
+
+  if (blockedFeatureIds.length > 0) {
+    await appendAudit(context.config, {
+      level: 'warn',
+      event: 'feature.blocked_by_failed_feature',
+      message: 'Blocked features that overlap unresolved failed or review-needed work.',
+      data: {
+        featureIds: blockedFeatureIds
+      }
+    });
+  }
+
+  const unresolvedBlockers = Object.values(checkpoint.features).filter(isBlockingUnresolvedFeature);
+  if (unresolvedBlockers.length > 0 && executableFeatures.length > 0) {
+    await announceProgress(
+      context,
+      `Continuing unrelated work; feature ${unresolvedBlockers[0]?.id ?? 'unknown'} requires attention.`
+    );
+  }
 
   if (executableFeatures.length === 0) {
     checkpoint.queue = {
@@ -2265,7 +2441,10 @@ const runPendingReanalysis = async (
 
       if (!adjustment.ok) {
         updateFeatureCheckpoint(checkpoint, feature.id, {
-          lastError: adjustment.error
+          status: 'adjustment-needs-review',
+          lastError: adjustment.error,
+          reviewReason: adjustment.error,
+          manifestConfidence: feature.manifest ? (feature.manifestConfidence ?? 'current') : null
         });
         await appendReanalysisDecisionAudit(context, {
           phaseIndex,
@@ -2278,6 +2457,7 @@ const runPendingReanalysis = async (
           context,
           `Plan adjustment for ${getFeatureLabel(feature)} failed${adjustment.error ? `: ${adjustment.error}` : '.'}`
         );
+        await saveCheckpointSnapshot(context.config, checkpoint);
         continue;
       }
 
@@ -2306,15 +2486,47 @@ const runPendingReanalysis = async (
               }
             : {})
         });
+        if (parsed.recoveryMethod === 'last-known-good') {
+          const rejectedPlanFile = await writeRejectedAdjustmentPlan(context.config, feature.id, adjustedPlan);
+          updateFeatureCheckpoint(checkpoint, feature.id, {
+            status: 'adjustment-needs-review',
+            evolvedPlanFile: rejectedPlanFile,
+            manifest: parsed.manifest,
+            manifestRecoveryMethod: parsed.recoveryMethod,
+            manifestConfidence: 'stale',
+            sessionId: adjustment.sessionId,
+            sessionScope: adjustment.sessionId ? 'repo' : null,
+            lastError: 'Adjusted manifest was recovered from a last-known-good fallback.',
+            reviewReason: 'Adjusted manifest was recovered from a last-known-good fallback and needs review before execution.'
+          });
+          await appendReanalysisDecisionAudit(context, {
+            phaseIndex,
+            feature,
+            decision: 'adjustment-failed',
+            overlapPaths,
+            error: 'Adjusted manifest was recovered from a last-known-good fallback.'
+          });
+          await announceProgress(
+            context,
+            `Plan adjustment for ${getFeatureLabel(feature)} needs review because its manifest fallback is stale.`
+          );
+          await saveCheckpointSnapshot(context.config, checkpoint);
+          continue;
+        }
         const normalizedPlan = updateManifestInMarkdown(adjustedPlan, parsed.manifest);
         const planChanged = normalizedPlan !== currentPlan;
         await writeTextFileAtomic(planFile, normalizedPlan);
         await writeShadowPlan(context.config, feature.id, normalizedPlan);
         updateFeatureCheckpoint(checkpoint, feature.id, {
+          status: 'planned',
           manifest: parsed.manifest,
+          manifestRecoveryMethod: parsed.recoveryMethod,
+          manifestConfidence: 'current',
           sessionId: adjustment.sessionId,
           sessionScope: adjustment.sessionId ? 'repo' : null,
-          lastError: null
+          lastError: null,
+          reviewReason: null,
+          blockedByFeatureIds: []
         });
         await appendReanalysisDecisionAudit(context, {
           phaseIndex,
@@ -2323,15 +2535,29 @@ const runPendingReanalysis = async (
           overlapPaths,
           planChanged
         });
+        await saveCheckpointSnapshot(context.config, checkpoint);
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const rejectedPlanFile = await writeRejectedAdjustmentPlan(context.config, feature.id, adjustment.finalMessage);
+        updateFeatureCheckpoint(checkpoint, feature.id, {
+          status: 'adjustment-needs-review',
+          evolvedPlanFile: rejectedPlanFile,
+          lastError: message,
+          reviewReason: message
+        });
         await appendReanalysisDecisionAudit(context, {
           phaseIndex,
           feature,
           decision: 'adjustment-failed',
           overlapPaths,
-          error: error instanceof Error ? error.message : String(error)
+          error: message
         });
-        throw error;
+        await announceProgress(
+          context,
+          `Plan adjustment for ${getFeatureLabel(feature)} needs review: ${message}`
+        );
+        await saveCheckpointSnapshot(context.config, checkpoint);
+        continue;
       }
     }
   }
@@ -3673,17 +3899,15 @@ const runRealWorkflow = async (
     };
 
     if (scores.length === 0) {
-      const unresolvedFailedFeatures = Object.values(context.checkpoint.features).filter(
-        (feature) => feature.status === 'failed'
-      );
-      context.checkpoint.status = unresolvedFailedFeatures.length > 0 ? 'failed' : 'completed';
+      const unresolvedFeatures = Object.values(context.checkpoint.features).filter(isUnresolvedTerminalFeature);
+      context.checkpoint.status = unresolvedFeatures.length > 0 ? 'failed' : 'completed';
       context.checkpoint.currentState = 'idle';
       context.checkpoint.currentPhase = null;
       await saveCheckpointSnapshot(context.config, context.checkpoint);
       await announceProgress(
         context,
-        unresolvedFailedFeatures.length > 0
-          ? 'OpenWeft stopped with unresolved failed features requiring manual attention.'
+        unresolvedFeatures.length > 0
+          ? 'OpenWeft stopped with unresolved failed or review-needed features requiring manual attention.'
           : 'Queue empty. OpenWeft has finished all queued work.'
       );
       return {
@@ -3738,7 +3962,8 @@ export const runRealOrchestration = async (
       message: 'Pruned orphaned OpenWeft worktrees and branches before starting the run.',
       data: {
         removedWorktreePaths: prunedOrphans.removedWorktreePaths,
-        removedBranchNames: prunedOrphans.removedBranchNames
+        removedBranchNames: prunedOrphans.removedBranchNames,
+        retainedBranchNames: prunedOrphans.retainedBranchNames
       }
     });
   }

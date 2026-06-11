@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -655,6 +655,14 @@ const createTempRepo = async (): Promise<string> => {
   return repoRoot;
 };
 
+const samePath = async (left: string, right: string): Promise<boolean> => {
+  try {
+    return (await realpath(left)) === (await realpath(right));
+  } catch {
+    return false;
+  }
+};
+
 const writeProjectFiles = async (
   repoRoot: string,
   options: {
@@ -736,7 +744,7 @@ const seedInterruptedExecutionFeature = async (input: {
   config: Awaited<ReturnType<typeof loadOpenWeftConfig>>['config'];
   featureId?: string;
   request?: string;
-  status?: 'planned' | 'executing';
+  status?: 'planned' | 'executing' | 'failed';
   commitMessage?: string;
   leaveDirty?: boolean;
   includeOffManifestFile?: boolean;
@@ -1900,7 +1908,7 @@ describe('runRealOrchestration', () => {
       checkpointBackupFile: config.paths.checkpointBackupFile
     });
 
-    expect(result.checkpoint.status).toBe('completed');
+    expect(result.checkpoint.status).toBe('failed');
     expect(saved.checkpoint?.features['001']).toMatchObject({
       id: '001',
       request: 'add dashboard filters',
@@ -1909,8 +1917,9 @@ describe('runRealOrchestration', () => {
     expect(saved.checkpoint?.features['002']).toMatchObject({
       id: '002',
       request: 'add export controls',
-      status: 'skipped',
+      status: 'planning-needs-review',
       planFile: null,
+      rerunEligible: true,
       lastError: 'Claude output did not include a result string.'
     });
 
@@ -1922,7 +1931,7 @@ describe('runRealOrchestration', () => {
     expect(queueContent).toContain('"request":"add export controls"');
   });
 
-  it('records invalid planning repair attempts and preserves the latest invalid markdown before skipping', async () => {
+  it('records invalid planning repair attempts and preserves the latest invalid markdown before review', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -1995,8 +2004,10 @@ describe('runRealOrchestration', () => {
     });
 
     expect(planningStageTwoAttempts).toBe(3);
+    expect(result.checkpoint.status).toBe('failed');
     expect(result.checkpoint.features['001']).toMatchObject({
-      status: 'skipped'
+      status: 'planning-needs-review',
+      rerunEligible: true
     });
     expect(result.checkpoint.features['001']?.lastError).toContain(
       'Failed to extract manifest for feature 001 after 2 repair attempts.'
@@ -2388,6 +2399,150 @@ ${TEST_LEDGER_SECTION}
     ).rejects.toThrow(/Work Brief artifact/i);
   });
 
+  it('does not require a Work Brief artifact for manual planning review checkpoints', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    await seedPlannedPromptBRecoveryFeature({
+      config,
+      configHash,
+      promptBFile: null,
+      writeCanonicalPromptB: false
+    });
+
+    const savedBefore = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+    if (!savedBefore.checkpoint) {
+      throw new Error('Expected seeded checkpoint to exist.');
+    }
+
+    savedBefore.checkpoint.status = 'stopped';
+    savedBefore.checkpoint.currentState = 'stopped';
+    savedBefore.checkpoint.features['001']!.status = 'planning-needs-review';
+    savedBefore.checkpoint.features['001']!.lastError = 'Planning stage 1 returned too little output.';
+    savedBefore.checkpoint.features['001']!.reviewReason = 'Planning stage 1 returned too little output.';
+    await saveCheckpoint({
+      checkpoint: savedBefore.checkpoint,
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('failed');
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'planning-needs-review',
+      promptBFile: null
+    });
+  });
+
+  it('preserves rejected shadow plan paths for manual review checkpoints on resume', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const { canonicalPromptBFile } = await seedPlannedPromptBRecoveryFeature({
+      config,
+      configHash,
+      writeCanonicalPromptB: true
+    });
+    const rejectedPlanFile = path.join(config.paths.shadowPlansDir, '001.md');
+    await mkdir(config.paths.shadowPlansDir, { recursive: true });
+    await writeFile(rejectedPlanFile, '# Rejected Plan\n\nMissing ledger.\n', 'utf8');
+
+    const savedBefore = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+    if (!savedBefore.checkpoint) {
+      throw new Error('Expected seeded checkpoint to exist.');
+    }
+
+    savedBefore.checkpoint.status = 'stopped';
+    savedBefore.checkpoint.currentState = 'stopped';
+    savedBefore.checkpoint.features['001']!.status = 'planning-needs-review';
+    savedBefore.checkpoint.features['001']!.promptBFile = canonicalPromptBFile;
+    savedBefore.checkpoint.features['001']!.evolvedPlanFile = rejectedPlanFile;
+    savedBefore.checkpoint.features['001']!.lastError = 'Failed to extract manifest.';
+    savedBefore.checkpoint.features['001']!.reviewReason = 'Failed to extract manifest.';
+    await saveCheckpoint({
+      checkpoint: savedBefore.checkpoint,
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.features['001']?.evolvedPlanFile).toBe(rejectedPlanFile);
+    const savedAfter = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+    expect(savedAfter.checkpoint?.features['001']?.evolvedPlanFile).toBe(rejectedPlanFile);
+  });
+
+  it('retains terminal failed non-rerunnable worktrees for manual recovery on startup', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      status: 'failed',
+      commitMessage: 'openweft: failed feature 001'
+    });
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('failed');
+    const feature = result.checkpoint.features['001'];
+    expect(feature?.rerunEligible).toBe(false);
+    expect(feature?.worktreePath).toBeTruthy();
+    expect(feature?.branchName).toBe('openweft-001-resume-test');
+
+    const retainedWorktreePath = feature?.worktreePath;
+    expect(retainedWorktreePath).toBeTruthy();
+    await expect(access(retainedWorktreePath!)).resolves.toBeUndefined();
+    const worktrees = await listWorktrees(repoRoot);
+    const retainedWorktreeMatches = await Promise.all(
+      worktrees.map((worktree) => samePath(worktree.path, retainedWorktreePath!))
+    );
+    expect(retainedWorktreeMatches.some(Boolean)).toBe(true);
+    const branches = await simpleGit(repoRoot).branch();
+    expect(branches.all).toContain('openweft-001-resume-test');
+  });
+
   it('persists earlier Work Brief repairs before failing on a later missing artifact', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
@@ -2538,7 +2693,7 @@ ${TEST_LEDGER_SECTION}
     expect(result.checkpoint.features['001']?.status).toBe('completed');
   });
 
-  it('fails planning when the agent never returns the required ledger section', async () => {
+  it('marks planning for review when the agent never returns the required ledger section', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -2556,12 +2711,13 @@ ${TEST_LEDGER_SECTION}
     });
 
     expect(result.checkpoint.features['001']).toMatchObject({
-      status: 'skipped'
+      status: 'planning-needs-review'
     });
+    expect(result.checkpoint.status).toBe('failed');
     expect(result.checkpoint.features['001']?.lastError).toMatch(/Ledger/i);
   });
 
-  it('fails adjustment when the agent drops the required ledger section', async () => {
+  it('marks adjustment for review and continues unrelated work when the agent drops the required ledger section', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 2,
@@ -2627,18 +2783,23 @@ ${TEST_LEDGER_SECTION}
       return originalRunTurn(request);
     };
 
-    await expect(
-      runRealOrchestration({
-        config,
-        configHash,
-        adapter,
-        notificationDependencies: createNotificationRecorder().dependencies,
-        sleep: async () => {}
-      })
-    ).rejects.toThrow(/Ledger/i);
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('failed');
+    expect(result.checkpoint.features['002']).toMatchObject({
+      status: 'adjustment-needs-review',
+      lastError: expect.stringMatching(/Ledger/i)
+    });
+    expect(result.checkpoint.features['003']?.status).toBe('completed');
   });
 
-  it('persists pending merge summaries in checkpoint when re-analysis aborts after a merge', async () => {
+  it('records adjustment review state and clears handled merge summaries after re-analysis failure', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -2703,29 +2864,27 @@ ${TEST_LEDGER_SECTION}
       return originalRunTurn(request);
     };
 
-    await expect(
-      runRealOrchestration({
-        config,
-        configHash,
-        adapter,
-        notificationDependencies: createNotificationRecorder().dependencies,
-        sleep: async () => {}
-      })
-    ).rejects.toThrow(/Ledger/i);
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('failed');
+    expect(result.checkpoint.features['002']).toMatchObject({
+      status: 'adjustment-needs-review',
+      lastError: expect.stringMatching(/Ledger/i)
+    });
 
     const loaded = await loadCheckpoint(config.paths.checkpointFile, config.paths.checkpointBackupFile);
     expect(loaded.source).toBe('primary');
-    expect(loaded.checkpoint?.pendingMergeSummaries).toEqual([
-      expect.objectContaining({
-        featureId: '001',
-        summary: expect.objectContaining({
-          files: expect.arrayContaining([expect.objectContaining({ path: 'src/shared.ts' })])
-        })
-      })
-    ]);
+    expect(loaded.checkpoint?.pendingMergeSummaries).toEqual([]);
+    expect(loaded.checkpoint?.features['002']?.status).toBe('adjustment-needs-review');
   });
 
-  it('replays pending merge summaries before restart execution resumes', async () => {
+  it('does not execute review-blocked work after adjustment review is recorded', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
       maxParallelAgents: 1,
@@ -2790,15 +2949,14 @@ ${TEST_LEDGER_SECTION}
       return originalCrashRunTurn(request);
     };
 
-    await expect(
-      runRealOrchestration({
-        config,
-        configHash,
-        adapter: crashAdapter,
-        notificationDependencies: createNotificationRecorder().dependencies,
-        sleep: async () => {}
-      })
-    ).rejects.toThrow(/Ledger/i);
+    const firstResult = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: crashAdapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+    expect(firstResult.checkpoint.features['002']?.status).toBe('adjustment-needs-review');
 
     const restartAdapter = new RecordingAdapter(
       new DeterministicManifestAdapter({
@@ -2822,9 +2980,9 @@ ${TEST_LEDGER_SECTION}
       (request) => request.featureId === '002' && request.stage === 'execution'
     );
 
-    expect(restartResult.checkpoint.status).toBe('completed');
-    expect(adjustmentIndex).toBeGreaterThanOrEqual(0);
-    expect(executionIndex).toBeGreaterThan(adjustmentIndex);
+    expect(restartResult.checkpoint.status).toBe('failed');
+    expect(adjustmentIndex).toBe(-1);
+    expect(executionIndex).toBe(-1);
     expect(restartResult.checkpoint.pendingMergeSummaries).toEqual([]);
   });
 

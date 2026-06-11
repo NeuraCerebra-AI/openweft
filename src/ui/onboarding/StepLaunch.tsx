@@ -5,9 +5,11 @@ import { useTheme } from '../theme.js';
 import { SelectInput } from './SelectInput.js';
 import { WizardFooter } from './WizardFooter.js';
 import { WizardHeader } from './WizardHeader.js';
+import type { OnboardingAuthMode } from './types.js';
 
 export interface StepLaunchProps {
   readonly selectedBackend: 'codex' | 'claude';
+  readonly selectedAuthMode: OnboardingAuthMode;
   readonly queuedCount: number;
   readonly onLaunch: (decision: 'start' | 'exit') => void;
   readonly onExit: () => void;
@@ -33,6 +35,7 @@ const USEFUL_COMMANDS = [
 
 export const StepLaunch: React.FC<StepLaunchProps> = ({
   selectedBackend,
+  selectedAuthMode,
   queuedCount,
   onLaunch,
   onExit,
@@ -55,6 +58,13 @@ export const StepLaunch: React.FC<StepLaunchProps> = ({
     { label: startLabel, value: 'start' as const },
     { label: 'Exit — run openweft later to start', value: 'exit' as const },
   ] satisfies ReadonlyArray<{ label: string; value: LaunchOptionValue }>;
+
+  const authLabel =
+    selectedAuthMode === 'subscription'
+      ? 'subscription CLI login'
+      : selectedBackend === 'codex'
+        ? 'CODEX_API_KEY'
+        : 'ANTHROPIC_API_KEY';
 
   return (
     <Box flexDirection="column" gap={1} paddingX={2} paddingY={1}>
@@ -81,6 +91,30 @@ export const StepLaunch: React.FC<StepLaunchProps> = ({
             </Box>
           );
         })}
+      </Box>
+
+      {/* Preflight checklist */}
+      <Box flexDirection="column" gap={0}>
+        <Box flexDirection="row" gap={1}>
+          <Text color={colors.green}>{'✓'}</Text>
+          <Text color={colors.text}>{`Backend: ${selectedBackend}`}</Text>
+        </Box>
+        <Box flexDirection="row" gap={1}>
+          <Text color={colors.green}>{'✓'}</Text>
+          <Text color={colors.text}>{`Auth: ${authLabel}`}</Text>
+        </Box>
+        <Box flexDirection="row" gap={1}>
+          <Text color={colors.green}>{'✓'}</Text>
+          <Text color={colors.text}>{'Git: repository ready'}</Text>
+        </Box>
+        <Box flexDirection="row" gap={1}>
+          <Text color={colors.green}>{queuedCount > 0 ? '✓' : '!'}</Text>
+          <Text color={colors.text}>
+            {queuedCount === 1
+              ? 'Queue: 1 request ready'
+              : `Queue: ${String(queuedCount)} requests ready`}
+          </Text>
+        </Box>
       </Box>
 
       {/* Useful commands */}

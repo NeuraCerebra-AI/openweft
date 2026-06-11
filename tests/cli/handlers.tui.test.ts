@@ -1400,6 +1400,67 @@ describe('TTY start handler', () => {
     await launchPromise;
   });
 
+  it('shows review checkpoint work without making it startable from the ready dashboard', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-launch-review-checkpoint-'));
+    let runCount = 0;
+    const checkpoint = createCheckpointFixture('planned');
+    const feature = (checkpoint.features as Record<string, Record<string, unknown>>)['001'];
+    if (!feature) {
+      throw new Error('Expected checkpoint fixture feature.');
+    }
+    feature.status = 'planning-needs-review';
+    feature.lastError = 'Planner exhausted repair attempts.';
+    feature.reviewReason = 'Planner exhausted repair attempts.';
+
+    await writeLaunchProjectFiles(repoRoot, {
+      queueContent: '',
+      checkpointContent: checkpoint
+    });
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async () => {
+        runCount += 1;
+        return {
+          checkpoint: { status: 'failed' },
+          mergedCount: 0,
+          plannedCount: 0
+        };
+      }
+    });
+
+    const launchPromise = harness.handlers.launch();
+    await waitFor(() => harness.getAppProps() !== null && harness.getStore() !== null);
+
+    const props = harness.getAppProps();
+    const store = harness.getStore();
+    if (!props || !store) {
+      throw new Error('Expected App props and store to be captured.');
+    }
+
+    expect(store.getState().agents).toEqual([
+      expect.objectContaining({
+        id: '001',
+        status: 'review',
+        removable: false,
+        readyStateDetail: 'Needs operator review before OpenWeft can schedule this feature.'
+      })
+    ]);
+
+    (props.onStartRequest as () => void)();
+    await waitFor(() => store.getState().notice !== null || runCount > 0);
+
+    expect(runCount).toBe(0);
+    expect(store.getState().executionRequested).toBe(false);
+    expect(store.getState().notice).toEqual({
+      level: 'info',
+      message: 'No queued or resumable work to start.'
+    });
+
+    (props.onQuitRequest as () => void)();
+    await launchPromise;
+  });
+
   it('opens the ready-state dashboard even when there is no queued or resumable work yet', async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-launch-empty-dashboard-'));
 

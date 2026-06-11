@@ -27,12 +27,13 @@ import {
   writeTextFileAtomic
 } from '../fs/index.js';
 import type { ResolvedOpenWeftConfig } from '../config/schema.js';
-import type { UIStore } from '../ui/store.js';
+import type { AgentStatus, UIStore } from '../ui/store.js';
 import type { StoreApi } from 'zustand/vanilla';
 import { ApprovalController, runDryRunOrchestration, runRealOrchestration, StopController } from '../orchestrator/index.js';
 import { createDefaultNotificationDependencies } from '../notifications/index.js';
 import { loadCheckpoint } from '../state/index.js';
 import { buildStatusDiagnosticsLines, renderStatusReport } from '../status/renderStatus.js';
+import { buildTerminalRunCopy } from '../status/terminalCopy.js';
 import {
   collectRuntimeDiagnostics,
   summarizeMergeDurability
@@ -75,11 +76,78 @@ interface CliDependencies {
   sleep: (ms: number) => Promise<void>;
 }
 
-const ACTIONABLE_CHECKPOINT_STATUSES = new Set(['pending', 'planned', 'executing', 'failed']);
+const STARTABLE_CHECKPOINT_STATUSES = new Set([
+  'pending',
+  'planned',
+  'executing'
+]);
 
-const isActionableCheckpointFeature = (feature: { status: string }): boolean => {
-  return ACTIONABLE_CHECKPOINT_STATUSES.has(feature.status);
+const REVIEW_CHECKPOINT_STATUSES = new Set([
+  'planning-needs-review',
+  'adjustment-needs-review',
+  'blocked-by-failed-feature'
+]);
+
+const isStartableCheckpointFeature = (feature: { status: string; rerunEligible?: boolean | null }): boolean => {
+  if (STARTABLE_CHECKPOINT_STATUSES.has(feature.status)) {
+    return true;
+  }
+
+  return feature.status === 'failed' && feature.rerunEligible !== false;
 };
+
+const isDisplayableCheckpointFeature = (feature: { status: string; rerunEligible?: boolean | null }): boolean => {
+  return isStartableCheckpointFeature(feature) ||
+    feature.status === 'failed' ||
+    REVIEW_CHECKPOINT_STATUSES.has(feature.status);
+};
+
+const getCheckpointFeatureAgentStatus = (
+  feature: { status: string; rerunEligible?: boolean | null }
+): AgentStatus => {
+  if (isStartableCheckpointFeature(feature)) {
+    return 'queued';
+  }
+
+  if (feature.status === 'blocked-by-failed-feature') {
+    return 'blocked';
+  }
+
+  if (REVIEW_CHECKPOINT_STATUSES.has(feature.status)) {
+    return 'review';
+  }
+
+  return 'failed';
+};
+
+const getCheckpointFeatureReadyStateDetail = (
+  feature: { status: string; rerunEligible?: boolean | null }
+): string | null => {
+  if (isStartableCheckpointFeature(feature)) {
+    return 'Resumable checkpoint';
+  }
+
+  if (feature.status === 'blocked-by-failed-feature') {
+    return 'Blocked by failed or review-needed work.';
+  }
+
+  if (REVIEW_CHECKPOINT_STATUSES.has(feature.status)) {
+    return 'Needs operator review before OpenWeft can schedule this feature.';
+  }
+
+  if (feature.status === 'failed') {
+    return 'Failed and is not eligible for automatic rerun.';
+  }
+
+  return null;
+};
+
+const UNRESOLVED_CHECKPOINT_STATUSES = new Set([
+  'failed',
+  'planning-needs-review',
+  'adjustment-needs-review',
+  'blocked-by-failed-feature'
+]);
 
 const hasLegacyPromptAContract = (content: string): boolean => {
   return (
@@ -1853,7 +1921,7 @@ export const createCommandHandlers = (
 
       const hasWork = pending.length > 0 || (checkpointResult.checkpoint !== null &&
         Object.values(checkpointResult.checkpoint.features).some((feature) =>
-          isActionableCheckpointFeature(feature)
+          isDisplayableCheckpointFeature(feature)
         ));
 
       if (hasWork || process.stdout.isTTY) {
@@ -1915,15 +1983,16 @@ export const createCommandHandlers = (
               }
 
               for (const feature of Object.values(checkpointResult.checkpoint.features)) {
-                if (!isActionableCheckpointFeature(feature)) {
+                if (!isDisplayableCheckpointFeature(feature)) {
                   continue;
                 }
                 store.getState().addAgent({
                   id: feature.id,
                   name: feature.title ?? summarizeQueueRequest(feature.request),
                   feature: feature.title ?? summarizeQueueRequest(feature.request),
-                  status: 'queued',
+                  status: getCheckpointFeatureAgentStatus(feature),
                   removable: false,
+                  readyStateDetail: getCheckpointFeatureReadyStateDetail(feature),
                 });
               }
             }
@@ -2288,7 +2357,7 @@ export const createCommandHandlers = (
           );
         }
         resolvedDependencies.writeLine(
-          `► Backgrounded (PID ${readyPid}). Use 'openweft status' to check progress.`
+          `► Backgrounded (PID ${readyPid}). Use 'openweft status' to check progress; raw output is in .openweft/output.log.`
         );
         return;
       }
@@ -2341,15 +2410,16 @@ export const createCommandHandlers = (
           prePopulate: (store) => {
             if (checkpointResult.checkpoint) {
               for (const feature of Object.values(checkpointResult.checkpoint.features)) {
-                if (!isActionableCheckpointFeature(feature)) {
+                if (!isDisplayableCheckpointFeature(feature)) {
                   continue;
                 }
                 store.getState().addAgent({
                   id: feature.id,
                   name: feature.title ?? summarizeQueueRequest(feature.request),
                   feature: feature.title ?? summarizeQueueRequest(feature.request),
-                  status: 'queued',
+                  status: getCheckpointFeatureAgentStatus(feature),
                   removable: false,
+                  readyStateDetail: getCheckpointFeatureReadyStateDetail(feature),
                 });
               }
             }
@@ -2399,7 +2469,7 @@ export const createCommandHandlers = (
       const signalHandler = () => {
         if (!stopController.isRequested) {
           stopController.request('signal');
-          resolvedDependencies.writeLine('Stop requested. OpenWeft will stop after the current phase.');
+          resolvedDependencies.writeLine('Stop requested. OpenWeft will stop at the next phase-safe checkpoint.');
         }
       };
 
@@ -2415,9 +2485,14 @@ export const createCommandHandlers = (
             configHash,
             adapter: new MockAgentAdapter()
           });
+          const failedCount = Object.values(result.checkpoint.features).filter(
+            (feature) => UNRESOLVED_CHECKPOINT_STATUSES.has(feature.status)
+          ).length;
 
           resolvedDependencies.writeLine(
-            `Dry run complete: planned ${result.plannedCount}, completed ${result.completedCount}.`
+            result.checkpoint.status === 'failed'
+              ? `Dry run failed: planned ${result.plannedCount}, completed ${result.completedCount}, failed/review ${failedCount}.`
+              : `Dry run complete: planned ${result.plannedCount}, completed ${result.completedCount}.`
           );
           return;
         }
@@ -2498,9 +2573,19 @@ export const createCommandHandlers = (
               status: f.status === 'executing' ? 'running' : f.status,
             }))
           : [];
+        const runCopy = buildTerminalRunCopy({
+          checkpoint: cp ?? null,
+          checkpointSource: checkpointResult.source,
+          pendingQueueCount: pendingQueue.length,
+          diagnostics,
+          background
+        });
         await renderStyledOutput(
           React.createElement(StatusCard, {
             appName: 'OpenWeft',
+            health: runCopy.health,
+            meaning: runCopy.meaning,
+            nextAction: runCopy.nextAction,
             phase,
             usageLabel,
             usageValue,
@@ -2555,7 +2640,7 @@ export const createCommandHandlers = (
 
       resolvedDependencies.sendSignal(background.pid, 'SIGTERM');
       resolvedDependencies.writeLine(
-        `Sent SIGTERM to OpenWeft background process ${background.pid}. Waiting for the current phase to finish...`
+        `Sent SIGTERM to OpenWeft background process ${background.pid}. Waiting for the next phase-safe checkpoint...`
       );
 
       let terminalStateObserved: string | null = null;

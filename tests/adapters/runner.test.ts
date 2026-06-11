@@ -34,4 +34,19 @@ describe('execa runner', () => {
     expect(result.stdout).toContain('tick-0');
     expect(result.stdout).toContain('tick-3');
   });
+
+  it('preserves spawn failure metadata and never reports missing commands as exit 0', async () => {
+    const runner = createExecaCommandRunner();
+
+    const result = await runner({
+      command: 'openweft-command-that-does-not-exist',
+      args: [],
+      cwd: process.cwd()
+    });
+
+    expect(result.exitCode).not.toBe(0);
+    expect(result.errorCode).toBeTruthy();
+    expect(result.errorMessage).toMatch(/openweft-command-that-does-not-exist|ENOENT|not found/i);
+    expect(result.failed).toBe(true);
+  });
 });

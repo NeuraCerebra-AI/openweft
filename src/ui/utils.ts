@@ -20,5 +20,7 @@ export const getStatusIcon = (status: AgentStatus, spinnerFrame = 0): StatusIcon
     case 'failed': return { icon: '✘', colorKey: 'red' };
     case 'queued': return { icon: '◌', colorKey: 'muted' };
     case 'approval': return { icon: '⚑', colorKey: 'yellow' };
+    case 'review': return { icon: '!', colorKey: 'yellow' };
+    case 'blocked': return { icon: '!', colorKey: 'yellow' };
   }
 };

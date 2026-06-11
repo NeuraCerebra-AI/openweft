@@ -41,6 +41,26 @@ describe('StatusCard', () => {
     expect(frame).toContain('Refactor auth middleware');
   });
 
+  it('renders shared health, meaning, and next action copy when provided', () => {
+    const { lastFrame } = render(
+      <StatusCard
+        appName="OpenWeft"
+        health="Review needed"
+        meaning="A feature plan needs operator review before execution can continue."
+        nextAction="Review the listed feature plan, then rerun openweft start."
+        phase="failed"
+        usageLabel="Tokens"
+        usageValue="0 input / 0 output"
+        agents={[]}
+      />
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('Health: Review needed');
+    expect(frame).toContain('Meaning: A feature plan needs operator review before execution can continue.');
+    expect(frame).toContain('Next Action: Review the listed feature plan, then rerun openweft start.');
+  });
+
   it('renders checkpoint source and diagnostics summary when provided', () => {
     const { lastFrame } = render(
       <StatusCard
@@ -68,6 +88,32 @@ describe('StatusCard', () => {
     expect(frame).toContain('Current HEAD: abc123');
     expect(frame).toContain('Current HEAD Check: verified (1/1 completed features)');
     expect(frame).toContain('Runtime Artifacts: codex-home missing');
+  });
+
+  it('renders failed, review, and blocked status rows without success checkmarks', () => {
+    const { lastFrame } = render(
+      <StatusCard
+        appName="OpenWeft"
+        phase="failed"
+        usageLabel="Tokens"
+        usageValue="0 input / 0 output"
+        agents={[
+          { name: '001 Failed feature', status: 'failed' },
+          { name: '002 Needs review', status: 'planning-needs-review' },
+          { name: '003 Blocked feature', status: 'blocked-by-failed-feature' },
+          { name: '004 Running feature', status: 'running' },
+        ]}
+      />
+    );
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('✗ failed: 001 Failed feature');
+    expect(frame).toContain('! review: 002 Needs review');
+    expect(frame).toContain('! blocked: 003 Blocked feature');
+    expect(frame).toContain('● 004 Running feature');
+    expect(frame).not.toContain('✓ 001 Failed feature');
+    expect(frame).not.toContain('✓ 002 Needs review');
+    expect(frame).not.toContain('✓ 003 Blocked feature');
   });
 
   it('registers the exit promise before unmounting static styled output', async () => {

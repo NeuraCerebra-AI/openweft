@@ -186,4 +186,39 @@ describe('codex adapter', () => {
       expect(result.classified.tier).toBe('transient');
     }
   });
+
+  it('returns structured fatal failure when command construction needs a missing API key', async () => {
+    const adapter = new CodexCliAdapter(async () => {
+      throw new Error('runner should not be called when command construction fails');
+    });
+
+    const result = await adapter.runTurn({
+      ...baseRequest(),
+      auth: { method: 'api_key', envVar: 'OPENWEFT_MISSING_CODEX_TEST_KEY' }
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.classified.tier).toBe('fatal');
+      expect(result.error).toContain('OPENWEFT_MISSING_CODEX_TEST_KEY');
+      expect(result.artifacts.command.command).toBe('codex');
+      expect(result.artifacts.exitCode).toBe(1);
+    }
+  });
+
+  it('preserves a best-effort Codex thread id on failed turns', async () => {
+    const adapter = new CodexCliAdapter(async () => ({
+      stdout: `${JSON.stringify({ type: 'thread.started', thread_id: 'thread-failed-123' })}\nnot-json\n`,
+      stderr: 'Model produced malformed output',
+      exitCode: 1
+    }));
+
+    const result = await adapter.runTurn(baseRequest());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.sessionId).toBe('thread-failed-123');
+      expect(result.error).toContain('Model produced malformed output');
+    }
+  });
 });

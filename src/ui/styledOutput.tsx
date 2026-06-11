@@ -19,6 +19,9 @@ export const renderStyledOutput = async (element: React.ReactElement): Promise<v
 
 interface StatusCardProps {
   readonly appName: string;
+  readonly health?: string;
+  readonly meaning?: string;
+  readonly nextAction?: string;
   readonly phase: string;
   readonly usageLabel: string;
   readonly usageValue: string;
@@ -28,8 +31,38 @@ interface StatusCardProps {
   readonly diagnosticLines?: readonly string[];
 }
 
+const getStatusRowStyle = (
+  status: string,
+  colors: typeof catppuccinMocha.colors
+): { icon: string; color: string; label: string | null } => {
+  if (status === 'running' || status === 'executing') {
+    return { icon: '●', color: colors.blue, label: null };
+  }
+
+  if (status === 'failed' || status === 'fatal') {
+    return { icon: '✗', color: colors.red, label: 'failed' };
+  }
+
+  if (status === 'planning-needs-review' || status === 'adjustment-needs-review' || status === 'review') {
+    return { icon: '!', color: colors.yellow, label: 'review' };
+  }
+
+  if (status === 'blocked-by-failed-feature' || status === 'blocked') {
+    return { icon: '!', color: colors.yellow, label: 'blocked' };
+  }
+
+  if (status === 'queued' || status === 'planned' || status === 'pending') {
+    return { icon: '○', color: colors.subtext, label: null };
+  }
+
+  return { icon: '✓', color: colors.green, label: null };
+};
+
 export const StatusCard: React.FC<StatusCardProps> = ({
   appName,
+  health,
+  meaning,
+  nextAction,
   phase,
   usageLabel,
   usageValue,
@@ -42,6 +75,9 @@ export const StatusCard: React.FC<StatusCardProps> = ({
   return (
     <StyledCard borderColor={colors.blue}>
       <Text bold color={colors.blue}>{appName}</Text>
+      {health !== undefined && <Text bold>{`Health: ${health}`}</Text>}
+      {meaning !== undefined && <Text color={colors.subtext}>{`Meaning: ${meaning}`}</Text>}
+      {nextAction !== undefined && <Text color={colors.green}>{`Next Action: ${nextAction}`}</Text>}
       <Text color={colors.subtext}>{`Phase: ${phase}  ${usageLabel}: ${usageValue}`}</Text>
       {checkpointSource === 'backup' && (
         <Text color={colors.yellow}>Checkpoint source: backup</Text>
@@ -55,9 +91,13 @@ export const StatusCard: React.FC<StatusCardProps> = ({
       {pendingRequests.map((request, index) => (
         <Text key={`pending-${index}`} color={colors.subtext}>{`  ○ ${request}`}</Text>
       ))}
-      {agents.map((a) => (
-        <Text key={a.name} color={colors.text}>{`  ${a.status === 'running' ? '●' : '✓'} ${a.name}`}</Text>
-      ))}
+      {agents.map((a) => {
+        const row = getStatusRowStyle(a.status, colors);
+        const label = row.label ? `${row.label}: ` : '';
+        return (
+          <Text key={a.name} color={row.color}>{`  ${row.icon} ${label}${a.name}`}</Text>
+        );
+      })}
     </StyledCard>
   );
 };

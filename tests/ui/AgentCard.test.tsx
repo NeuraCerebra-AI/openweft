@@ -89,7 +89,7 @@ describe('AgentCard', () => {
     expect(frame).toContain('▸ write_file');
   });
 
-  it('shows approval box when focused with approval request', () => {
+  it('shows one-line approval marker and detail when focused with approval request', () => {
     const approval: ApprovalRequest = {
       file: 'src/index.ts',
       action: 'delete',
@@ -101,12 +101,11 @@ describe('AgentCard', () => {
       approvalRequest: approval,
     });
     const frame = lastFrame() ?? '';
-    expect(frame).toContain('APPROVAL NEEDED');
-    expect(frame).toContain('delete: src/index.ts');
+    expect(frame).toContain('approval: delete src/index.ts');
     expect(frame).toContain('This file is no longer needed');
   });
 
-  it('does not show approval box when unfocused', () => {
+  it('shows one-line approval marker without detail when unfocused', () => {
     const approval: ApprovalRequest = {
       file: 'src/index.ts',
       action: 'delete',
@@ -119,6 +118,8 @@ describe('AgentCard', () => {
     });
     const frame = lastFrame() ?? '';
     expect(frame).not.toContain('APPROVAL NEEDED');
+    expect(frame).toContain('approval: delete src/index.ts');
+    expect(frame).not.toContain('This file is no longer needed');
   });
 
   it('formats tokens below 1000 as plain number', () => {

@@ -78,6 +78,13 @@ export async function runOnboardingWizard(
       const config = {
         ...defaultConfig,
         backend: selection.backend,
+        auth: {
+          ...defaultConfig.auth,
+          [selection.backend]: {
+            ...defaultConfig.auth[selection.backend],
+            method: selection.authMode
+          }
+        },
         models: {
           ...defaultConfig.models,
           [selection.backend]: selection.model
@@ -85,6 +92,13 @@ export async function runOnboardingWizard(
         effort: {
           ...defaultConfig.effort,
           [selection.backend]: selection.effort
+        },
+        rateLimits: {
+          ...defaultConfig.rateLimits,
+          [selection.backend]: {
+            ...defaultConfig.rateLimits[selection.backend],
+            mode: selection.authMode
+          }
         }
       };
       await writeTextFileAtomic(configPath, JSON.stringify(config, null, 2) + '\n');
@@ -141,6 +155,7 @@ export async function runOnboardingWizard(
     codexStatus: codex,
     claudeStatus: claude,
     selectedBackend: null,
+    selectedAuthMode: null,
     selectedModel: null,
     selectedEffort: null,
     gitInitError: null,

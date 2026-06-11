@@ -199,4 +199,43 @@ describe('claude adapter', () => {
       expect(result.classified.tier).toBe('fatal');
     }
   });
+
+  it('returns structured fatal failure when command construction needs a missing API key', async () => {
+    const adapter = new ClaudeCliAdapter(async () => {
+      throw new Error('runner should not be called when command construction fails');
+    });
+
+    const result = await adapter.runTurn({
+      ...baseRequest(),
+      auth: { method: 'api_key', envVar: 'OPENWEFT_MISSING_CLAUDE_TEST_KEY' }
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.classified.tier).toBe('fatal');
+      expect(result.error).toContain('OPENWEFT_MISSING_CLAUDE_TEST_KEY');
+      expect(result.artifacts.command.command).toBe('claude');
+      expect(result.artifacts.exitCode).toBe(1);
+    }
+  });
+
+  it('preserves a best-effort Claude session id on failed turns', async () => {
+    const adapter = new ClaudeCliAdapter(async () => ({
+      stdout: JSON.stringify({
+        is_error: true,
+        session_id: 'claude-failed-456',
+        result: 'Operation not permitted'
+      }),
+      stderr: '',
+      exitCode: 1
+    }));
+
+    const result = await adapter.runTurn(baseRequest());
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.sessionId).toBe('claude-failed-456');
+      expect(result.classified.tier).toBe('fatal');
+    }
+  });
 });

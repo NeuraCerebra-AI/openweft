@@ -6,7 +6,7 @@ import type { ApprovalRequest } from './events.js';
 
 const MAX_OUTPUT_LINES = 5000;
 
-export type AgentStatus = 'running' | 'completed' | 'failed' | 'queued' | 'approval';
+export type AgentStatus = 'running' | 'completed' | 'failed' | 'queued' | 'approval' | 'review' | 'blocked';
 
 export interface OutputLine {
   readonly type: 'text' | 'tool' | 'tool-result' | 'code' | 'approval';
@@ -27,6 +27,7 @@ export interface AgentState {
   readonly files: readonly string[];
   readonly tokens: number;
   readonly approvalRequest: ApprovalRequest | null;
+  readonly readyStateDetail: string | null;
 }
 
 export interface CompletedFeature {
@@ -79,7 +80,15 @@ export interface UIStore {
   quitConfirmPending: boolean;
   addInputText: string | null;
   addInputCursorOffset: number;
-  addAgent: (init: { id: string; name: string; feature: string; status?: AgentStatus; removable?: boolean; files?: readonly string[] }) => void;
+  addAgent: (init: {
+    id: string;
+    name: string;
+    feature: string;
+    status?: AgentStatus;
+    removable?: boolean;
+    files?: readonly string[];
+    readyStateDetail?: string | null;
+  }) => void;
   removeAgent: (id: string) => void;
   updateAgent: (id: string, patch: Partial<Pick<AgentState, 'status' | 'elapsed' | 'currentTool' | 'approvalRequest' | 'tokens'>>) => void;
   appendOutput: (agentId: string, line: OutputLine) => void;
@@ -150,6 +159,7 @@ export const createUIStore = () =>
             files: init.files ?? [],
             tokens: 0,
             approvalRequest: null,
+            readyStateDetail: init.readyStateDetail ?? null,
           },
         ],
       })),
@@ -254,7 +264,8 @@ export const createUIStore = () =>
           status: 'running',
           removable: false,
           currentTool: null,
-          approvalRequest: null
+          approvalRequest: null,
+          readyStateDetail: null
         };
 
         const focusedAgentId = state.focusedAgentId === placeholder.id ? agent.id : state.focusedAgentId;
