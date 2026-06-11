@@ -37,6 +37,10 @@ vi.mock('../../../src/config/index.js', () => ({
       planAdjustment: './prompts/plan-adjustment.md',
     },
     backend: 'codex',
+    auth: {
+      codex: { method: 'subscription' },
+      claude: { method: 'subscription' }
+    },
     models: {
       codex: 'gpt-5.5',
       claude: 'claude-sonnet-4-6'
@@ -44,6 +48,20 @@ vi.mock('../../../src/config/index.js', () => ({
     effort: {
       codex: 'medium',
       claude: 'medium'
+    },
+    rateLimits: {
+      codex: {
+        mode: 'subscription',
+        maxConcurrentRequests: 3,
+        retryBackoffMs: 5000,
+        retryMaxAttempts: 5
+      },
+      claude: {
+        mode: 'subscription',
+        maxConcurrentRequests: 2,
+        retryBackoffMs: 5000,
+        retryMaxAttempts: 5
+      }
     }
   })),
 }));
@@ -336,6 +354,7 @@ describe('runOnboardingWizard', () => {
       expect(captured.callbacks).not.toBeNull();
       await captured.callbacks!.onRunInit({
         backend: 'codex',
+        authMode: 'api_key',
         model: 'gpt-5.4',
         effort: 'high'
       });
@@ -352,6 +371,14 @@ describe('runOnboardingWizard', () => {
       expect(writeTextFileAtomic).toHaveBeenCalledWith(
         expect.stringContaining('.openweftrc.json'),
         expect.stringContaining('high')
+      );
+      expect(writeTextFileAtomic).toHaveBeenCalledWith(
+        expect.stringContaining('.openweftrc.json'),
+        expect.stringContaining('"method": "api_key"')
+      );
+      expect(writeTextFileAtomic).toHaveBeenCalledWith(
+        expect.stringContaining('.openweftrc.json'),
+        expect.stringContaining('"mode": "api_key"')
       );
     });
 
@@ -372,6 +399,7 @@ describe('runOnboardingWizard', () => {
       expect(captured.callbacks).not.toBeNull();
       await captured.callbacks!.onRunInit({
         backend: 'codex',
+        authMode: 'subscription',
         model: 'gpt-5.5',
         effort: 'medium'
       });
@@ -399,6 +427,7 @@ describe('runOnboardingWizard', () => {
       expect(captured.callbacks).not.toBeNull();
       await captured.callbacks!.onRunInit({
         backend: 'codex',
+        authMode: 'subscription',
         model: 'gpt-5.5',
         effort: 'medium'
       });

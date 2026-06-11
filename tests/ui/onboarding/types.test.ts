@@ -1,6 +1,12 @@
 import { describe, it, expectTypeOf } from 'vitest';
 
-import type { BackendDetection, OnboardingState, StepKey, WizardCallbacks } from '../../../src/ui/onboarding/types.js';
+import type {
+  BackendDetection,
+  OnboardingAuthMode,
+  OnboardingState,
+  StepKey,
+  WizardCallbacks
+} from '../../../src/ui/onboarding/types.js';
 
 describe('onboarding types', () => {
   it('BackendDetection has installed and authenticated boolean fields', () => {
@@ -21,6 +27,7 @@ describe('onboarding types', () => {
       codexStatus: { installed: true, authenticated: true },
       claudeStatus: { installed: false, authenticated: false },
       selectedBackend: 'codex',
+      selectedAuthMode: 'subscription',
       selectedModel: 'gpt-5.5',
       selectedEffort: 'medium',
       gitInitError: null,
@@ -35,6 +42,7 @@ describe('onboarding types', () => {
     expectTypeOf(state.codexStatus).toEqualTypeOf<BackendDetection>();
     expectTypeOf(state.claudeStatus).toEqualTypeOf<BackendDetection>();
     expectTypeOf(state.selectedBackend).toEqualTypeOf<'codex' | 'claude' | null>();
+    expectTypeOf(state.selectedAuthMode).toEqualTypeOf<OnboardingAuthMode | null>();
     expectTypeOf(state.selectedModel).toEqualTypeOf<string | null>();
     expectTypeOf(state.selectedEffort).toEqualTypeOf<'low' | 'medium' | 'high' | 'xhigh' | 'max' | null>();
     expectTypeOf(state.gitInitError).toEqualTypeOf<string | null>();
@@ -58,6 +66,7 @@ describe('onboarding types', () => {
     expectTypeOf(callbacks.onGitInit).toEqualTypeOf<() => Promise<void>>();
     expectTypeOf(callbacks.onRunInit).toEqualTypeOf<(selection: {
       backend: 'codex' | 'claude';
+      authMode: OnboardingAuthMode;
       model: string;
       effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
     }) => Promise<void>>();

@@ -15,6 +15,7 @@ const makeState = (overrides?: Partial<OnboardingState>): OnboardingState => ({
   codexStatus: { installed: true, authenticated: true },
   claudeStatus: { installed: true, authenticated: true },
   selectedBackend: null,
+  selectedAuthMode: null,
   selectedModel: null,
   selectedEffort: null,
   gitInitError: null,
@@ -327,6 +328,7 @@ describe('OnboardingApp', () => {
           initialState={makeState({
             currentStep: 4,
             selectedBackend: 'claude',
+            selectedAuthMode: 'subscription',
             selectedModel: 'claude-sonnet-4-6',
             selectedEffort: 'high',
             initialized: true,
@@ -339,7 +341,7 @@ describe('OnboardingApp', () => {
       await waitForMount();
       const frame = lastFrame() ?? '';
       expect(frame).toContain('✓ Environment');
-      expect(frame).toContain('Backend: claude · claude-sonnet-4-6 · high');
+      expect(frame).toContain('Backend: claude · subscription · claude-sonnet-4-6 · high');
     });
 
     it('hides completed setup labels entirely on step 5', async () => {
@@ -351,6 +353,7 @@ describe('OnboardingApp', () => {
           initialState={makeState({
             currentStep: 5,
             selectedBackend: 'claude',
+            selectedAuthMode: 'subscription',
             selectedModel: 'claude-sonnet-4-6',
             selectedEffort: 'high',
             initialized: true,
@@ -364,7 +367,7 @@ describe('OnboardingApp', () => {
       const frame = lastFrame() ?? '';
       expect(frame).not.toContain('Done:');
       expect(frame).not.toContain('✓ Environment');
-      expect(frame).not.toContain('Backend: claude · claude-sonnet-4-6 · high');
+      expect(frame).not.toContain('Backend: claude · subscription · claude-sonnet-4-6 · high');
     });
 
     it('keeps the original bottom completed summary outside demo mode', async () => {
@@ -374,6 +377,7 @@ describe('OnboardingApp', () => {
           initialState={makeState({
             currentStep: 5,
             selectedBackend: 'claude',
+            selectedAuthMode: 'subscription',
             selectedModel: 'claude-sonnet-4-6',
             selectedEffort: 'high',
             initialized: true,

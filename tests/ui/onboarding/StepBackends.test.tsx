@@ -35,20 +35,20 @@ const bothAuthedProps = {
 
 const codexOnlyProps = {
   codexStatus: bothAuthedStatus,
-  claudeStatus: neitherAuthedStatus,
+  claudeStatus: notInstalledStatus,
   onAdvance: vi.fn(),
   onBack: vi.fn(),
   onExit: vi.fn(),
-  onRedetectBackends: makeRedetect(bothAuthedStatus, neitherAuthedStatus),
+  onRedetectBackends: makeRedetect(bothAuthedStatus, notInstalledStatus),
 };
 
 const claudeOnlyProps = {
-  codexStatus: neitherAuthedStatus,
+  codexStatus: notInstalledStatus,
   claudeStatus: bothAuthedStatus,
   onAdvance: vi.fn(),
   onBack: vi.fn(),
   onExit: vi.fn(),
-  onRedetectBackends: makeRedetect(neitherAuthedStatus, bothAuthedStatus),
+  onRedetectBackends: makeRedetect(notInstalledStatus, bothAuthedStatus),
 };
 
 const neitherAuthedProps = {
@@ -136,12 +136,15 @@ describe('StepBackends', () => {
       await waitForMount();
       stdin.write('\r'); // confirm first option (Codex)
       await waitForUpdate();
+      stdin.write('\r'); // confirm subscription auth
+      await waitForUpdate();
       stdin.write('\r'); // confirm default codex model
       await waitForUpdate();
       stdin.write('\r'); // confirm default codex effort
       await waitForUpdate();
       expect(onAdvance).toHaveBeenCalledWith({
         backend: 'codex',
+        authMode: 'subscription',
         model: 'gpt-5.5',
         effort: 'medium'
       });
@@ -163,12 +166,15 @@ describe('StepBackends', () => {
       await waitForUpdate();
       stdin.write('\r'); // confirm
       await waitForUpdate();
+      stdin.write('\r'); // confirm subscription auth
+      await waitForUpdate();
       stdin.write('\r'); // confirm default claude model
       await waitForUpdate();
       stdin.write('\r'); // confirm default claude effort
       await waitForUpdate();
       expect(onAdvance).toHaveBeenCalledWith({
         backend: 'claude',
+        authMode: 'subscription',
         model: 'claude-sonnet-4-6',
         effort: 'medium'
       });
@@ -205,28 +211,27 @@ describe('StepBackends', () => {
     });
   });
 
-  describe('one authenticated (auto-select)', () => {
-    it('shows auto-select message when only codex is authenticated', async () => {
+  describe('one installed (auto-select)', () => {
+    it('shows auto-select message when only codex is installed', async () => {
       const props = {
         ...codexOnlyProps,
         onAdvance: vi.fn(),
         onExit: vi.fn(),
-        onRedetectBackends: makeRedetect(bothAuthedStatus, neitherAuthedStatus),
+        onRedetectBackends: makeRedetect(bothAuthedStatus, notInstalledStatus),
       };
       const { lastFrame } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
       const frame = lastFrame() ?? '';
       expect(frame).toContain('codex');
-      // Should not show SelectInput (no › for backend selection)
       expect(frame).not.toContain('Choose your default backend');
     });
 
-    it('shows auto-select message when only claude is authenticated', async () => {
+    it('shows auto-select message when only claude is installed', async () => {
       const props = {
         ...claudeOnlyProps,
         onAdvance: vi.fn(),
         onExit: vi.fn(),
-        onRedetectBackends: makeRedetect(neitherAuthedStatus, bothAuthedStatus),
+        onRedetectBackends: makeRedetect(notInstalledStatus, bothAuthedStatus),
       };
       const { lastFrame } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
@@ -240,7 +245,7 @@ describe('StepBackends', () => {
         ...codexOnlyProps,
         onAdvance: vi.fn(),
         onExit: vi.fn(),
-        onRedetectBackends: makeRedetect(bothAuthedStatus, neitherAuthedStatus),
+        onRedetectBackends: makeRedetect(bothAuthedStatus, notInstalledStatus),
       };
       const { lastFrame } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
@@ -256,14 +261,16 @@ describe('StepBackends', () => {
       const onAdvance = vi.fn();
       const props = {
         codexStatus: bothAuthedStatus,
-        claudeStatus: neitherAuthedStatus,
+        claudeStatus: notInstalledStatus,
         onAdvance,
         onBack: vi.fn(),
         onExit: vi.fn(),
-        onRedetectBackends: makeRedetect(bothAuthedStatus, neitherAuthedStatus),
+        onRedetectBackends: makeRedetect(bothAuthedStatus, notInstalledStatus),
       };
       const { stdin } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
+      stdin.write('\r');
+      await waitForUpdate();
       stdin.write('\r');
       await waitForUpdate();
       stdin.write('\r');
@@ -272,6 +279,7 @@ describe('StepBackends', () => {
       await waitForUpdate();
       expect(onAdvance).toHaveBeenCalledWith({
         backend: 'codex',
+        authMode: 'subscription',
         model: 'gpt-5.5',
         effort: 'medium'
       });
@@ -280,12 +288,12 @@ describe('StepBackends', () => {
     it('calls onAdvance with "claude" when Enter is pressed and claude is auto-selected', async () => {
       const onAdvance = vi.fn();
       const props = {
-        codexStatus: neitherAuthedStatus,
+        codexStatus: notInstalledStatus,
         claudeStatus: bothAuthedStatus,
         onAdvance,
         onBack: vi.fn(),
         onExit: vi.fn(),
-        onRedetectBackends: makeRedetect(neitherAuthedStatus, bothAuthedStatus),
+        onRedetectBackends: makeRedetect(notInstalledStatus, bothAuthedStatus),
       };
       const { stdin } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
@@ -295,8 +303,11 @@ describe('StepBackends', () => {
       await waitForUpdate();
       stdin.write('\r');
       await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
       expect(onAdvance).toHaveBeenCalledWith({
         backend: 'claude',
+        authMode: 'subscription',
         model: 'claude-sonnet-4-6',
         effort: 'medium'
       });
@@ -304,8 +315,10 @@ describe('StepBackends', () => {
 
     it('shows ! yellow indicator for installed-but-not-authed backend', async () => {
       const props = {
-        ...codexOnlyProps,
+        codexStatus: bothAuthedStatus,
+        claudeStatus: neitherAuthedStatus,
         onAdvance: vi.fn(),
+        onBack: vi.fn(),
         onExit: vi.fn(),
         onRedetectBackends: makeRedetect(bothAuthedStatus, neitherAuthedStatus),
       };
@@ -320,11 +333,11 @@ describe('StepBackends', () => {
       const onExit = vi.fn();
       const props = {
         codexStatus: bothAuthedStatus,
-        claudeStatus: neitherAuthedStatus,
+        claudeStatus: notInstalledStatus,
         onAdvance: vi.fn(),
         onBack: vi.fn(),
         onExit,
-        onRedetectBackends: makeRedetect(bothAuthedStatus, neitherAuthedStatus),
+        onRedetectBackends: makeRedetect(bothAuthedStatus, notInstalledStatus),
       };
       const { stdin } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
@@ -334,8 +347,8 @@ describe('StepBackends', () => {
     });
   });
 
-  describe('neither authenticated error state', () => {
-    it('shows "No backends authenticated" when both installed but not authed', async () => {
+  describe('neither authenticated selection state', () => {
+    it('keeps installed unauthenticated backends selectable', async () => {
       const props = {
         ...neitherAuthedProps,
         onAdvance: vi.fn(),
@@ -345,10 +358,12 @@ describe('StepBackends', () => {
       const { lastFrame } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
       const frame = lastFrame() ?? '';
-      expect(frame).toContain('No backends authenticated');
+      expect(frame).toContain('Choose your default backend');
+      expect(frame).toContain('Codex');
+      expect(frame).toContain('Claude');
     });
 
-    it('shows auth commands when both installed but not authed', async () => {
+    it('shows needs-auth markers when both installed but not authed', async () => {
       const props = {
         ...neitherAuthedProps,
         onAdvance: vi.fn(),
@@ -358,25 +373,59 @@ describe('StepBackends', () => {
       const { lastFrame } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
       const frame = lastFrame() ?? '';
-      expect(frame).toContain('codex login');
-      expect(frame).toContain('claude auth login');
+      expect(frame).toContain('(installed, needs auth)');
     });
 
-    it('shows retry guidance after authenticating in error state', async () => {
+    it('shows subscription and API-key choices after selecting an unauthenticated backend', async () => {
       const props = {
         ...neitherAuthedProps,
         onAdvance: vi.fn(),
         onExit: vi.fn(),
         onRedetectBackends: makeRedetect(neitherAuthedStatus, neitherAuthedStatus),
       };
-      const { lastFrame } = renderWithTheme(<StepBackends {...props} />);
+      const { stdin, lastFrame } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
+      stdin.write('\r');
+      await waitForUpdate();
       const frame = lastFrame() ?? '';
-      expect(frame).toContain('Press R to retry');
-      expect(frame).toContain('authenticating');
+      expect(frame).toContain('Choose codex auth mode');
+      expect(frame).toContain('CODEX_API_KEY');
+      expect(frame).toContain('Subscription login (default)');
+      expect(frame).toContain('API key environment variable');
     });
 
-    it('renders footer with retry and Esc quit in error state', async () => {
+    it('can continue with API-key auth for an unauthenticated installed backend', async () => {
+      const onAdvance = vi.fn();
+      const props = {
+        codexStatus: neitherAuthedStatus,
+        claudeStatus: neitherAuthedStatus,
+        onAdvance,
+        onBack: vi.fn(),
+        onExit: vi.fn(),
+        onRedetectBackends: makeRedetect(neitherAuthedStatus, neitherAuthedStatus),
+      };
+      const { stdin } = renderWithTheme(<StepBackends {...props} />);
+      await waitForMount();
+      stdin.write('\r'); // choose Codex
+      await waitForUpdate();
+      stdin.write('\u001B[B'); // choose API key auth
+      await waitForUpdate();
+      stdin.write('\r');
+      await waitForUpdate();
+      stdin.write('\r'); // default model
+      await waitForUpdate();
+      stdin.write('\r'); // default effort
+      await waitForUpdate();
+
+      expect(onAdvance).toHaveBeenCalledWith({
+        backend: 'codex',
+        authMode: 'api_key',
+        model: 'gpt-5.5',
+        effort: 'medium'
+      });
+    });
+
+    it('renders footer with select, confirm, retry, back, and quit when both installed but not authed', async () => {
       const props = {
         ...neitherAuthedProps,
         onAdvance: vi.fn(),
@@ -386,13 +435,14 @@ describe('StepBackends', () => {
       const { lastFrame } = renderWithTheme(<StepBackends {...props} />);
       await waitForMount();
       const frame = lastFrame() ?? '';
+      expect(frame).toContain('↑↓ select');
+      expect(frame).toContain('Enter confirm');
       expect(frame).toContain('R retry');
+      expect(frame).toContain('← back');
       expect(frame).toContain('Esc quit');
-      expect(frame).not.toContain('Enter');
-      expect(frame).not.toContain('← back');
     });
 
-    it('calls onExit when Esc is pressed in error state', async () => {
+    it('calls onExit when Esc is pressed in selection state', async () => {
       const onExit = vi.fn();
       const props = {
         codexStatus: neitherAuthedStatus,

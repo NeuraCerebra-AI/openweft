@@ -18,6 +18,7 @@ const makeOnRunInit = (shouldReject?: string) =>
 
 const successProps = {
   selectedBackend: 'codex' as const,
+  selectedAuthMode: 'subscription' as const,
   selectedModel: 'gpt-5.5',
   selectedEffort: 'medium' as const,
   initialized: true,
@@ -31,6 +32,7 @@ const successProps = {
 
 const errorProps = {
   selectedBackend: 'codex' as const,
+  selectedAuthMode: 'subscription' as const,
   selectedModel: 'gpt-5.5',
   selectedEffort: 'medium' as const,
   initialized: false,
@@ -44,6 +46,7 @@ const errorProps = {
 
 const loadingProps = {
   selectedBackend: 'claude' as const,
+  selectedAuthMode: 'subscription' as const,
   selectedModel: 'claude-sonnet-4-6',
   selectedEffort: 'medium' as const,
   initialized: false,
@@ -207,12 +210,13 @@ describe('StepInit', () => {
   });
 
   describe('onRunInit lifecycle', () => {
-    it('calls onRunInit with selected backend, model, and effort on mount', async () => {
+    it('calls onRunInit with selected backend, auth mode, model, and effort on mount', async () => {
       const onRunInit = makeOnRunInit();
       renderWithTheme(
         <StepInit
           {...loadingProps}
           selectedBackend="claude"
+          selectedAuthMode="api_key"
           selectedModel="claude-haiku-4-5"
           selectedEffort="high"
           onRunInit={onRunInit}
@@ -222,6 +226,7 @@ describe('StepInit', () => {
       expect(onRunInit).toHaveBeenCalledOnce();
       expect(onRunInit).toHaveBeenCalledWith({
         backend: 'claude',
+        authMode: 'api_key',
         model: 'claude-haiku-4-5',
         effort: 'high'
       });

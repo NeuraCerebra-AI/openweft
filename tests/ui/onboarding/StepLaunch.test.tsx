@@ -13,6 +13,7 @@ const waitForUpdate = () => new Promise<void>((r) => setTimeout(r, 50));
 
 const defaultProps = {
   selectedBackend: 'codex' as const,
+  selectedAuthMode: 'subscription' as const,
   queuedCount: 3,
   onLaunch: vi.fn(),
   onExit: vi.fn(),
@@ -100,7 +101,28 @@ describe('StepLaunch', () => {
     });
   });
 
-  describe('(b.1) keeps launch screen focused on launching', () => {
+  describe('(b.1) shows launch preflight checklist', () => {
+    it('renders backend, auth, git, and queue readiness', () => {
+      const { lastFrame } = renderWithTheme(<StepLaunch {...defaultProps} />);
+      const frame = lastFrame() ?? '';
+
+      expect(frame).toContain('Backend: codex');
+      expect(frame).toContain('Auth: subscription CLI login');
+      expect(frame).toContain('Git: repository ready');
+      expect(frame).toContain('Queue: 3 requests ready');
+    });
+
+    it('renders API-key env var for Claude when API-key auth is selected', () => {
+      const { lastFrame } = renderWithTheme(
+        <StepLaunch {...defaultProps} selectedBackend="claude" selectedAuthMode="api_key" />,
+      );
+      const frame = lastFrame() ?? '';
+
+      expect(frame).toContain('Auth: ANTHROPIC_API_KEY');
+    });
+  });
+
+  describe('(b.2) keeps launch screen focused on launching', () => {
     it('does not render Superpowers advisory copy on the launch screen', () => {
       const { lastFrame } = renderWithTheme(<StepLaunch {...defaultProps} />);
       const frame = lastFrame() ?? '';
