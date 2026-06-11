@@ -7,7 +7,7 @@ describe('buildProgram', () => {
     const program = buildProgram();
     const commandNames = program.commands.map((command) => command.name());
 
-    expect(commandNames).toEqual(['init', 'add', 'start', 'status', 'stop']);
+    expect(commandNames).toEqual(['init', 'add', 'start', 'resume', 'status', 'stop']);
   });
 
   it('registers start execution mode flags', () => {
@@ -23,5 +23,20 @@ describe('buildProgram', () => {
       '--model',
       '--effort'
     ]);
+  });
+
+  it('registers resume as the same checkpoint path as start', async () => {
+    const calls: string[] = [];
+    const program = buildProgram({
+      start: () => {
+        calls.push('start');
+      }
+    });
+
+    await program.parseAsync(['node', 'openweft', 'resume']);
+
+    const resumeCommand = program.commands.find((command) => command.name() === 'resume');
+    expect(calls).toEqual(['start']);
+    expect(resumeCommand?.description()).toMatch(/Resume.*same checkpoint path as start/i);
   });
 });

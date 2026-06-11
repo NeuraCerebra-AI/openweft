@@ -831,7 +831,7 @@ describe('command handlers', () => {
 
     await expect(program.parseAsync(['stop'], { from: 'user' })).resolves.toBeDefined();
     expect(output).toContain(
-      'Sent SIGTERM to OpenWeft background process 4321. Waiting for the current phase to finish...'
+      'Sent SIGTERM to OpenWeft background process 4321. Waiting for the next phase-safe checkpoint...'
     );
     expect(output).toContain('OpenWeft background run stopped.');
     expect(output.some((line) => line.includes('finishing cleanup'))).toBe(false);

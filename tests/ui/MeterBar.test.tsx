@@ -5,7 +5,7 @@ import { MeterBar } from '../../src/ui/MeterBar.js';
 import { ThemeContext, catppuccinMocha } from '../../src/ui/theme.js';
 
 describe('MeterBar', () => {
-  it('renders three meters with labels and values when phase is provided', () => {
+  it('renders one compact telemetry strip when phase is provided', () => {
     const { lastFrame } = render(
       <ThemeContext.Provider value={catppuccinMocha}>
         <MeterBar
@@ -19,17 +19,13 @@ describe('MeterBar', () => {
     );
     const frame = lastFrame() ?? '';
 
-    // Phase meter
     expect(frame).toContain('Phase 2/4');
-    expect(frame).toContain('3/5');
-
-    // Tokens meter
-    expect(frame).toContain('Tokens');
+    expect(frame).toContain('completed 3/5');
     expect(frame).toContain('45k');
-
-    // Time meter
-    expect(frame).toContain('Time');
+    expect(frame).toContain('elapsed');
     expect(frame).toContain('2:05');
+    expect(frame).not.toContain('Tokens');
+    expect(frame).not.toContain('Time');
   });
 
   it('returns empty output when phase is null', () => {
@@ -65,7 +61,7 @@ describe('MeterBar', () => {
     expect(frame).not.toMatch(/750k/);
   });
 
-  it('renders bar characters', () => {
+  it('does not render meter bar characters', () => {
     const { lastFrame } = render(
       <ThemeContext.Provider value={catppuccinMocha}>
         <MeterBar
@@ -78,8 +74,7 @@ describe('MeterBar', () => {
       </ThemeContext.Provider>
     );
     const frame = lastFrame() ?? '';
-    // Should contain the bar character ━
-    expect(frame).toContain('━');
+    expect(frame).not.toContain('━');
   });
 
   it('formats time correctly', () => {

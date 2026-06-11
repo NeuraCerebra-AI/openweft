@@ -7,6 +7,7 @@ import {
   summarizeRuntimeArtifacts,
   type RuntimeDiagnostics
 } from './runtimeDiagnostics.js';
+import { buildTerminalRunCopy } from './terminalCopy.js';
 
 const formatPriority = (score: number | null | undefined, tier: PriorityTier | null | undefined): string => {
   if (score === null || score === undefined || tier === null || tier === undefined) {
@@ -27,7 +28,17 @@ const summarizeFeatureStatuses = (checkpoint: OrchestratorCheckpoint | null): st
   }
 
   const total = Object.keys(checkpoint.features).length;
-  const summaryParts = ['completed', 'planned', 'executing', 'failed', 'pending', 'skipped']
+  const summaryParts = [
+    'completed',
+    'planned',
+    'executing',
+    'failed',
+    'planning-needs-review',
+    'adjustment-needs-review',
+    'blocked-by-failed-feature',
+    'pending',
+    'skipped'
+  ]
     .map((status) => {
       const count = counts.get(status) ?? 0;
       return count > 0 ? `${count} ${status}` : null;
@@ -93,10 +104,24 @@ export const renderStatusReport = (input: {
   const executing = features.filter((feature) => feature.status === 'executing');
   const planned = features.filter((feature) => feature.status === 'planned');
   const failed = features.filter((feature) => feature.status === 'failed');
+  const needsReview = features.filter((feature) =>
+    feature.status === 'planning-needs-review' || feature.status === 'adjustment-needs-review'
+  );
+  const blocked = features.filter((feature) => feature.status === 'blocked-by-failed-feature');
   const completed = features.filter((feature) => feature.status === 'completed');
   const usageLine = `Tokens: ${cost.totalInputTokens} input / ${cost.totalOutputTokens} output`;
+  const runCopy = buildTerminalRunCopy({
+    checkpoint,
+    checkpointSource: input.checkpointSource,
+    pendingQueueCount: queue.pending.length,
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
+    ...(input.background !== undefined ? { background: input.background } : {})
+  });
 
   const lines = [
+    `Health: ${runCopy.health}`,
+    `Meaning: ${runCopy.meaning}`,
+    `Next Action: ${runCopy.nextAction}`,
     `Status: ${checkpoint?.status ?? 'idle'}`,
     `Machine State: ${checkpoint?.currentState ?? 'idle'}`,
     `Background: ${input.background ? (input.background.alive ? `running (PID ${input.background.pid})` : `stale PID ${input.background.pid}`) : 'not running'}`,
@@ -106,6 +131,8 @@ export const renderStatusReport = (input: {
     usageLine,
     ...formatFeatureList(checkpoint, 'Executing', executing),
     ...formatFeatureList(checkpoint, 'Planned', planned),
+    ...formatFeatureList(checkpoint, 'Needs Review', needsReview),
+    ...formatFeatureList(checkpoint, 'Blocked', blocked),
     ...formatFeatureList(checkpoint, 'Failed', failed),
     ...formatFeatureList(checkpoint, 'Completed', completed.slice(-5))
   ];

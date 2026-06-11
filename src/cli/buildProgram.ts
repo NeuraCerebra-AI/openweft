@@ -60,18 +60,27 @@ export const buildProgram = (handlers: Partial<CommandHandlers> = {}): Command =
       await resolvedHandlers.add(...args);
     });
 
-  program
-    .command('start')
-    .description('Start the orchestration run.')
+  const addStartOptions = (command: Command): Command =>
+    command
     .option('--bg', 'Run in the background.')
     .option('--stream', 'Stream raw agent output.')
     .option('--tmux', 'Use tmux session output for agents when available.')
     .option('--dry-run', 'Use the mock adapter and avoid real backend execution.')
     .option('--model <model>', 'Override the configured model for this run.')
-    .option('--effort <level>', 'Override the configured reasoning effort for this run.')
+      .option('--effort <level>', 'Override the configured reasoning effort for this run.');
+
+  addStartOptions(program.command('start').description('Start the orchestration run.'))
     .action(async (...args) => {
       await resolvedHandlers.start(...args);
     });
+
+  addStartOptions(
+    program
+      .command('resume')
+      .description('Resume a stopped run through the same checkpoint path as start.')
+  ).action(async (...args) => {
+    await resolvedHandlers.start(...args);
+  });
 
   program
     .command('status')

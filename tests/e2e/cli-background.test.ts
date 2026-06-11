@@ -50,7 +50,9 @@ describe('openweft CLI background flow', () => {
     await runCli(['init']);
 
     const startOutput = await runCli(['start', '--bg']);
-    expect(startOutput).toContain("► Backgrounded (PID 4321). Use 'openweft status' to check progress.");
+    expect(startOutput).toContain(
+      "► Backgrounded (PID 4321). Use 'openweft status' to check progress; raw output is in .openweft/output.log."
+    );
     expect(await readFile(path.join(repoRoot, '.openweft', 'pid'), 'utf8')).toBe('4321\n');
 
     alive = true;
@@ -60,7 +62,7 @@ describe('openweft CLI background flow', () => {
     const stopOutput = await runCli(['stop']);
     expect(sentSignal).toBe('SIGTERM');
     expect(stopOutput).toContain(
-      'Sent SIGTERM to OpenWeft background process 4321. Waiting for the current phase to finish...'
+      'Sent SIGTERM to OpenWeft background process 4321. Waiting for the next phase-safe checkpoint...'
     );
     expect(stopOutput).toContain('OpenWeft background run stopped.');
   });

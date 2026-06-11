@@ -260,4 +260,23 @@ describe('App', () => {
 
     expect(frame).toContain('Press d to remove');
   });
+
+  it('shows stored review details without calling review work resumable checkpoint work', () => {
+    const store = createUIStore();
+    store.getState().addAgent({
+      id: 'r1',
+      name: 'Needs Review',
+      feature: 'planning failed',
+      status: 'review',
+      removable: false,
+      readyStateDetail: 'Needs operator review before scheduling.'
+    });
+    store.getState().setFocusedAgent('r1');
+
+    const { lastFrame } = render(<App store={store} />);
+    const frame = lastFrame() ?? '';
+
+    expect(frame).toContain('Needs operator review before scheduling.');
+    expect(frame).not.toContain('Resumable checkpoint');
+  });
 });

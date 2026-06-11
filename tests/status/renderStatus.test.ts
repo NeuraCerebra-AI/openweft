@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createEmptyCheckpoint } from '../../src/state/checkpoint.js';
+import { createEmptyCheckpoint, type FeatureCheckpoint } from '../../src/state/checkpoint.js';
 import { renderStatusReport } from '../../src/status/renderStatus.js';
 
 describe('renderStatusReport', () => {
@@ -45,6 +45,11 @@ describe('renderStatusReport', () => {
       queueContent: '# OpenWeft feature queue\n'
     });
 
+    expect(report.split('\n').slice(0, 3)).toEqual([
+      'Health: Idle',
+      'Meaning: OpenWeft is not currently running.',
+      'Next Action: Add work with openweft add, then start the run with openweft start.'
+    ]);
     expect(report).toContain('Tokens: 384000 input / 4000 output');
     expect(report).not.toContain('Cost:');
   });
@@ -214,5 +219,69 @@ describe('renderStatusReport', () => {
     });
 
     expect(report).toContain('Runtime Artifacts: preserved (7 residue files under .openweft/codex-home)');
+  });
+
+  it('renders review and blocked feature buckets with safe next action copy', () => {
+    const checkpoint = createEmptyCheckpoint({
+      orchestratorVersion: 'test',
+      configHash: 'test-config-hash',
+      runId: 'test-run',
+      checkpointId: 'test-checkpoint',
+      createdAt: '2026-03-23T00:00:00.000Z'
+    });
+    checkpoint.status = 'failed';
+    const reviewFeature: FeatureCheckpoint = {
+      id: '001',
+      request: 'Fix stale manifest',
+      status: 'planning-needs-review',
+      attempts: 1,
+      planFile: '/tmp/001.plan.md',
+      promptBFile: '/tmp/001.prompt-b.md',
+      evolvedPlanFile: null,
+      branchName: null,
+      worktreePath: null,
+      sessionId: null,
+      sessionScope: null,
+      backend: 'mock',
+      manifest: {
+        create: [],
+        modify: ['src/shared.ts'],
+        delete: []
+      },
+      manifestRecoveryMethod: 'last-known-good',
+      manifestConfidence: 'stale',
+      reviewReason: 'Manifest was recovered from a stale fallback.',
+      blockedByFeatureIds: [],
+      rerunEligible: true,
+      mergeResolutionAttempts: 0,
+      priorityScore: null,
+      priorityTier: null,
+      scoringCycles: 0,
+      updatedAt: '2026-03-23T00:00:00.000Z'
+    };
+    checkpoint.features['001'] = reviewFeature;
+    checkpoint.features['002'] = {
+      ...reviewFeature,
+      id: '002',
+      request: 'Overlapping follow-up',
+      status: 'blocked-by-failed-feature',
+      manifestRecoveryMethod: 'json',
+      manifestConfidence: 'current',
+      reviewReason: 'Overlaps unresolved feature 001.',
+      blockedByFeatureIds: ['001']
+    };
+
+    const report = renderStatusReport({
+      checkpoint,
+      checkpointSource: 'primary',
+      queueContent: '# OpenWeft feature queue\n'
+    });
+
+    expect(report).toContain('Health: Review needed');
+    expect(report).toContain('Next Action: Review the listed feature plans/errors, then rerun openweft start after resolving them.');
+    expect(report).toContain('Needs Review:');
+    expect(report).toContain('[001] Fix stale manifest');
+    expect(report).toContain('Blocked:');
+    expect(report).toContain('[002] Overlapping follow-up');
   });
 });

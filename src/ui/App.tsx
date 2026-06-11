@@ -360,8 +360,11 @@ export const App: React.FC<AppProps> = ({
                     approvalRequest={agent.approvalRequest}
                     spinnerFrame={state.spinnerFrame}
                     readyStateDetail={
-                      !state.executionRequested && agent.status === 'queued'
-                        ? (agent.removable ? 'Press d to remove' : 'Resumable checkpoint')
+                      !state.executionRequested
+                        ? agent.readyStateDetail ??
+                          (agent.status === 'queued'
+                            ? (agent.removable ? 'Press d to remove' : 'Resumable checkpoint')
+                            : null)
                         : null
                     }
                   />

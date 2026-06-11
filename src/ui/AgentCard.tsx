@@ -32,6 +32,8 @@ const statusBorderColor = (status: AgentStatus, focused: boolean, colors: ThemeC
     case 'failed': return colors.red;
     case 'queued': return colors.surface2;
     case 'approval': return colors.yellow;
+    case 'review': return colors.yellow;
+    case 'blocked': return colors.yellow;
   }
 };
 
@@ -53,15 +55,17 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(({
   const borderColor = statusBorderColor(status, focused, colors);
   const dim = status === 'completed' && !focused;
   const showSecondaryFeature = feature !== name;
+  const approvalSummary = approvalRequest
+    ? `approval: ${approvalRequest.action} ${approvalRequest.file}`
+    : null;
 
   return (
     <Box
       flexDirection="column"
-      borderStyle={focused ? borders.panelActive : borders.panel}
+      borderStyle={focused ? borders.panelActive : 'single'}
       borderColor={borderColor}
       paddingX={1}
     >
-      {/* Top row */}
       <Box>
         <Text color={colors[colorKey]} dimColor={dim}>{icon} </Text>
         <Box flexGrow={1}>
@@ -73,10 +77,12 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(({
         <Text color={colors.muted} dimColor={dim}>{formatTime(elapsed)}</Text>
       </Box>
 
-      {/* Detail section */}
       <Box flexDirection="column" paddingLeft={2}>
         {showSecondaryFeature && (
           <Text color={colors.subtext} dimColor={dim} wrap="truncate-end">{feature}</Text>
+        )}
+        {approvalSummary !== null && (
+          <Text color={colors.yellow} wrap="truncate-end">{approvalSummary}</Text>
         )}
         {focused && files.length > 0 && (
           <Box>
@@ -87,17 +93,7 @@ export const AgentCard: React.FC<AgentCardProps> = React.memo(({
         {currentTool !== null && <Text color={colors.mauve} dimColor={dim} wrap="truncate-end">{`▸ ${currentTool}`}</Text>}
         {focused && readyStateDetail !== null && <Text color={colors.teal} wrap="truncate-end">{readyStateDetail}</Text>}
         {focused && approvalRequest !== null && (
-          <Box
-            flexDirection="column"
-            borderStyle="round"
-            borderColor={colors.yellow}
-            paddingX={1}
-            marginTop={1}
-          >
-            <Text bold color={colors.yellow}>APPROVAL NEEDED</Text>
-            <Text color={colors.text}>{`${approvalRequest.action}: ${approvalRequest.file}`}</Text>
-            <Text color={colors.subtext}>{approvalRequest.detail}</Text>
-          </Box>
+          <Text color={colors.subtext} wrap="truncate-end">{approvalRequest.detail}</Text>
         )}
       </Box>
     </Box>
