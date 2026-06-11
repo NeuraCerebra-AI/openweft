@@ -70,6 +70,19 @@ export const parseClaudeJsonOutput = (
   };
 };
 
+export const extractClaudeSessionIdFromOutput = (
+  stdout: string,
+  fallbackSessionId: string | null = null
+): string | null => {
+  try {
+    const parsed = parseClaudeJson(stdout);
+    return typeof parsed.session_id === 'string' ? parsed.session_id : fallbackSessionId;
+  } catch {
+    const match = stdout.match(/"session_id"\s*:\s*"([^"]+)"/);
+    return match?.[1] ?? fallbackSessionId;
+  }
+};
+
 export const buildClaudeCommand = (request: AdapterTurnRequest): AdapterCommandSpec => {
   if (
     request.effortLevel !== undefined &&
@@ -127,7 +140,22 @@ export class ClaudeCliAdapter implements AgentAdapter {
   }
 
   async runTurn(request: AdapterTurnRequest) {
-    const command = this.buildCommand(request);
+    let command: AdapterCommandSpec;
+    try {
+      command = this.buildCommand(request);
+    } catch (error) {
+      return createAdapterFailure({
+        backend: this.backend,
+        request,
+        command: {
+          command: 'claude',
+          args: [],
+          cwd: request.cwd,
+          input: request.prompt
+        },
+        error
+      });
+    }
 
     let execution;
     try {
@@ -146,7 +174,8 @@ export class ClaudeCliAdapter implements AgentAdapter {
         backend: this.backend,
         request,
         command,
-        execution
+        execution,
+        sessionId: extractClaudeSessionIdFromOutput(execution.stdout, request.sessionId ?? null)
       });
     }
 
@@ -173,7 +202,8 @@ export class ClaudeCliAdapter implements AgentAdapter {
         request,
         command,
         execution,
-        error
+        error,
+        sessionId: extractClaudeSessionIdFromOutput(execution.stdout, request.sessionId ?? null)
       });
     }
   }

@@ -24,6 +24,11 @@ export interface CommandExecutionResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  signal?: string | null;
+  errorCode?: string;
+  errorMessage?: string;
+  failed?: boolean;
+  spawnFailure?: boolean;
 }
 
 export type CommandRunner = (spec: AdapterCommandSpec) => Promise<CommandExecutionResult>;
@@ -59,6 +64,11 @@ export interface AdapterRunArtifacts {
   stdout: string;
   stderr: string;
   exitCode: number;
+  signal?: string | null;
+  errorCode?: string;
+  errorMessage?: string;
+  failed?: boolean;
+  spawnFailure?: boolean;
   command: AdapterCommandSpec;
 }
 

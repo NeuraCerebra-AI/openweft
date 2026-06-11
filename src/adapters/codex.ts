@@ -92,6 +92,31 @@ export const parseCodexJsonlOutput = (
   };
 };
 
+export const extractCodexSessionIdFromOutput = (
+  stdout: string,
+  fallbackSessionId: string | null = null
+): string | null => {
+  let sessionId = fallbackSessionId;
+
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      if (parsed.type === 'thread.started' && typeof parsed.thread_id === 'string') {
+        sessionId = parsed.thread_id;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return sessionId;
+};
+
 export const buildCodexCommand = (request: AdapterTurnRequest): AdapterCommandSpec => {
   const args = ['exec'];
   const env = {
@@ -154,7 +179,22 @@ export class CodexCliAdapter implements AgentAdapter {
   }
 
   async runTurn(request: AdapterTurnRequest) {
-    const command = this.buildCommand(request);
+    let command: AdapterCommandSpec;
+    try {
+      command = this.buildCommand(request);
+    } catch (error) {
+      return createAdapterFailure({
+        backend: this.backend,
+        request,
+        command: {
+          command: 'codex',
+          args: [],
+          cwd: request.cwd,
+          input: request.prompt
+        },
+        error
+      });
+    }
 
     let execution;
     try {
@@ -173,7 +213,8 @@ export class CodexCliAdapter implements AgentAdapter {
         backend: this.backend,
         request,
         command,
-        execution
+        execution,
+        sessionId: extractCodexSessionIdFromOutput(execution.stdout, request.sessionId ?? null)
       });
     }
 
@@ -196,7 +237,8 @@ export class CodexCliAdapter implements AgentAdapter {
         request,
         command,
         execution,
-        error
+        error,
+        sessionId: extractCodexSessionIdFromOutput(execution.stdout, request.sessionId ?? null)
       });
     }
   }

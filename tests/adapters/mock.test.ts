@@ -1,3 +1,7 @@
+import { mkdtemp } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { MockAgentAdapter } from '../../src/adapters/mock.js';
@@ -51,6 +55,29 @@ describe('mock adapter', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.classified.tier).toBe('transient');
+    }
+  });
+
+  it('returns ok:false instead of throwing when execution manifest parsing fails', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-mock-malformed-'));
+    const adapter = new MockAgentAdapter();
+
+    const result = await adapter.runTurn({
+      ...baseRequest(),
+      stage: 'execution',
+      cwd: tempDirectory,
+      prompt: `=== PLAN START ===
+## Manifest
+
+\`\`\`json manifest
+not-json
+\`\`\`
+=== PLAN END ===`
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toMatch(/manifest|parse/i);
     }
   });
 });

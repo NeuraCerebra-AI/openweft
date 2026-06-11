@@ -18,12 +18,29 @@ const buildArtifacts = (
   command: AdapterCommandSpec,
   execution: CommandExecutionResult
 ): AdapterRunArtifacts => {
-  return {
+  const artifacts: AdapterRunArtifacts = {
     stdout: execution.stdout,
     stderr: execution.stderr,
     exitCode: execution.exitCode,
     command
   };
+  if (execution.signal !== undefined) {
+    artifacts.signal = execution.signal;
+  }
+  if (execution.errorCode) {
+    artifacts.errorCode = execution.errorCode;
+  }
+  if (execution.errorMessage) {
+    artifacts.errorMessage = execution.errorMessage;
+  }
+  if (execution.failed !== undefined) {
+    artifacts.failed = execution.failed;
+  }
+  if (execution.spawnFailure !== undefined) {
+    artifacts.spawnFailure = execution.spawnFailure;
+  }
+
+  return artifacts;
 };
 
 const buildErrorMessage = (input: {
@@ -32,6 +49,8 @@ const buildErrorMessage = (input: {
 }): string => {
   const stderr = input.execution?.stderr?.trim();
   const stdout = input.execution?.stdout?.trim();
+  const errorMessage = input.execution?.errorMessage?.trim();
+  const errorCode = input.execution?.errorCode?.trim();
 
   // When we have a thrown Error alongside execution output, the Error's
   // message is more descriptive than raw stdout (which may be a JSON blob)
@@ -45,6 +64,10 @@ const buildErrorMessage = (input: {
 
   if (stderr) {
     return stderr;
+  }
+
+  if (errorMessage) {
+    return errorCode ? `${errorCode}: ${errorMessage}` : errorMessage;
   }
 
   if (stdout) {
@@ -128,7 +151,8 @@ export const createAdapterFailure = (input: {
       input.execution ?? {
         stdout: '',
         stderr: message,
-        exitCode: 1
+        exitCode: 1,
+        failed: true
       }
     )
   };
