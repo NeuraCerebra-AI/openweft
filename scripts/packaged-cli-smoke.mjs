@@ -9,6 +9,7 @@ const repoRoot = path.resolve(import.meta.dirname, '..');
 const run = async () => {
   const workingRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-pack-smoke-'));
   const installRoot = path.join(workingRoot, 'install');
+  let tarballPath = null;
 
   try {
     const packResult = await execa('npm', ['pack', '--json'], {
@@ -21,7 +22,7 @@ const run = async () => {
       throw new Error('npm pack did not return a tarball filename.');
     }
 
-    const tarballPath = path.join(repoRoot, tarballName);
+    tarballPath = path.join(repoRoot, tarballName);
 
     await execa('npm', ['init', '-y'], {
       cwd: workingRoot
@@ -62,8 +63,17 @@ const run = async () => {
       throw new Error('Packaged CLI init did not scaffold the OpenWeft Work Protocol skill.');
     }
 
-    await rm(tarballPath, { force: true });
+    await execa(process.execPath, [installedCli, 'add', 'add packaged dry-run smoke marker'], {
+      cwd: workingRoot
+    });
+    await execa(process.execPath, [installedCli, 'start', '--dry-run'], {
+      cwd: workingRoot
+    });
+
   } finally {
+    if (tarballPath !== null) {
+      await rm(tarballPath, { force: true });
+    }
     await rm(workingRoot, { recursive: true, force: true });
   }
 };
