@@ -103,4 +103,18 @@ describe('scoring', () => {
     // With cyclesSeen < 2, lambda=1.0 so smoothed = raw (ignores previous)
     expect(withCycles[0]!.smoothedPriority).toBeLessThan(withoutCycles[0]!.smoothedPriority);
   });
+
+  it('propagates successPenalty through scoreQueue so retryable failures are deprioritized', () => {
+    const feature = {
+      id: '001',
+      request: 'test',
+      manifest: { create: ['src/a.ts'], modify: [], delete: [] }
+    };
+
+    const normal = scoreQueue([feature], repoContext);
+    const penalized = scoreQueue([{ ...feature, successPenalty: 0.25 }], repoContext);
+
+    expect(penalized[0]!.successLikelihood).toBeLessThan(normal[0]!.successLikelihood);
+    expect(penalized[0]!.smoothedPriority).toBeLessThan(normal[0]!.smoothedPriority);
+  });
 });

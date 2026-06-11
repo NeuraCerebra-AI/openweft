@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 import type { ResolvedOpenWeftConfig } from '../config/index.js';
 import type { OrchestratorCheckpoint } from '../state/checkpoint.js';
 import { saveCheckpoint } from '../state/checkpoint.js';
+import { isUnresolvedTerminalFeature, syncReviewMetadata } from '../state/recovery.js';
 import { appendAuditEntry } from './audit.js';
 import {
   collectRuntimeDiagnostics,
@@ -33,6 +34,7 @@ const saveCheckpointSnapshot = async (
   config: ResolvedOpenWeftConfig,
   checkpoint: OrchestratorCheckpoint
 ): Promise<void> => {
+  syncReviewMetadata(checkpoint);
   checkpoint.updatedAt = timestamp();
   await saveCheckpoint({
     checkpoint,
@@ -200,7 +202,7 @@ export const finalizeRun = async (input: {
   }
 
   const unresolvedFailedFeatureIds = Object.values(input.checkpoint.features)
-    .filter((feature) => feature.status === 'failed')
+    .filter(isUnresolvedTerminalFeature)
     .map((feature) => feature.id);
   const event = toTerminalEvent(terminalStatus);
 

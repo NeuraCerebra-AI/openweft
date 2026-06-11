@@ -152,7 +152,7 @@ describe('manifest', () => {
     ).not.toThrow();
   });
 
-  it('rejects split ledger sections that only satisfy the required headings across multiple blocks', () => {
+  it('accepts repeated ledger sections when their combined headings are complete', () => {
     expect(() =>
       assertLedgerSection(`# Plan
 
@@ -182,10 +182,31 @@ describe('manifest', () => {
 ### Validation
 - Run targeted checks.
 `)
-    ).toThrow(/Ledger/i);
+    ).not.toThrow();
   });
 
-  it('reports missing ledger subheadings when a ledger heading exists without the required structure', () => {
+  it('accepts ledger heading case variants as presentation defects', () => {
+    expect(() =>
+      assertLedgerSection(`# Plan
+
+## ledger
+
+### constraints
+- Keep the change set small.
+
+### assumptions
+- The manifest is conservative.
+
+### watchpoints
+- Preserve orchestrator compatibility.
+
+### validation
+- Run targeted checks.
+`)
+    ).not.toThrow();
+  });
+
+  it('accepts reconstructible ledger bullets when semantic labels exist', () => {
     expect(() =>
       assertLedgerSection(`# Plan
 
@@ -194,6 +215,17 @@ describe('manifest', () => {
 - Assumption: The manifest is conservative.
 - Watchpoint: Preserve orchestrator compatibility.
 - Validation: Run targeted checks.
+`)
+    ).not.toThrow();
+  });
+
+  it('reports missing ledger subheadings when semantic content cannot be reconstructed', () => {
+    expect(() =>
+      assertLedgerSection(`# Plan
+
+## Ledger
+- Keep the change set small.
+- The manifest is conservative.
 `)
     ).toThrow('Ledger section must include the subheadings: Constraints, Assumptions, Watchpoints, Validation.');
   });

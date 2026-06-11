@@ -34,6 +34,16 @@ export interface ParsedManifestDocument {
 }
 
 const REQUIRED_LEDGER_SUBHEADINGS = ['Constraints', 'Assumptions', 'Watchpoints', 'Validation'] as const;
+type RequiredLedgerSubheading = typeof REQUIRED_LEDGER_SUBHEADINGS[number];
+const LEDGER_HEADING_BY_NORMALIZED = new Map<string, RequiredLedgerSubheading>(
+  REQUIRED_LEDGER_SUBHEADINGS.flatMap((heading) => {
+    const normalized = heading.toLowerCase();
+    return [
+      [normalized, heading],
+      [normalized.replace(/s$/, ''), heading]
+    ] as Array<[string, RequiredLedgerSubheading]>;
+  })
+);
 
 const isRecord = (value: unknown): value is Record<string, unknown> => {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -86,12 +96,31 @@ export const extractManifestBlock = (markdown: string): ManifestBlock | null => 
 
 export const extractLedgerSubheadings = (markdown: string): string[] => {
   const ledgerSections = collectLedgerSections(markdown);
-  const richestSection = ledgerSections.reduce<string[]>(
-    (best, section) => (section.length > best.length ? section : best),
-    []
-  );
+  return [...new Set(ledgerSections.flat())];
+};
 
-  return richestSection;
+const normalizeLedgerLabel = (value: string): string =>
+  value.trim().replace(/:$/, '').toLowerCase();
+
+const canonicalLedgerHeading = (value: string): RequiredLedgerSubheading | null =>
+  LEDGER_HEADING_BY_NORMALIZED.get(normalizeLedgerLabel(value)) ?? null;
+
+const collectSemanticLedgerLabels = (text: string): RequiredLedgerSubheading[] => {
+  const labels: RequiredLedgerSubheading[] = [];
+
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.trim().match(/^(?:[-*]\s*)?([A-Za-z]+)\s*:/);
+    if (!match?.[1]) {
+      continue;
+    }
+
+    const canonical = canonicalLedgerHeading(match[1]);
+    if (canonical) {
+      labels.push(canonical);
+    }
+  }
+
+  return labels;
 };
 
 const collectLedgerSections = (markdown: string): string[][] => {
@@ -104,7 +133,7 @@ const collectLedgerSections = (markdown: string): string[][] => {
       if (currentLedgerSection) {
         ledgerSections.push(currentLedgerSection);
       }
-      currentLedgerSection = toString(node).trim() === 'Ledger' ? [] : null;
+      currentLedgerSection = toString(node).trim().toLowerCase() === 'ledger' ? [] : null;
       return;
     }
 
@@ -117,7 +146,16 @@ const collectLedgerSections = (markdown: string): string[][] => {
     }
 
     if (currentLedgerSection && node.type === 'heading' && node.depth === 3) {
-      currentLedgerSection.push(toString(node).trim());
+      const canonical = canonicalLedgerHeading(toString(node));
+      currentLedgerSection.push(canonical ?? toString(node).trim());
+      return;
+    }
+
+    if (
+      currentLedgerSection &&
+      (node.type === 'paragraph' || node.type === 'listItem')
+    ) {
+      currentLedgerSection.push(...collectSemanticLedgerLabels(toString(node)));
     }
   });
 
@@ -136,7 +174,10 @@ export const assertLedgerSection = (markdown: string): void => {
 
   const subheadings = extractLedgerSubheadings(markdown);
 
-  const missing = REQUIRED_LEDGER_SUBHEADINGS.filter((heading) => !subheadings.includes(heading));
+  const canonicalSubheadings = new Set(
+    subheadings.map((heading) => canonicalLedgerHeading(heading) ?? heading)
+  );
+  const missing = REQUIRED_LEDGER_SUBHEADINGS.filter((heading) => !canonicalSubheadings.has(heading));
   if (missing.length > 0) {
     throw new Error(
       `Ledger section must include the subheadings: ${missing.join(', ')}.`

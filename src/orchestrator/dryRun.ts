@@ -31,6 +31,7 @@ import {
   type FeatureCheckpoint,
   type OrchestratorCheckpoint
 } from '../state/checkpoint.js';
+import { isUnresolvedTerminalFeature, syncReviewMetadata } from '../state/recovery.js';
 import { OPENWEFT_VERSION } from '../version.js';
 
 const DRY_RUN_MODEL = 'mock-model';
@@ -103,6 +104,7 @@ const saveCheckpointSnapshot = async (
   config: ResolvedOpenWeftConfig,
   checkpoint: OrchestratorCheckpoint
 ): Promise<void> => {
+  syncReviewMetadata(checkpoint);
   checkpoint.updatedAt = timestamp();
   await saveCheckpoint({
     checkpoint,
@@ -383,7 +385,8 @@ const executePlannedFeatures = async (
             attempts: (checkpoint.features[featureId]?.attempts ?? 0) + 1,
             sessionId: result.sessionId,
             sessionScope: result.sessionId ? 'repo' : null,
-            backend: 'mock'
+            backend: 'mock',
+            lastError: result.error
           });
         }
         continue;
@@ -401,7 +404,9 @@ const executePlannedFeatures = async (
     await saveCheckpointSnapshot(input.config, checkpoint);
   }
 
-  checkpoint.status = 'completed';
+  checkpoint.status = Object.values(checkpoint.features).some(isUnresolvedTerminalFeature)
+    ? 'failed'
+    : 'completed';
   checkpoint.currentState = 'idle';
   checkpoint.currentPhase = null;
   await saveCheckpointSnapshot(input.config, checkpoint);

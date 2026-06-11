@@ -300,6 +300,7 @@ export interface ScoreableFeature {
   previousSmoothedPriority?: number | undefined;
   previousTier?: PriorityTier | undefined;
   cyclesSeen?: number | undefined;
+  successPenalty?: number | undefined;
 }
 
 export interface QueueScoringOptions {
@@ -333,6 +334,7 @@ export const scoreQueue = (
       previousSmoothedPriority: feature.previousSmoothedPriority,
       previousTier: feature.previousTier,
       cyclesSeen: feature.cyclesSeen,
+      successPenalty: feature.successPenalty,
       previousRank: previousIndex.get(feature.id)
     })),
     repoContext

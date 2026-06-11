@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -30,6 +30,29 @@ describe('checkpoint persistence', () => {
 
     expect(loaded.source).toBe('primary');
     expect(loaded.checkpoint?.runId).toBe('run-1');
+  });
+
+  it('seeds a loadable backup on the first checkpoint save', async () => {
+    const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-checkpoint-first-backup-'));
+    const checkpointFile = path.join(tempDirectory, 'checkpoint.json');
+    const backupFile = path.join(tempDirectory, 'checkpoint.json.backup');
+    const checkpoint = createEmptyCheckpoint({
+      orchestratorVersion: '0.1.0',
+      configHash: 'sha256:test',
+      runId: 'run-1',
+      checkpointId: 'chk-1',
+      createdAt: '2026-03-13T08:00:00.000Z'
+    });
+
+    await saveCheckpoint({ checkpoint, checkpointFile, backupFile });
+    await writeFile(checkpointFile, '{not valid json', 'utf8');
+
+    const loaded = await loadCheckpoint(checkpointFile, backupFile);
+    const backupContent = JSON.parse(await readFile(backupFile, 'utf8')) as { checkpointId?: string };
+
+    expect(loaded.source).toBe('backup');
+    expect(loaded.checkpoint?.checkpointId).toBe('chk-1');
+    expect(backupContent.checkpointId).toBe('chk-1');
   });
 
   it('falls back to the backup file when the primary is corrupted', async () => {
@@ -186,6 +209,37 @@ describe('checkpoint persistence', () => {
     expect(loaded.checkpoint?.features['001']?.evolvedPlanFile).toBeNull();
     expect(loaded.checkpoint?.features['001']?.rerunEligible).toBe(true);
     expect(loaded.checkpoint?.features['001']?.mergeResolutionAttempts).toBe(0);
+  });
+
+  it('accepts review statuses and manifest provenance metadata while keeping legacy defaults', async () => {
+    const parsed = FeatureCheckpointSchema.parse({
+      id: '001',
+      request: 'Add auth',
+      status: 'planning-needs-review',
+      attempts: 0,
+      planFile: '/tmp/001.plan.md',
+      promptBFile: '/tmp/001.prompt-b.md',
+      branchName: null,
+      worktreePath: null,
+      sessionId: null,
+      manifest: {
+        create: ['src/auth.ts'],
+        modify: [],
+        delete: []
+      },
+      manifestRecoveryMethod: 'last-known-good',
+      manifestConfidence: 'stale',
+      reviewReason: 'Manifest was recovered from last-known-good fallback.',
+      blockedByFeatureIds: ['000'],
+      updatedAt: '2026-03-13T08:00:00.000Z'
+    });
+
+    expect(parsed.status).toBe('planning-needs-review');
+    expect(parsed.manifestRecoveryMethod).toBe('last-known-good');
+    expect(parsed.manifestConfidence).toBe('stale');
+    expect(parsed.reviewReason).toMatch(/last-known-good/);
+    expect(parsed.blockedByFeatureIds).toEqual(['000']);
+    expect(parsed.rerunEligible).toBe(true);
   });
 });
 
