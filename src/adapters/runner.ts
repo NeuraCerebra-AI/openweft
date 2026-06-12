@@ -8,6 +8,10 @@ interface ExecaCommandRunnerOptions {
   stdin?: unknown;
   detached?: boolean;
   cleanup?: boolean;
+  /** Invoked with the child pid as soon as the subprocess is spawned. */
+  onSpawn?: (child: { pid: number; command: string }) => void;
+  /** Invoked with the child pid once the subprocess has settled. */
+  onExit?: (pid: number) => void;
 }
 
 export const createExecaCommandRunner = (
@@ -18,8 +22,19 @@ export const createExecaCommandRunner = (
     // Codex/Claude turns can legitimately run for a long time, and we do not yet
     // have a verified cancellation mechanism that is safe for in-flight sessions.
     let result;
+    let spawnedPid: number | null = null;
+    const notifyExit = (): void => {
+      if (spawnedPid !== null && options.onExit) {
+        try {
+          options.onExit(spawnedPid);
+        } catch {
+          // lifecycle hooks must never break a turn
+        }
+      }
+    };
+
     try {
-      result = await execa(spec.command, spec.args, {
+      const subprocess = execa(spec.command, spec.args, {
         cwd: spec.cwd,
         reject: false,
         stdout: (options.stdout ?? 'pipe') as never,
@@ -31,7 +46,20 @@ export const createExecaCommandRunner = (
         ...(options.detached !== undefined ? { detached: options.detached } : {}),
         ...(options.cleanup !== undefined ? { cleanup: options.cleanup } : {})
       });
+
+      spawnedPid = typeof subprocess.pid === 'number' ? subprocess.pid : null;
+      if (spawnedPid !== null && options.onSpawn) {
+        try {
+          options.onSpawn({ pid: spawnedPid, command: spec.command });
+        } catch {
+          // lifecycle hooks must never break a turn
+        }
+      }
+
+      result = await subprocess;
+      notifyExit();
     } catch (error) {
+      notifyExit();
       const errorRecord = error as {
         stdout?: unknown;
         stderr?: unknown;

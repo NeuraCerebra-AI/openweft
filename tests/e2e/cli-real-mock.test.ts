@@ -27,7 +27,8 @@ const runCli = async (cwd: string, args: string[]): Promise<string[]> => {
         installed: true,
         authenticated: true
       }),
-      detectTmux: async () => false
+      detectTmux: async () => false,
+      sleep: async () => {}
     })
   );
 
@@ -61,6 +62,33 @@ const installMockCliAdapters = async (): Promise<void> => {
   }));
 };
 
+const installFailingMockCliAdapters = async (): Promise<void> => {
+  vi.resetModules();
+  const actualAdapters = await vi.importActual<typeof import('../../src/adapters/index.js')>(
+    '../../src/adapters/index.js'
+  );
+
+  // The error message matches a fatal classification pattern so the feature
+  // fails terminally on the first execution pass instead of scheduling reruns.
+  class FailingCodexCliAdapter extends actualAdapters.MockAgentAdapter {
+    constructor(..._args: unknown[]) {
+      super({ fixtures: { execution: { error: 'mock backend authentication failure' } } });
+    }
+  }
+
+  class FailingClaudeCliAdapter extends actualAdapters.MockAgentAdapter {
+    constructor(..._args: unknown[]) {
+      super({ fixtures: { execution: { error: 'mock backend authentication failure' } } });
+    }
+  }
+
+  vi.doMock('../../src/adapters/index.js', () => ({
+    ...actualAdapters,
+    CodexCliAdapter: FailingCodexCliAdapter,
+    ClaudeCliAdapter: FailingClaudeCliAdapter
+  }));
+};
+
 const createTempRepo = async (): Promise<string> => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-real-e2e-'));
   const git = simpleGit(repoRoot);
@@ -76,7 +104,10 @@ const createTempRepo = async (): Promise<string> => {
 };
 
 describe('openweft CLI real mock flow', () => {
+  const initialExitCode = process.exitCode;
+
   afterEach(() => {
+    process.exitCode = initialExitCode;
     vi.doUnmock('../../src/adapters/index.js');
     vi.restoreAllMocks();
     vi.resetModules();
@@ -116,6 +147,7 @@ describe('openweft CLI real mock flow', () => {
     expect(startOutput.join('\n')).toMatch(
       /Run complete: planned 2, merged 2, status completed, head [0-9a-f]{40}, durability verified \(2\/2 completed features\), codex-home already absent\./
     );
+    expect(process.exitCode ?? 0).toBe(0);
 
     const queueContent = await readFile(path.join(repoRoot, 'feature_requests', 'queue.txt'), 'utf8');
     expect(queueContent).toContain('# openweft queue format: v1');
@@ -190,5 +222,38 @@ describe('openweft CLI real mock flow', () => {
     expect(planContent).toContain('## Ledger');
     expect(planContent).toContain('## Manifest');
     expect(promptBContent).toContain('Runtime-generated Work Brief');
+  }, CLI_REAL_MOCK_TIMEOUT_MS);
+
+  it('signals a failed run through process.exitCode', async () => {
+    await installFailingMockCliAdapters();
+    const repoRoot = await createTempRepo();
+
+    await runCli(repoRoot, ['init']);
+    await writeFile(
+      path.join(repoRoot, '.openweftrc.json'),
+      `${JSON.stringify(
+        {
+          backend: 'codex',
+          concurrency: {
+            maxParallelAgents: 1,
+            staggerDelayMs: 0
+          }
+        },
+        null,
+        2
+      )}\n`,
+      'utf8'
+    );
+
+    await runCli(repoRoot, ['add', 'add dashboard filters']);
+
+    const startOutput = await runCli(repoRoot, ['start']);
+    expect(startOutput.join('\n')).toContain('Run failed: planned 1, merged 0, status failed');
+    expect(process.exitCode).toBe(1);
+
+    const checkpoint = JSON.parse(
+      await readFile(path.join(repoRoot, '.openweft', 'checkpoint.json'), 'utf8')
+    ) as { status: string };
+    expect(checkpoint.status).toBe('failed');
   }, CLI_REAL_MOCK_TIMEOUT_MS);
 });

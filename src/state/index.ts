@@ -9,6 +9,7 @@ export {
   type OrchestratorCheckpoint
 } from './checkpoint.js';
 export {
+  hasActionableCheckpointWork,
   hasActionableUnfinishedWork,
   isActionableFeature,
   isReviewFeatureStatus,

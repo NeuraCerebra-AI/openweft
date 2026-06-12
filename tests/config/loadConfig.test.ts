@@ -75,6 +75,63 @@ describe('loadOpenWeftConfig', () => {
     expect(fromNested.configHash).toBe(fromRoot.configHash);
   });
 
+  it('ignores ancestor configs outside the current git repository instead of hijacking repoRoot', async () => {
+    const parentDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-ancestor-hijack-'));
+    await writeFile(
+      path.join(parentDirectory, '.openweftrc.json'),
+      JSON.stringify({
+        ...getDefaultConfig(),
+        approval: 'per-feature'
+      }),
+      'utf8'
+    );
+    const childRepo = path.join(parentDirectory, 'child');
+    await mkdir(path.join(childRepo, '.git'), { recursive: true });
+
+    const { config } = await loadOpenWeftConfig(childRepo);
+
+    expect(config.configFilePath).toBeNull();
+    expect(config.repoRoot).toBe(childRepo);
+    expect(config.approval).toBe('always');
+    expect(config.paths.openweftDir).toBe(path.join(childRepo, '.openweft'));
+    expect(config.paths.queueFile).toBe(path.join(childRepo, 'feature_requests', 'queue.txt'));
+  });
+
+  it('still finds a config at the git repository root when invoked from a nested directory', async () => {
+    const repoDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-git-root-'));
+    await mkdir(path.join(repoDirectory, '.git'), { recursive: true });
+    await writeFile(
+      path.join(repoDirectory, '.openweftrc.json'),
+      JSON.stringify(getDefaultConfig()),
+      'utf8'
+    );
+    const nestedDirectory = path.join(repoDirectory, 'packages', 'app', 'src');
+    await mkdir(nestedDirectory, { recursive: true });
+
+    const { config } = await loadOpenWeftConfig(nestedDirectory);
+
+    expect(config.configFilePath).toBe(path.join(repoDirectory, '.openweftrc.json'));
+    expect(config.repoRoot).toBe(repoDirectory);
+  });
+
+  it('stops config discovery at the nearest package.json boundary outside git repositories', async () => {
+    const parentDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-pkg-boundary-'));
+    await writeFile(
+      path.join(parentDirectory, '.openweftrc.json'),
+      JSON.stringify(getDefaultConfig()),
+      'utf8'
+    );
+    const projectDirectory = path.join(parentDirectory, 'project');
+    const nestedDirectory = path.join(projectDirectory, 'src');
+    await mkdir(nestedDirectory, { recursive: true });
+    await writeFile(path.join(projectDirectory, 'package.json'), JSON.stringify({ name: 'project' }), 'utf8');
+
+    const { config } = await loadOpenWeftConfig(nestedDirectory);
+
+    expect(config.configFilePath).toBeNull();
+    expect(config.repoRoot).toBe(nestedDirectory);
+  });
+
   it('deep-merges backend-specific effort overrides and top-level approval overrides', async () => {
     const tempDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-config-effort-merge-'));
     await writeFile(

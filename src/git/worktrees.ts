@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { readFile, readdir, realpath, rm } from 'node:fs/promises';
+import { mkdir, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 
 import { simpleGit, type GitResponseError, type MergeSummary, type SimpleGit } from 'simple-git';
 
@@ -115,12 +115,18 @@ export interface PruneOrphanedOpenWeftArtifactsInput {
   worktreesDir: string;
   retainedWorktreePaths?: readonly (string | null | undefined)[];
   retainedBranchNames?: readonly (string | null | undefined)[];
+  /**
+   * Ref used to decide whether a branch still holds unmerged commits.
+   * Branches that are not ancestors of this ref are never force-deleted.
+   */
+  baseRef?: string;
 }
 
 export interface PruneOrphanedOpenWeftArtifactsResult {
   removedWorktreePaths: string[];
   removedBranchNames: string[];
   retainedBranchNames: string[];
+  keptUnmergedBranchNames: string[];
 }
 
 export interface ReusableExecutionCommit {
@@ -141,6 +147,69 @@ interface StashListEntry {
 }
 
 const createGit = (baseDir: string): SimpleGit => simpleGit(baseDir);
+
+/**
+ * OpenWeft writes its own runtime artifacts (plan and Work Brief copies, worktrees,
+ * checkpoints) under this directory inside the repo and inside every feature worktree.
+ * Those artifacts must never be treated as agent output or committed to the user's branches.
+ */
+const OPENWEFT_RUNTIME_DIR = '.openweft';
+const OPENWEFT_EXCLUDE_PATTERN = `${OPENWEFT_RUNTIME_DIR}/`;
+
+const stripStatusQuotes = (value: string): string => (
+  value.length >= 2 && value.startsWith('"') && value.endsWith('"')
+    ? value.slice(1, -1)
+    : value
+);
+
+const isOpenWeftRuntimePath = (statusPath: string): boolean => {
+  // Rename entries are rendered as "old -> new"; treat the entry as internal
+  // only when every side of it lives under the runtime directory.
+  const segments = statusPath
+    .split(' -> ')
+    .map((segment) => stripStatusQuotes(segment.trim()))
+    .filter(Boolean);
+
+  return segments.length > 0 && segments.every(
+    (segment) =>
+      segment === OPENWEFT_RUNTIME_DIR ||
+      segment.startsWith(`${OPENWEFT_RUNTIME_DIR}/`)
+  );
+};
+
+/**
+ * Linked worktrees check out HEAD, which usually lacks the `.openweft/` gitignore entry
+ * (init only edits the main checkout's working-tree .gitignore and never commits it).
+ * `info/exclude` is shared between the main checkout and every linked worktree, so a
+ * single entry there keeps OpenWeft's runtime artifacts ignored everywhere.
+ */
+const ensureOpenWeftRuntimeExcluded = async (repoRoot: string): Promise<void> => {
+  try {
+    const git = createGit(repoRoot);
+    const reportedExcludePath = (await git.raw(['rev-parse', '--git-path', 'info/exclude'])).trim();
+    const excludePath = path.isAbsolute(reportedExcludePath)
+      ? reportedExcludePath
+      : path.join(repoRoot, reportedExcludePath);
+
+    const existing = await readFile(excludePath, 'utf8').catch(() => '');
+    const alreadyExcluded = existing
+      .split(/\r?\n/)
+      .some((line) => {
+        const trimmed = line.trim();
+        return trimmed === OPENWEFT_EXCLUDE_PATTERN || trimmed === `/${OPENWEFT_EXCLUDE_PATTERN}`;
+      });
+    if (alreadyExcluded) {
+      return;
+    }
+
+    const separator = existing.length === 0 || existing.endsWith('\n') ? '' : '\n';
+    await mkdir(path.dirname(excludePath), { recursive: true });
+    await writeFile(excludePath, `${existing}${separator}${OPENWEFT_EXCLUDE_PATTERN}\n`, 'utf8');
+  } catch {
+    // Best effort: commitAllChanges and getWorktreeStatusSummary filter
+    // OpenWeft runtime paths explicitly even when the exclude entry is missing.
+  }
+};
 
 const createNoAutoStashResult = (): AutoStashResult => ({
   created: false,
@@ -361,6 +430,15 @@ export const getHeadCommit = async (repoRoot: string): Promise<string> => {
   return createGit(repoRoot).revparse(['HEAD']);
 };
 
+/**
+ * Returns true when `ancestorCommit` is reachable from `descendantCommit`.
+ * Errors (for example an unresolvable ref) are treated as "not an ancestor"
+ * so callers fail away from claiming a merge is verified.
+ *
+ * Implemented with `rev-list --count` instead of `merge-base --is-ancestor`
+ * because the latter communicates through its exit code with empty stderr,
+ * which simple-git's raw() reports as a successful run either way.
+ */
 export const isCommitAncestor = async (
   repoRoot: string,
   ancestorCommit: string,
@@ -373,8 +451,13 @@ export const isCommitAncestor = async (
   }
 
   try {
-    await createGit(repoRoot).raw(['merge-base', '--is-ancestor', normalizedAncestor, normalizedDescendant]);
-    return true;
+    const output = await createGit(repoRoot).raw([
+      'rev-list',
+      '--count',
+      `${normalizedDescendant}..${normalizedAncestor}`
+    ]);
+    const unreachableCount = Number.parseInt(output.trim(), 10);
+    return Number.isFinite(unreachableCount) && unreachableCount === 0;
   } catch {
     return false;
   }
@@ -501,6 +584,13 @@ export const findReusableExecutionCommit = async (input: {
 
     let ahead = 0;
     if (inspectedWorktreePath) {
+      // A stop or crash during merge-conflict resolution can leave the managed
+      // worktree mid-merge on top of the completion commit. Abort the merge so
+      // the committed work underneath can be evaluated for reuse instead of
+      // being discarded as a dirty worktree.
+      if (await isMergeInProgress(inspectedWorktreePath)) {
+        await abortMerge(inspectedWorktreePath).catch(() => {});
+      }
       const status = await getWorktreeStatusSummary(inspectedWorktreePath, input.baseBranch);
       if (status.dirty) {
         return null;
@@ -515,16 +605,49 @@ export const findReusableExecutionCommit = async (input: {
 
     const inspectGit = inspectedWorktreePath ? createGit(inspectedWorktreePath) : repoGit;
     const headRef = inspectedWorktreePath ? 'HEAD' : input.branchName;
+    const commitChangesRealFiles = async (commitRef: string): Promise<boolean> => {
+      const changedPaths = (await inspectGit.raw(['diff-tree', '-r', '--no-commit-id', '--name-only', commitRef]))
+        .split('\n')
+        .map((entry) => normalizePathForComparison(entry.trim()))
+        .filter(Boolean)
+        .filter((entry) => !isOpenWeftRuntimePath(entry));
+      return changedPaths.length > 0;
+    };
+
     const headSubject = (await inspectGit.raw(['log', '-1', '--pretty=%s', headRef])).trim();
     if (headSubject !== input.expectedCommitMessage) {
-      return null;
+      // The completion commit may sit beneath later commits (for example
+      // merge-conflict resolution commits). The branch is still reusable as
+      // long as the completion commit exists in its unmerged first-parent
+      // history — merging the branch lands the completed work either way.
+      const unmergedHistory = await inspectGit
+        .raw(['log', '--first-parent', '--format=%H%x1f%s', `${input.baseBranch}..${headRef}`])
+        .catch(() => '');
+      let buriedCompletionCommit: string | null = null;
+      for (const line of unmergedHistory.split('\n')) {
+        const separatorIndex = line.indexOf('\u001f');
+        if (separatorIndex < 0) {
+          continue;
+        }
+        const hash = line.slice(0, separatorIndex).trim();
+        const subject = line.slice(separatorIndex + 1).trim();
+        if (hash && subject === input.expectedCommitMessage) {
+          buriedCompletionCommit = hash;
+          break;
+        }
+      }
+      if (!buriedCompletionCommit || !(await commitChangesRealFiles(buriedCompletionCommit))) {
+        return null;
+      }
+
+      return {
+        kind: 'reusable',
+        branchName: input.branchName,
+        worktreePath: inspectedWorktreePath
+      };
     }
 
-    const changedPaths = (await inspectGit.raw(['diff-tree', '-r', '--no-commit-id', '--name-only', headRef]))
-      .split('\n')
-      .map((entry) => normalizePathForComparison(entry.trim()))
-      .filter(Boolean);
-    if (changedPaths.length === 0) {
+    if (!(await commitChangesRealFiles(headRef))) {
       return null;
     }
 
@@ -536,16 +659,23 @@ export const findReusableExecutionCommit = async (input: {
       };
     }
 
-    const alreadyMerged = await inspectGit
-      .raw(['merge-base', '--is-ancestor', headRef, input.baseBranch])
-      .then(() => true)
-      .catch(() => false);
-    if (!alreadyMerged) {
-      return null;
+    const unmergedCommitCount = await inspectGit
+      .raw(['rev-list', '--count', `${input.baseBranch}..${headRef}`])
+      .then((output) => Number.parseInt(output.trim(), 10))
+      .catch(() => null);
+    if (unmergedCommitCount === 0) {
+      return {
+        kind: 'already-merged',
+        branchName: input.branchName,
+        worktreePath: inspectedWorktreePath
+      };
     }
 
+    // The head is an unmerged completion commit with additional commits in its
+    // history; merging the branch still lands exactly the completed work, so
+    // do not throw it away just because the ahead-count is not 1.
     return {
-      kind: 'already-merged',
+      kind: 'reusable',
       branchName: input.branchName,
       worktreePath: inspectedWorktreePath
     };
@@ -556,6 +686,7 @@ export const findReusableExecutionCommit = async (input: {
 
 export const createWorktree = async (input: CreateWorktreeInput): Promise<WorktreeRecord> => {
   const git = createGit(input.repoRoot);
+  await ensureOpenWeftRuntimeExcluded(input.repoRoot);
   const worktreeAddArgs = [
     'worktree',
     'add',
@@ -654,12 +785,37 @@ export const removeWorktree = async (
   }
 };
 
+/**
+ * Returns true when the branch tip holds commits that are not reachable from
+ * `baseRef`. Errors (for example an unresolvable ref) are treated as "has
+ * unmerged commits" so callers fail toward retaining git data.
+ *
+ * Implemented with `rev-list --count` instead of `merge-base --is-ancestor`
+ * because the latter communicates through its exit code with empty stderr,
+ * which simple-git's raw() reports as a successful run either way.
+ */
+const branchHasCommitsNotMergedInto = async (
+  repoRoot: string,
+  branchName: string,
+  baseRef: string
+): Promise<boolean> => {
+  try {
+    const output = await createGit(repoRoot).raw(['rev-list', '--count', `${baseRef}..${branchName}`]);
+    const unmergedCount = Number.parseInt(output.trim(), 10);
+    return !Number.isFinite(unmergedCount) || unmergedCount > 0;
+  } catch {
+    return true;
+  }
+};
+
 export const pruneOrphanedOpenWeftArtifacts = async (
   input: PruneOrphanedOpenWeftArtifactsInput
 ): Promise<PruneOrphanedOpenWeftArtifactsResult> => {
   const removedWorktreePaths = new Set<string>();
   const removedBranchNames = new Set<string>();
   const retainedBranchNamesSeen = new Set<string>();
+  const keptUnmergedBranchNames = new Set<string>();
+  const pruneBaseRef = input.baseRef ?? 'HEAD';
   const normalizedWorktreesDir = await normalizeExistingPath(input.worktreesDir);
   const retainedWorktreePaths = new Set(
     await Promise.all(
@@ -685,6 +841,25 @@ export const pruneOrphanedOpenWeftArtifacts = async (
     }
     if (worktree.branch && retainedBranchNames.has(worktree.branch)) {
       retainedBranchNamesSeen.add(worktree.branch);
+      continue;
+    }
+
+    if (
+      worktree.branch &&
+      (await branchHasCommitsNotMergedInto(input.repoRoot, worktree.branch, pruneBaseRef))
+    ) {
+      // The branch holds commits that exist nowhere else (for example a
+      // completed or failed feature whose checkpoint record was lost).
+      // Force-deleting it would destroy committed agent work, so prune only
+      // the worktree and keep the branch for manual recovery.
+      await removeWorktree({
+        repoRoot: input.repoRoot,
+        worktreePath: worktree.path,
+        force: true,
+        worktreesDir: input.worktreesDir
+      });
+      removedWorktreePaths.add(worktree.path);
+      keptUnmergedBranchNames.add(worktree.branch);
       continue;
     }
 
@@ -729,7 +904,8 @@ export const pruneOrphanedOpenWeftArtifacts = async (
   return {
     removedWorktreePaths: [...removedWorktreePaths].sort(),
     removedBranchNames: [...removedBranchNames].sort(),
-    retainedBranchNames: [...retainedBranchNamesSeen].sort()
+    retainedBranchNames: [...retainedBranchNamesSeen].sort(),
+    keptUnmergedBranchNames: [...keptUnmergedBranchNames].sort()
   };
 };
 
@@ -771,7 +947,8 @@ export const getWorktreeStatusSummary = async (
   const changedFiles = lines
     .slice(1)
     .map((line) => line.slice(3).trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((entry) => !isOpenWeftRuntimePath(entry));
 
   const aheadMatch = branchLine.match(/\[ahead (\d+)(?:,|])?/);
   const behindMatch = branchLine.match(/\bbehind (\d+)\]/);
@@ -821,6 +998,14 @@ export const commitAllChanges = async (
   } else {
     await git.add(['-A']);
   }
+
+  // OpenWeft injects plan and Work Brief copies under .openweft/ inside each
+  // worktree; they must never be committed to the user's branches. When the
+  // ignore entry is in place `git add -A` already skips them, but repos whose
+  // HEAD lacks the entry would stage them, so unstage the runtime directory
+  // explicitly. Resetting to HEAD never stages deletions for runtime paths a
+  // user has deliberately committed.
+  await git.raw(['reset', '-q', 'HEAD', '--', OPENWEFT_RUNTIME_DIR]).catch(() => undefined);
 
   const stagedPaths = (await git.diff(['--cached', '--name-only']))
     .split('\n')

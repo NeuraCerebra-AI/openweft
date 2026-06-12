@@ -376,6 +376,103 @@ describe('TTY start handler', () => {
     expect(harness.waitUntilExit).toHaveBeenCalledTimes(1);
   });
 
+  it('writes an identity pid file for the TUI session, blocks concurrent starts, and removes it on exit', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-tui-pid-'));
+    let resolveStart: ((result: StartResult) => void) | null = null;
+
+    await writeLaunchProjectFiles(repoRoot, {
+      queueContent: ''
+    });
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async () => await new Promise<StartResult>((resolve) => {
+        resolveStart = resolve;
+      })
+    });
+
+    const startPromise = harness.handlers.start({});
+    await waitFor(() => harness.getAppProps() !== null);
+
+    const pidFilePath = path.join(repoRoot, '.openweft', 'pid');
+    const record = JSON.parse(await readFile(pidFilePath, 'utf8')) as {
+      pid: number;
+      argvMarker: string;
+      startedAt: string;
+    };
+    expect(record.pid).toBe(process.pid);
+    expect(record.argvMarker).toBe('openweft');
+    expect(typeof record.startedAt).toBe('string');
+
+    // A concurrent start in another terminal must be rejected while the TUI
+    // session holds the pid file.
+    await expect(harness.handlers.start({})).rejects.toThrow(/already running/i);
+
+    if (!resolveStart) {
+      throw new Error('Expected orchestration resolver to be set.');
+    }
+    const finishRun: (result: StartResult) => void = resolveStart;
+    finishRun({
+      checkpoint: { status: 'completed' },
+      mergedCount: 0,
+      plannedCount: 0
+    });
+
+    await startPromise;
+    await expect(readFile(pidFilePath, 'utf8')).rejects.toThrow();
+  });
+
+  it('sets exit code 1 after the TUI session when the run ends failed', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-tui-failed-exit-'));
+    const initialExitCode = process.exitCode;
+
+    await writeLaunchProjectFiles(repoRoot, {
+      queueContent: ''
+    });
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async () => ({
+        checkpoint: { status: 'failed' },
+        mergedCount: 0,
+        plannedCount: 1
+      })
+    });
+
+    try {
+      await harness.handlers.start({});
+      expect(process.exitCode).toBe(1);
+      expect(harness.unmount).toHaveBeenCalledTimes(1);
+    } finally {
+      process.exitCode = initialExitCode;
+    }
+  });
+
+  it('does not set a failure exit code when the TUI run completes successfully', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-tui-success-exit-'));
+    const initialExitCode = process.exitCode;
+
+    await writeLaunchProjectFiles(repoRoot, {
+      queueContent: ''
+    });
+
+    const harness = await createTtyHarness({
+      repoRoot,
+      runRealOrchestration: async () => ({
+        checkpoint: { status: 'completed' },
+        mergedCount: 1,
+        plannedCount: 1
+      })
+    });
+
+    try {
+      await harness.handlers.start({});
+      expect(process.exitCode ?? 0).toBe(0);
+    } finally {
+      process.exitCode = initialExitCode;
+    }
+  });
+
   it('requests graceful stop from the App quit callback before unmounting the UI', async () => {
     const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-tui-quit-'));
     let resolveStart: ((result: StartResult) => void) | null = null;

@@ -130,6 +130,50 @@ describe('terminal run copy', () => {
     expect(buildTerminalRunCopy({ checkpoint, checkpointSource: 'primary', pendingQueueCount: 0 }).nextAction).toMatch(/Review the completed features/);
   });
 
+  it('advises resume instead of stop for an in-progress checkpoint with no live process', () => {
+    const checkpoint = createEmptyCheckpoint({
+      orchestratorVersion: 'test',
+      configHash: 'test-config-hash',
+      runId: 'test-run',
+      checkpointId: 'test-checkpoint',
+      createdAt: '2026-06-11T00:00:00.000Z'
+    });
+    checkpoint.status = 'in-progress';
+
+    const copy = buildTerminalRunCopy({
+      checkpoint,
+      checkpointSource: 'primary',
+      pendingQueueCount: 0,
+      background: null
+    });
+
+    expect(copy.severity).toBe('warning');
+    expect(copy.health).not.toBe('Running');
+    expect(copy.nextAction).not.toMatch(/openweft stop/);
+    expect(copy.nextAction).toMatch(/openweft start/);
+  });
+
+  it('still reports a verified live background process as running', () => {
+    const checkpoint = createEmptyCheckpoint({
+      orchestratorVersion: 'test',
+      configHash: 'test-config-hash',
+      runId: 'test-run',
+      checkpointId: 'test-checkpoint',
+      createdAt: '2026-06-11T00:00:00.000Z'
+    });
+    checkpoint.status = 'in-progress';
+
+    const copy = buildTerminalRunCopy({
+      checkpoint,
+      checkpointSource: 'primary',
+      pendingQueueCount: 0,
+      background: { pid: 4321, alive: true }
+    });
+
+    expect(copy.health).toBe('Running in background');
+    expect(copy.meaning).toContain('4321');
+  });
+
   it('prioritizes failed durability over backup checkpoint copy', () => {
     const checkpoint = createEmptyCheckpoint({
       orchestratorVersion: 'test',

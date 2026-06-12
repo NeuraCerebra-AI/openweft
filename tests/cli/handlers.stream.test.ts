@@ -26,6 +26,7 @@ import { createEmptyCheckpoint } from '../../src/state/checkpoint.js';
 
 describe('stream start behavior', () => {
   let originalIsTTY: boolean | undefined;
+  const initialExitCode = process.exitCode;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -33,6 +34,7 @@ describe('stream start behavior', () => {
   });
 
   afterEach(() => {
+    process.exitCode = initialExitCode;
     if (originalIsTTY !== undefined) {
       Object.defineProperty(process.stdout, 'isTTY', {
         value: originalIsTTY,
@@ -209,5 +211,73 @@ describe('stream start behavior', () => {
 
     expect(output.some((line) => line.includes('Run failed: planned 1, merged 0, status failed.'))).toBe(true);
     expect(output.some((line) => line.includes('Run complete: planned 1, merged 0, status failed.'))).toBe(false);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('leaves process.exitCode untouched when a streamed start completes', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-stream-exit0-'));
+    const output: string[] = [];
+    const checkpoint = createEmptyCheckpoint({
+      orchestratorVersion: 'test',
+      configHash: 'test-config-hash',
+      runId: 'test-run',
+      checkpointId: 'test-checkpoint',
+      createdAt: '2026-03-24T00:00:00.000Z'
+    });
+    checkpoint.status = 'completed';
+
+    (runRealOrchestration as MockedFunction<typeof runRealOrchestration>).mockResolvedValue({
+      checkpoint,
+      plannedCount: 1,
+      mergedCount: 1
+    });
+
+    Object.defineProperty(process.stdout, 'isTTY', {
+      value: false,
+      configurable: true
+    });
+
+    const initProgram = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        })
+      })
+    );
+    await initProgram.parseAsync(['init'], { from: 'user' });
+
+    output.length = 0;
+    const program = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        sleep: async () => {}
+      })
+    );
+
+    await expect(program.parseAsync(['start', '--stream'], { from: 'user' })).resolves.toBeDefined();
+
+    expect(output.some((line) => line.includes('Run complete: planned 1, merged 1, status completed.'))).toBe(true);
+    expect(process.exitCode ?? 0).toBe(0);
   });
 });

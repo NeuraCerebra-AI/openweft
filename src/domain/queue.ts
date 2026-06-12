@@ -451,6 +451,34 @@ export const buildQueueContentFromCheckpointState = (input: {
       (extractNumericFeatureId(right.featureId) ?? Number.POSITIVE_INFINITY)
   );
 
+  // The checkpoint snapshot is not a complete picture of the queue file: an
+  // operator can append new requests while a crashed run is down. Pending
+  // lines that exist only on disk must survive the rebuild, deduplicated by
+  // normalized request text against everything the checkpoint already tracks.
+  const checkpointKnownRequests = new Set<string>();
+  for (const entry of input.processed) {
+    const normalized = normalizeQueuedRequest(entry.request);
+    if (normalized !== null) {
+      checkpointKnownRequests.add(normalized);
+    }
+  }
+  for (const request of input.pendingRequests) {
+    const normalized = normalizeQueuedRequest(request);
+    if (normalized !== null) {
+      checkpointKnownRequests.add(normalized);
+    }
+  }
+
+  const preservedPendingLines: QueuePendingLine[] = [];
+  for (const line of existing.pending) {
+    const normalized = normalizeQueuedRequest(line.request);
+    if (normalized === null || checkpointKnownRequests.has(normalized)) {
+      continue;
+    }
+    checkpointKnownRequests.add(normalized);
+    preservedPendingLines.push(line);
+  }
+
   for (const line of existing.lines) {
     if (line.kind === 'comment') {
       if (isV1QueueHeader(line.raw)) {
@@ -488,7 +516,51 @@ export const buildQueueContentFromCheckpointState = (input: {
     );
   }
 
+  for (const line of preservedPendingLines) {
+    lines.push(
+      JSON.stringify({
+        version: 1,
+        type: 'pending',
+        id: line.queueId ?? createQueueId(),
+        request: line.request
+      })
+    );
+  }
+
   return `${lines.join('\n')}\n`;
+};
+
+export interface PendingQueueLineReference {
+  queueId: string | null;
+  lineIndex: number;
+  request: string;
+}
+
+/**
+ * Locates a pending line in (potentially fresh) queue content by stable
+ * identity rather than trusting a stale line index: first by queue id, then
+ * by the original line index when its request still matches, and finally by
+ * request text alone. Returns null when the line no longer exists.
+ */
+export const locatePendingQueueLine = (
+  parsed: ParsedQueueFile,
+  reference: PendingQueueLineReference
+): QueuePendingLine | null => {
+  if (reference.queueId !== null) {
+    const byQueueId = parsed.pending.find((line) => line.queueId === reference.queueId);
+    if (byQueueId) {
+      return byQueueId;
+    }
+  }
+
+  const byLineIndex = parsed.pending.find(
+    (line) => line.lineIndex === reference.lineIndex && line.request === reference.request
+  );
+  if (byLineIndex) {
+    return byLineIndex;
+  }
+
+  return parsed.pending.find((line) => line.request === reference.request) ?? null;
 };
 
 export const getNextFeatureIdFromQueue = (existingNames: Iterable<string>, queueContent = ''): number => {

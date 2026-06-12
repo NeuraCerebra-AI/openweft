@@ -7,9 +7,20 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildProgram } from '../../src/cli/buildProgram.js';
 import { DEFAULT_PROMPT_A_TEMPLATE, createCommandHandlers } from '../../src/cli/handlers.js';
+import { OPENWEFT_PID_ARGV_MARKER, serializePidFileRecord } from '../../src/cli/pidFile.js';
 import { parseQueueFile } from '../../src/domain/queue.js';
 import { createEmptyCheckpoint, saveCheckpoint } from '../../src/state/checkpoint.js';
 import type { TmuxSpawnInput } from '../../src/tmux/index.js';
+
+const TEST_PROCESS_START_TIME = 'Wed Jun 10 09:00:00 2026';
+
+const buildPidRecordContent = (pid: number): string =>
+  serializePidFileRecord({
+    pid,
+    startedAt: '2026-06-11T10:00:00.000Z',
+    argvMarker: OPENWEFT_PID_ARGV_MARKER,
+    processStartTime: TEST_PROCESS_START_TIME
+  });
 
 describe('git detection dependencies', () => {
   it('detectGitInstalled resolves true when git is installed (exitCode 0)', async () => {
@@ -177,7 +188,7 @@ describe('command handlers', () => {
     );
 
     await program.parseAsync(['init'], { from: 'user' });
-    await writeFile(path.join(repoRoot, '.openweft', 'pid'), '4242\n', 'utf8');
+    await writeFile(path.join(repoRoot, '.openweft', 'pid'), buildPidRecordContent(4242), 'utf8');
 
     output.length = 0;
     await createCommandHandlers({
@@ -193,7 +204,8 @@ describe('command handlers', () => {
         installed: true,
         authenticated: true
       }),
-      isPidAlive: () => true
+      isPidAlive: () => true,
+      getProcessStartTime: async () => TEST_PROCESS_START_TIME
     }).launch();
 
     expect(output.join('\n')).toContain('Background: running (PID 4242)');
@@ -403,6 +415,48 @@ describe('command handlers', () => {
     );
     expect(output).toContain(
       'Warning: existing prompts/plan-adjustment.md appears to contain legacy in-place adjustment instructions; OpenWeft kept it, but Work Brief re-analysis expects returned plan markdown.'
+    );
+  });
+
+  it('init writes a local .openweftrc.json even when an ancestor directory has an OpenWeft config', async () => {
+    const parentDirectory = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-init-ancestor-'));
+    await writeFile(
+      path.join(parentDirectory, '.openweftrc.json'),
+      JSON.stringify({ approval: 'per-feature' }),
+      'utf8'
+    );
+    const repoRoot = path.join(parentDirectory, 'repo');
+    await mkdir(path.join(repoRoot, '.git'), { recursive: true });
+
+    const output: string[] = [];
+    const program = buildProgram(
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({
+          installed: true,
+          authenticated: true
+        }),
+        detectClaude: async () => ({
+          installed: true,
+          authenticated: true
+        })
+      })
+    );
+
+    await program.parseAsync(['init'], { from: 'user' });
+
+    // The child repo gets its own config and scaffolding; the ancestor stays untouched.
+    const localConfig = JSON.parse(await readFile(path.join(repoRoot, '.openweftrc.json'), 'utf8'));
+    expect(localConfig.backend).toBeDefined();
+    expect(output.join('\n')).toContain('created .openweftrc.json');
+    await expect(readFile(path.join(repoRoot, 'feature_requests', 'queue.txt'), 'utf8')).resolves.toBeDefined();
+    await expect(readFile(path.join(parentDirectory, 'feature_requests', 'queue.txt'), 'utf8')).rejects.toThrow();
+    expect(await readFile(path.join(parentDirectory, '.openweftrc.json'), 'utf8')).toBe(
+      JSON.stringify({ approval: 'per-feature' })
     );
   });
 
@@ -787,7 +841,7 @@ describe('command handlers', () => {
     );
 
     await initProgram.parseAsync(['init'], { from: 'user' });
-    await writeFile(path.join(repoRoot, '.openweft', 'pid'), '4321\n', 'utf8');
+    await writeFile(path.join(repoRoot, '.openweft', 'pid'), buildPidRecordContent(4321), 'utf8');
 
     const checkpoint = createEmptyCheckpoint({
       orchestratorVersion: 'test',
@@ -824,6 +878,7 @@ describe('command handlers', () => {
           pidChecks += 1;
           return pidChecks < 3;
         },
+        getProcessStartTime: async () => TEST_PROCESS_START_TIME,
         sendSignal: () => {},
         sleep: async () => {}
       })
@@ -835,6 +890,163 @@ describe('command handlers', () => {
     );
     expect(output).toContain('OpenWeft background run stopped.');
     expect(output.some((line) => line.includes('finishing cleanup'))).toBe(false);
+  });
+
+  it('treats an identity-mismatched pid file as stale in status output', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-pid-reuse-status-'));
+    const output: string[] = [];
+    const buildHandlers = () =>
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({ installed: true, authenticated: true }),
+        detectClaude: async () => ({ installed: true, authenticated: true }),
+        isPidAlive: () => true,
+        getProcessStartTime: async () => 'Thu Jun 11 11:11:11 2026'
+      });
+
+    await buildProgram(buildHandlers()).parseAsync(['init'], { from: 'user' });
+    await writeFile(path.join(repoRoot, '.openweft', 'pid'), buildPidRecordContent(4321), 'utf8');
+
+    output.length = 0;
+    await buildProgram(buildHandlers()).parseAsync(['status'], { from: 'user' });
+
+    const report = output.join('\n');
+    expect(report).not.toContain('running (PID 4321)');
+    expect(report).toContain('stale PID 4321');
+    // The reused pid file is safe to clean up: the process holding the pid is
+    // verifiably not OpenWeft.
+    await expect(readFile(path.join(repoRoot, '.openweft', 'pid'), 'utf8')).rejects.toThrow();
+  });
+
+  it('refuses to signal a reused PID on stop and removes the stale pid file', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-pid-reuse-stop-'));
+    const output: string[] = [];
+    const sentSignals: { pid: number; signal: string }[] = [];
+    const buildHandlers = () =>
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({ installed: true, authenticated: true }),
+        detectClaude: async () => ({ installed: true, authenticated: true }),
+        isPidAlive: () => true,
+        getProcessStartTime: async () => 'Thu Jun 11 11:11:11 2026',
+        sendSignal: (pid, signal) => {
+          sentSignals.push({ pid, signal });
+        },
+        sleep: async () => {}
+      });
+
+    await buildProgram(buildHandlers()).parseAsync(['init'], { from: 'user' });
+    await writeFile(path.join(repoRoot, '.openweft', 'pid'), buildPidRecordContent(4321), 'utf8');
+
+    output.length = 0;
+    await buildProgram(buildHandlers()).parseAsync(['stop'], { from: 'user' });
+
+    expect(sentSignals).toEqual([]);
+    expect(output.join('\n')).toMatch(/different process|PID reuse/i);
+    await expect(readFile(path.join(repoRoot, '.openweft', 'pid'), 'utf8')).rejects.toThrow();
+  });
+
+  it('does not signal legacy bare-number pid files it cannot verify', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-pid-legacy-stop-'));
+    const output: string[] = [];
+    const sentSignals: { pid: number; signal: string }[] = [];
+    const buildHandlers = () =>
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({ installed: true, authenticated: true }),
+        detectClaude: async () => ({ installed: true, authenticated: true }),
+        isPidAlive: () => true,
+        getProcessStartTime: async () => TEST_PROCESS_START_TIME,
+        sendSignal: (pid, signal) => {
+          sentSignals.push({ pid, signal });
+        },
+        sleep: async () => {}
+      });
+
+    await buildProgram(buildHandlers()).parseAsync(['init'], { from: 'user' });
+    await writeFile(path.join(repoRoot, '.openweft', 'pid'), '4321\n', 'utf8');
+
+    output.length = 0;
+    await buildProgram(buildHandlers()).parseAsync(['stop'], { from: 'user' });
+
+    expect(sentSignals).toEqual([]);
+    expect(output.join('\n')).toMatch(/cannot be verified|legacy/i);
+    // Legacy files are kept: we cannot prove they are stale.
+    expect(await readFile(path.join(repoRoot, '.openweft', 'pid'), 'utf8')).toBe('4321\n');
+  });
+
+  it('kills recorded agent process groups before reporting the SIGKILL escalation', async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-cli-stop-agent-groups-'));
+    const initialExitCode = process.exitCode;
+    const output: string[] = [];
+    const sentSignals: { pid: number; signal: string }[] = [];
+    const buildHandlers = () =>
+      createCommandHandlers({
+        getCwd: () => repoRoot,
+        writeLine: (message) => {
+          output.push(message);
+        },
+        detectGitRepo: async () => true,
+        detectCodex: async () => ({ installed: true, authenticated: true }),
+        detectClaude: async () => ({ installed: true, authenticated: true }),
+        isPidAlive: (pid) => pid === 4321,
+        getProcessStartTime: async () => TEST_PROCESS_START_TIME,
+        sendSignal: (pid, signal) => {
+          sentSignals.push({ pid, signal });
+        },
+        sleep: async () => {}
+      });
+
+    try {
+      await buildProgram(buildHandlers()).parseAsync(['init'], { from: 'user' });
+      await writeFile(path.join(repoRoot, '.openweft', 'pid'), buildPidRecordContent(4321), 'utf8');
+      await writeFile(
+        path.join(repoRoot, '.openweft', 'agent-pids.json'),
+        `${JSON.stringify({
+          version: 1,
+          entries: [
+            { pid: 7777, pgid: 7777, command: 'codex', startedAt: '2026-06-11T10:00:00.000Z' }
+          ]
+        })}\n`,
+        'utf8'
+      );
+
+      output.length = 0;
+      await buildProgram(buildHandlers()).parseAsync(['stop'], { from: 'user' });
+
+      expect(sentSignals[0]).toEqual({ pid: 4321, signal: 'SIGTERM' });
+      if (process.platform !== 'win32') {
+        expect(sentSignals).toContainEqual({ pid: -7777, signal: 'SIGTERM' });
+        expect(sentSignals).toContainEqual({ pid: -7777, signal: 'SIGKILL' });
+        const groupTermIndex = sentSignals.findIndex(
+          (entry) => entry.pid === -7777 && entry.signal === 'SIGTERM'
+        );
+        const parentKillIndex = sentSignals.findIndex(
+          (entry) => entry.pid === 4321 && entry.signal === 'SIGKILL'
+        );
+        expect(groupTermIndex).toBeGreaterThan(-1);
+        expect(parentKillIndex).toBeGreaterThan(groupTermIndex);
+      }
+      expect(sentSignals).toContainEqual({ pid: 4321, signal: 'SIGKILL' });
+      expect(output.join('\n')).toMatch(/agent subprocess/i);
+      expect(output.join('\n')).toMatch(/confirmed stopped/i);
+      expect(process.exitCode).toBe(1);
+      await expect(readFile(path.join(repoRoot, '.openweft', 'agent-pids.json'), 'utf8')).rejects.toThrow();
+    } finally {
+      process.exitCode = initialExitCode;
+    }
   });
 
   it('fails api_key auth mode before tmux launch when the required env var is missing', async () => {

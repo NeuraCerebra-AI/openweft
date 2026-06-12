@@ -33,14 +33,7 @@ export const isActionableFeature = (feature: FeatureCheckpoint): boolean => {
   return isReviewFeatureStatus(feature.status);
 };
 
-export const hasActionableUnfinishedWork = (
-  checkpoint: OrchestratorCheckpoint | null,
-  pendingQueueEntries: readonly Pick<QueuePendingLine, 'kind'>[]
-): boolean => {
-  if (pendingQueueEntries.some((entry) => entry.kind === 'pending')) {
-    return true;
-  }
-
+export const hasActionableCheckpointWork = (checkpoint: OrchestratorCheckpoint | null): boolean => {
   if (!checkpoint) {
     return false;
   }
@@ -50,6 +43,17 @@ export const hasActionableUnfinishedWork = (
   }
 
   return Object.values(checkpoint.features).some((feature) => isActionableFeature(feature));
+};
+
+export const hasActionableUnfinishedWork = (
+  checkpoint: OrchestratorCheckpoint | null,
+  pendingQueueEntries: readonly Pick<QueuePendingLine, 'kind'>[]
+): boolean => {
+  if (pendingQueueEntries.some((entry) => entry.kind === 'pending')) {
+    return true;
+  }
+
+  return hasActionableCheckpointWork(checkpoint);
 };
 
 export const syncReviewMetadata = (checkpoint: OrchestratorCheckpoint): void => {

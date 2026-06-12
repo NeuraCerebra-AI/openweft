@@ -4,6 +4,7 @@ import {
   appendRequestsToQueueContent,
   buildQueueContentFromCheckpointState,
   extractRequestsFromInput,
+  locatePendingQueueLine,
   removePendingQueueLine,
   markQueueLineProcessed,
   parseQueueFile,
@@ -173,7 +174,94 @@ describe('queue', () => {
       'add dashboard filters',
       'add export controls'
     ]);
-    expect(parsed.pending.map((entry) => entry.request)).toEqual(['add keyboard shortcuts']);
+    expect(parsed.pending.map((entry) => entry.request)).toEqual([
+      'add keyboard shortcuts',
+      'legacy pending'
+    ]);
     expect(rebuilt).toContain('# sprint notes');
+  });
+
+  it('preserves on-disk pending lines unknown to the checkpoint when rebuilding queue content', () => {
+    const existingContent = appendRequestsToQueueContent('', [
+      'add dashboard filters',
+      'add export controls',
+      'fix the login bug'
+    ]);
+    const rebuilt = buildQueueContentFromCheckpointState({
+      existingContent,
+      processed: [{ featureId: '001', request: 'add dashboard filters' }],
+      pendingRequests: ['add export controls']
+    });
+    const parsed = parseQueueFile(rebuilt);
+
+    expect(parsed.processed.map((entry) => entry.request)).toEqual(['add dashboard filters']);
+    expect(parsed.pending.map((entry) => entry.request)).toEqual([
+      'add export controls',
+      'fix the login bug'
+    ]);
+  });
+
+  it('keeps the queue id of a preserved on-disk pending line across a checkpoint rebuild', () => {
+    const existingContent = appendRequestsToQueueContent('', ['fix the login bug']);
+    const originalQueueId = parseQueueFile(existingContent).pending[0]?.queueId;
+    const rebuilt = buildQueueContentFromCheckpointState({
+      existingContent,
+      processed: [],
+      pendingRequests: []
+    });
+
+    expect(originalQueueId).toBeTruthy();
+    expect(parseQueueFile(rebuilt).pending.map((entry) => entry.queueId)).toEqual([originalQueueId]);
+  });
+
+  it('does not duplicate on-disk pending lines that only differ by surrounding whitespace', () => {
+    const rebuilt = buildQueueContentFromCheckpointState({
+      existingContent: '  add export controls  \nadd export controls\n',
+      processed: [],
+      pendingRequests: ['add export controls']
+    });
+
+    expect(parseQueueFile(rebuilt).pending.map((entry) => entry.request)).toEqual([
+      'add export controls'
+    ]);
+  });
+
+  it('locates a pending queue line by queue id when line indexes have shifted', () => {
+    const original = appendRequestsToQueueContent('', ['add dashboard filters', 'add export controls']);
+    const target = parseQueueFile(original).pending[1];
+    if (!target) {
+      throw new Error('Expected a second pending line.');
+    }
+
+    const shifted = original.replace(
+      '# openweft queue format: v1\n',
+      '# openweft queue format: v1\n# new operator comment\n'
+    );
+    const located = locatePendingQueueLine(parseQueueFile(shifted), target);
+
+    expect(located?.request).toBe('add export controls');
+    expect(located?.queueId).toBe(target.queueId);
+    expect(located?.lineIndex).not.toBe(target.lineIndex);
+  });
+
+  it('locates a pending queue line by request text when no queue id is available', () => {
+    const located = locatePendingQueueLine(parseQueueFile('# header\nalpha\nbeta\n'), {
+      queueId: null,
+      lineIndex: 7,
+      request: 'beta'
+    });
+
+    expect(located?.request).toBe('beta');
+    expect(located?.lineIndex).toBe(2);
+  });
+
+  it('returns null when a pending queue line cannot be located', () => {
+    const located = locatePendingQueueLine(parseQueueFile('alpha\n'), {
+      queueId: 'q_missing',
+      lineIndex: 0,
+      request: 'vanished request'
+    });
+
+    expect(located).toBeNull();
   });
 });

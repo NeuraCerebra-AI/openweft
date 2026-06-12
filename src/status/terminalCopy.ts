@@ -183,11 +183,15 @@ export const buildTerminalRunCopy = (input: {
   }
 
   if (checkpoint?.status === 'in-progress') {
+    // This branch is only reached when no live OpenWeft process is recorded
+    // (a verified live run returns from the background branch above), so the
+    // run was interrupted: advising `openweft stop` here would contradict the
+    // stop handler, which would correctly report that nothing is running.
     return {
-      severity: 'info',
-      health: 'Running',
-      meaning: 'OpenWeft is actively planning, executing, merging, or re-analyzing work.',
-      nextAction: 'Use openweft status for progress; use openweft stop to request a phase-safe stop.',
+      severity: 'warning',
+      health: 'Interrupted',
+      meaning: 'The checkpoint reports an in-progress run, but no live OpenWeft process is recorded — the previous run likely crashed or was killed.',
+      nextAction: 'Run openweft start to resume from the last checkpoint.',
       details
     };
   }

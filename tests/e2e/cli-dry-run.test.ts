@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { simpleGit } from 'simple-git';
 
 import { buildProgram } from '../../src/cli/buildProgram.js';
@@ -33,6 +33,50 @@ const runCli = async (cwd: string, args: string[]): Promise<string[]> => {
   return output;
 };
 
+const runCliWithFreshModules = async (cwd: string, args: string[]): Promise<string[]> => {
+  const output: string[] = [];
+  const { buildProgram: freshBuildProgram } = await import('../../src/cli/buildProgram.js');
+  const { createCommandHandlers: freshCreateCommandHandlers } = await import('../../src/cli/handlers.js');
+  const program = freshBuildProgram(
+    freshCreateCommandHandlers({
+      getCwd: () => cwd,
+      writeLine: (message) => {
+        output.push(message);
+      },
+      detectCodex: async () => ({
+        installed: true,
+        authenticated: true
+      }),
+      detectClaude: async () => ({
+        installed: true,
+        authenticated: true
+      })
+    })
+  );
+
+  await program.parseAsync(args, { from: 'user' });
+
+  return output;
+};
+
+const installFailingDryRunAdapter = async (): Promise<void> => {
+  vi.resetModules();
+  const actualAdapters = await vi.importActual<typeof import('../../src/adapters/index.js')>(
+    '../../src/adapters/index.js'
+  );
+
+  class FailingExecutionMockAdapter extends actualAdapters.MockAgentAdapter {
+    constructor(..._args: unknown[]) {
+      super({ fixtures: { execution: { error: 'mock execution failure' } } });
+    }
+  }
+
+  vi.doMock('../../src/adapters/index.js', () => ({
+    ...actualAdapters,
+    MockAgentAdapter: FailingExecutionMockAdapter
+  }));
+};
+
 const createTempRepo = async (): Promise<string> => {
   const repoRoot = await mkdtemp(path.join(os.tmpdir(), 'openweft-e2e-'));
   const git = simpleGit(repoRoot);
@@ -45,6 +89,14 @@ const createTempRepo = async (): Promise<string> => {
 };
 
 describe('openweft CLI dry-run flow', () => {
+  const initialExitCode = process.exitCode;
+
+  afterEach(() => {
+    process.exitCode = initialExitCode;
+    vi.doUnmock('../../src/adapters/index.js');
+    vi.resetModules();
+  });
+
   it('initializes the repo scaffold and runs a dry-run batch end to end', async () => {
     const repoRoot = await createTempRepo();
 
@@ -58,6 +110,7 @@ describe('openweft CLI dry-run flow', () => {
 
     const startOutput = await runCli(repoRoot, ['start', '--dry-run']);
     expect(startOutput).toContain('Dry run complete: planned 2, completed 2.');
+    expect(process.exitCode ?? 0).toBe(0);
 
     const queueContent = await readFile(path.join(repoRoot, 'feature_requests', 'queue.txt'), 'utf8');
     expect(queueContent).toContain('# openweft queue format: v1');
@@ -104,5 +157,17 @@ describe('openweft CLI dry-run flow', () => {
 
     const stopOutput = await runCli(repoRoot, ['stop']);
     expect(stopOutput).toContain('No background OpenWeft run is active.');
+  });
+
+  it('signals a failed dry run through process.exitCode', async () => {
+    await installFailingDryRunAdapter();
+    const repoRoot = await createTempRepo();
+
+    await runCliWithFreshModules(repoRoot, ['init']);
+    await runCliWithFreshModules(repoRoot, ['add', 'add dark mode toggle']);
+
+    const startOutput = await runCliWithFreshModules(repoRoot, ['start', '--dry-run']);
+    expect(startOutput.join('\n')).toMatch(/^Dry run failed: planned 1, completed 0, failed\/review 1\.$/m);
+    expect(process.exitCode).toBe(1);
   });
 });

@@ -15,6 +15,7 @@ import {
   getHeadCommit,
   getWorktreeStatusSummary,
   hasChangesSince,
+  isCommitAncestor,
   listWorktrees,
   mergeBranchIntoCurrent,
   mergeBranchIntoWorktree,
@@ -660,6 +661,133 @@ describe('git worktree infrastructure', () => {
     expect(branches.all).toContain('openweft-2026-roadmap');
   });
 
+  it('keeps branches with unmerged commits when pruning with empty retention', async () => {
+    const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
+    const unmergedPath = path.join(worktreesDir, '001');
+
+    await createWorktree({
+      repoRoot,
+      worktreePath: unmergedPath,
+      branchName: 'openweft-001-unmerged'
+    });
+    await commitChange(unmergedPath, 'value = unmerged agent work\n', 'openweft: complete feature 001');
+
+    const result = await pruneOrphanedOpenWeftArtifacts({
+      repoRoot,
+      worktreesDir
+    });
+
+    expect(result.removedWorktreePaths.some((removedPath) => removedPath.endsWith(`${path.sep}001`))).toBe(true);
+    expect(result.removedBranchNames).not.toContain('openweft-001-unmerged');
+    expect(result.keptUnmergedBranchNames).toContain('openweft-001-unmerged');
+
+    const listed = await listWorktrees(repoRoot);
+    expect(
+      await Promise.all(listed.map(async (entry) => samePath(entry.path, unmergedPath).catch(() => false))).then(
+        (matches) => matches.some(Boolean)
+      )
+    ).toBe(false);
+
+    const branches = await simpleGit(repoRoot).branchLocal();
+    expect(branches.all).toContain('openweft-001-unmerged');
+  });
+
+  it('recovers a completion commit beneath in-progress merge state', async () => {
+    const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
+    const worktreePath = path.join(worktreesDir, '001');
+    const branchName = 'openweft-001-midmerge';
+
+    await mkdir(worktreesDir, { recursive: true });
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName
+    });
+    await commitChange(worktreePath, 'value = feature\n', 'openweft: complete feature 001');
+    await commitChange(repoRoot, 'value = main moved on\n', 'main conflicting change');
+
+    const merge = await mergeBranchIntoWorktree(worktreePath, 'main');
+    expect(merge.status).toBe('conflicted');
+    expect(await hasMergeHead(worktreePath)).toBe(true);
+
+    const reusable = await findReusableExecutionCommit({
+      repoRoot,
+      worktreesDir,
+      worktreePath,
+      branchName,
+      baseBranch: 'main',
+      expectedCommitMessage: 'openweft: complete feature 001'
+    });
+
+    expect(reusable).toEqual({
+      kind: 'reusable',
+      branchName,
+      worktreePath
+    });
+    expect(await hasMergeHead(worktreePath)).toBe(false);
+  });
+
+  it('reuses a completion commit beneath later merge-resolution commits', async () => {
+    const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
+    const worktreePath = path.join(worktreesDir, '001');
+    const branchName = 'openweft-001-resolved';
+
+    await mkdir(worktreesDir, { recursive: true });
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName
+    });
+    await commitChange(worktreePath, 'value = feature\n', 'openweft: complete feature 001');
+    await commitChange(
+      worktreePath,
+      'secondary = resolved\n',
+      'openweft: resolve merge conflict for feature 001',
+      'secondary.txt'
+    );
+
+    const reusable = await findReusableExecutionCommit({
+      repoRoot,
+      worktreesDir,
+      worktreePath,
+      branchName,
+      baseBranch: 'main',
+      expectedCommitMessage: 'openweft: complete feature 001'
+    });
+
+    expect(reusable).toEqual({
+      kind: 'reusable',
+      branchName,
+      worktreePath
+    });
+  });
+
+  it('still rejects multi-commit branches without a completion commit', async () => {
+    const worktreesDir = path.join(repoRoot, '.openweft', 'worktrees');
+    const worktreePath = path.join(worktreesDir, '001');
+    const branchName = 'openweft-001-unrelated';
+
+    await mkdir(worktreesDir, { recursive: true });
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName
+    });
+    await commitChange(worktreePath, 'value = first\n', 'manual experiment commit');
+    await commitChange(worktreePath, 'secondary = second\n', 'another manual commit', 'secondary.txt');
+
+    const reusable = await findReusableExecutionCommit({
+      repoRoot,
+      worktreesDir,
+      worktreePath,
+      branchName,
+      baseBranch: 'main',
+      expectedCommitMessage: 'openweft: complete feature 001'
+    });
+
+    expect(reusable).toBeNull();
+  });
+
   it('reports worktree status relative to the base ref', async () => {
     const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-status');
     await createWorktree({
@@ -746,6 +874,70 @@ describe('git worktree infrastructure', () => {
     const status = await simpleGit(worktreePath).status();
     expect(status.not_added).toContain('scratch.txt');
     expect(status.not_added).not.toContain('src/created.ts');
+  });
+
+  it('marks the OpenWeft runtime directory ignored in worktrees even when HEAD has no gitignore entry', async () => {
+    const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-exclude');
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName: 'agent-exclude'
+    });
+
+    await mkdir(path.join(worktreePath, '.openweft', 'feature-plans'), { recursive: true });
+    await writeFile(path.join(worktreePath, '.openweft', 'feature-plans', '001-plan.md'), '# plan\n', 'utf8');
+
+    // `git check-ignore` exits non-zero (and simple-git throws) when the path is not ignored.
+    await expect(
+      simpleGit(worktreePath).raw(['check-ignore', '.openweft/feature-plans/001-plan.md'])
+    ).resolves.toContain('.openweft');
+  });
+
+  it('never commits OpenWeft runtime artifacts even when no ignore entry exists', async () => {
+    const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-artifact-commit');
+    await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName: 'agent-artifact-commit'
+    });
+
+    // Simulate a repo where the shared exclude entry could not be written.
+    await writeFile(path.join(repoRoot, '.git', 'info', 'exclude'), '', 'utf8');
+
+    await mkdir(path.join(worktreePath, '.openweft', 'feature-plans'), { recursive: true });
+    await writeFile(path.join(worktreePath, '.openweft', 'feature-plans', '001-plan.md'), '# plan\n', 'utf8');
+    await writeFile(path.join(worktreePath, 'src.txt'), 'value = agent\n', 'utf8');
+
+    const commit = await commitAllChanges(worktreePath, 'openweft: complete feature 001');
+
+    expect(commit).not.toBeNull();
+    const trackedFiles = (await simpleGit(worktreePath).raw(['ls-tree', '-r', '--name-only', 'HEAD']))
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    expect(trackedFiles).toContain('src.txt');
+    expect(trackedFiles.some((file) => file === '.openweft' || file.startsWith('.openweft/'))).toBe(false);
+  });
+
+  it('does not count OpenWeft runtime artifacts as agent workspace changes', async () => {
+    const worktreePath = buildWorktreePath(repoRoot, 'wt-agent-artifact-noop');
+    const created = await createWorktree({
+      repoRoot,
+      worktreePath,
+      branchName: 'agent-artifact-noop'
+    });
+
+    // Simulate a repo where the shared exclude entry could not be written.
+    await writeFile(path.join(repoRoot, '.git', 'info', 'exclude'), '', 'utf8');
+
+    await mkdir(path.join(worktreePath, '.openweft', 'work-briefs'), { recursive: true });
+    await writeFile(path.join(worktreePath, '.openweft', 'work-briefs', '001.md'), 'Work Brief\n', 'utf8');
+    await mkdir(path.join(worktreePath, '.openweft', 'feature-plans'), { recursive: true });
+    await writeFile(path.join(worktreePath, '.openweft', 'feature-plans', '001-plan.md'), '# plan\n', 'utf8');
+
+    expect((await getWorktreeStatusSummary(worktreePath)).dirty).toBe(false);
+    expect(await hasChangesSince(worktreePath, created.head)).toBe(false);
+    expect(await commitAllChanges(worktreePath, 'openweft: complete feature 001')).toBeNull();
   });
 
   it('resets dirty worktrees back to HEAD for retries', async () => {
@@ -868,6 +1060,51 @@ describe('git worktree infrastructure', () => {
       vi.doUnmock('simple-git');
       vi.resetModules();
     }
+  });
+
+  describe('isCommitAncestor', () => {
+    it('returns true when the candidate commit is an ancestor of the descendant', async () => {
+      const ancestor = await getHeadCommit(repoRoot);
+      await commitChange(repoRoot, 'value = 2\n', 'descendant commit');
+      const descendant = await getHeadCommit(repoRoot);
+
+      await expect(isCommitAncestor(repoRoot, ancestor, descendant)).resolves.toBe(true);
+    });
+
+    it('returns true when both commits are the same', async () => {
+      const head = await getHeadCommit(repoRoot);
+
+      await expect(isCommitAncestor(repoRoot, head, head)).resolves.toBe(true);
+    });
+
+    it('returns false when both commits are valid but the candidate is not an ancestor', async () => {
+      const initialHead = await getHeadCommit(repoRoot);
+      await commitChange(repoRoot, 'value = 2\n', 'later commit');
+      const laterHead = await getHeadCommit(repoRoot);
+
+      await expect(isCommitAncestor(repoRoot, laterHead, initialHead)).resolves.toBe(false);
+    });
+
+    it('returns false for a diverged branch commit that was never merged', async () => {
+      const git = simpleGit(repoRoot);
+      await git.checkoutLocalBranch('diverged');
+      await commitChange(repoRoot, 'value = branch\n', 'diverged commit');
+      const branchTip = await getHeadCommit(repoRoot);
+
+      await git.checkout('main');
+      await commitChange(repoRoot, 'value = main\n', 'main commit');
+      const mainTip = await getHeadCommit(repoRoot);
+
+      await expect(isCommitAncestor(repoRoot, branchTip, mainTip)).resolves.toBe(false);
+    });
+
+    it('returns false when a commit cannot be resolved', async () => {
+      const head = await getHeadCommit(repoRoot);
+
+      await expect(
+        isCommitAncestor(repoRoot, '0123456789012345678901234567890123456789', head)
+      ).resolves.toBe(false);
+    });
   });
 
 });

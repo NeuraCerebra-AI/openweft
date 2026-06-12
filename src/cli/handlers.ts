@@ -4,7 +4,20 @@ import path from 'node:path';
 import { execa } from 'execa';
 
 import type { CommandHandlers } from './buildProgram.js';
+import {
+  OPENWEFT_PID_ARGV_MARKER,
+  getProcessStartTimeViaPs,
+  parsePidFileContent,
+  serializePidFileRecord
+} from './pidFile.js';
 import { ClaudeCliAdapter, CodexCliAdapter, MockAgentAdapter, createExecaCommandRunner } from '../adapters/index.js';
+import {
+  createAgentProcessRegistry,
+  getAgentProcessRegistryFile,
+  readAgentProcessRegistry,
+  resolveAgentKillTargets,
+  type AgentProcessRegistry
+} from '../orchestrator/agentProcessRegistry.js';
 import type { BackendEffortLevel } from '../config/options.js';
 import type { BackendDetection } from '../ui/onboarding/types.js';
 import { createConfigHash, getDefaultConfig, loadOpenWeftConfig } from '../config/index.js';
@@ -70,6 +83,12 @@ interface CliDependencies {
   getExecPath: () => string;
   getEnv: () => NodeJS.ProcessEnv;
   isPidAlive: (pid: number) => boolean;
+  /**
+   * Returns the kernel-reported start time of a process (used to verify that
+   * a recorded PID still belongs to the OpenWeft run that wrote it), or null
+   * when it cannot be determined.
+   */
+  getProcessStartTime: (pid: number) => Promise<string | null>;
   sendSignal: (pid: number, signal: NodeJS.Signals) => void;
   spawnBackground: (input: BackgroundSpawnInput) => Promise<number>;
   spawnTmuxSession: (input: TmuxSpawnInput) => Promise<TmuxSpawnResult>;
@@ -1438,6 +1457,7 @@ const defaultDependencies: CliDependencies = {
       return false;
     }
   },
+  getProcessStartTime: getProcessStartTimeViaPs,
   sendSignal: (pid, signal) => {
     process.kill(pid, signal);
   },
@@ -1483,58 +1503,142 @@ const defaultDependencies: CliDependencies = {
 const selectAdapter = (input: {
   backend: 'codex' | 'claude' | 'mock';
   streamOutput: boolean;
+  agentRegistry?: AgentProcessRegistry;
 }) => {
-  const runner = input.streamOutput
-    ? createExecaCommandRunner({
-        stdout: ['pipe', 'inherit'],
-        stderr: ['pipe', 'inherit']
-      })
-    : undefined;
+  if (input.backend === 'mock') {
+    return new MockAgentAdapter();
+  }
+
+  // Agent children are spawned into their own process group on POSIX so the
+  // `openweft stop` escalation path can kill the whole agent process tree —
+  // even after the orchestrator itself has been SIGKILLed, which bypasses
+  // execa's exit-time child cleanup.
+  const detachChildren = process.platform !== 'win32';
+  const registry = input.agentRegistry;
+  const runner = createExecaCommandRunner({
+    ...(input.streamOutput
+      ? {
+          stdout: ['pipe', 'inherit'],
+          stderr: ['pipe', 'inherit']
+        }
+      : {}),
+    detached: detachChildren,
+    ...(registry
+      ? {
+          onSpawn: (child: { pid: number; command: string }) => {
+            void registry.register({
+              pid: child.pid,
+              pgid: detachChildren ? child.pid : null,
+              command: child.command,
+              startedAt: new Date().toISOString()
+            });
+          },
+          onExit: (pid: number) => {
+            void registry.unregister(pid);
+          }
+        }
+      : {})
+  });
 
   switch (input.backend) {
     case 'codex':
       return new CodexCliAdapter(runner);
     case 'claude':
       return new ClaudeCliAdapter(runner);
-    case 'mock':
-      return new MockAgentAdapter();
     default:
       return new MockAgentAdapter();
   }
 };
 
+type BackgroundRunIdentity = 'verified' | 'assumed' | 'mismatch' | 'legacy-unverified' | 'dead';
+
+interface BackgroundRunState {
+  pid: number;
+  /** True only when the recorded pid is alive AND trusted to be this OpenWeft run. */
+  alive: boolean;
+  /** Raw signal-0 liveness of whatever process currently holds the pid. */
+  processAlive: boolean;
+  identity: BackgroundRunIdentity;
+}
+
 const readBackgroundPid = async (
   pidFile: string,
-  isPidAlive: (pid: number) => boolean
-): Promise<{ pid: number; alive: boolean } | null> => {
+  dependencies: Pick<CliDependencies, 'isPidAlive' | 'getProcessStartTime'>
+): Promise<BackgroundRunState | null> => {
   if (!(await pathExists(pidFile))) {
     return null;
   }
 
-  const pidText = (await readTextFileIfExists(pidFile))?.trim() ?? '';
-  const pid = Number.parseInt(pidText, 10);
-  if (!Number.isInteger(pid)) {
+  const pidText = (await readTextFileIfExists(pidFile)) ?? '';
+  const parsed = parsePidFileContent(pidText);
+  if (parsed.kind === 'invalid') {
     await rm(pidFile, { force: true });
     return null;
   }
 
-  const alive = isPidAlive(pid);
-  if (!alive) {
+  const pid = parsed.kind === 'json' ? parsed.record.pid : parsed.pid;
+  const processAlive = dependencies.isPidAlive(pid);
+  if (!processAlive) {
     await rm(pidFile, { force: true });
+    return { pid, alive: false, processAlive: false, identity: 'dead' };
   }
 
-  return {
-    pid,
-    alive
-  };
+  if (parsed.kind === 'legacy') {
+    // Legacy bare-number pid files carry no identity metadata, so liveness
+    // alone cannot prove this is an OpenWeft process. Report it
+    // conservatively and never signal it.
+    return { pid, alive: false, processAlive: true, identity: 'legacy-unverified' };
+  }
+
+  const recordedStartTime = parsed.record.processStartTime;
+  if (recordedStartTime !== null) {
+    const liveStartTime = await dependencies.getProcessStartTime(pid);
+    if (liveStartTime !== null && liveStartTime !== recordedStartTime) {
+      // PID reuse: an unrelated process now owns the recorded pid. Safe to
+      // clean up — the run that wrote this file no longer exists.
+      await rm(pidFile, { force: true });
+      return { pid, alive: false, processAlive: true, identity: 'mismatch' };
+    }
+    if (liveStartTime === recordedStartTime) {
+      return { pid, alive: true, processAlive: true, identity: 'verified' };
+    }
+  }
+
+  // No way to verify identity on this platform; the file is in OpenWeft's own
+  // format, so degrade to the historical liveness-only behavior.
+  return { pid, alive: true, processAlive: true, identity: 'assumed' };
+};
+
+const writeRunPidFile = async (
+  pidFile: string,
+  getProcessStartTime: (pid: number) => Promise<string | null>
+): Promise<void> => {
+  const processStartTime = await getProcessStartTime(process.pid);
+  await writeTextFileAtomic(
+    pidFile,
+    serializePidFileRecord({
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      argvMarker: OPENWEFT_PID_ARGV_MARKER,
+      processStartTime
+    })
+  );
 };
 
 const cleanupBackgroundPidIfOwned = async (pidFile: string): Promise<void> => {
-  const current = process.pid;
-  const pidText = (await readTextFileIfExists(pidFile))?.trim() ?? '';
-  const pid = Number.parseInt(pidText, 10);
+  const pidText = await readTextFileIfExists(pidFile);
+  if (pidText === null) {
+    return;
+  }
 
-  if (pid === current) {
+  const parsed = parsePidFileContent(pidText);
+  const recordedPid = parsed.kind === 'json'
+    ? parsed.record.pid
+    : parsed.kind === 'legacy'
+      ? parsed.pid
+      : null;
+
+  if (recordedPid === process.pid) {
     await rm(pidFile, { force: true });
   }
 };
@@ -1571,6 +1675,7 @@ const waitForBackgroundChildReady = async (input: {
   pidFile: string;
   spawnedPid: number;
   isPidAlive: (pid: number) => boolean;
+  getProcessStartTime: (pid: number) => Promise<string | null>;
   sleep: (ms: number) => Promise<void>;
   attempts?: number;
   delayMs?: number;
@@ -1579,7 +1684,7 @@ const waitForBackgroundChildReady = async (input: {
   const delayMs = input.delayMs ?? 250;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const background = await readBackgroundPid(input.pidFile, input.isPidAlive);
+    const background = await readBackgroundPid(input.pidFile, input);
     if (background?.alive) {
       return background.pid;
     }
@@ -1725,6 +1830,12 @@ export const createCommandHandlers = (
       store: StoreApi<UIStore>
     ) => Promise<void>;
   }): Promise<void> => {
+    // The interactive TUI run must be visible to other terminals exactly like
+    // the foreground/background paths: write the pid file up front so a
+    // concurrent `openweft start` is rejected and `openweft stop`/`status`
+    // can see this run.
+    await writeRunPidFile(input.config.paths.pidFile, resolvedDependencies.getProcessStartTime);
+
     const { withFullScreen } = await import('fullscreen-ink');
     const { App } = await import('../ui/App.js');
     const { createUIStore } = await import('../ui/store.js');
@@ -1734,6 +1845,10 @@ export const createCommandHandlers = (
     const uiStore = createUIStore();
     const onEvent = createEventHandler(uiStore);
     const stopController = new StopController();
+    const agentRegistry = createAgentProcessRegistry({
+      registryFile: getAgentProcessRegistryFile(input.config.paths)
+    });
+    let runStatus: string | null = null;
     const approvalController = new ApprovalController(onEvent);
     const notificationDependencies = createDefaultNotificationDependencies();
     let activeConfig = input.config;
@@ -1828,7 +1943,11 @@ export const createCommandHandlers = (
       const result = await runRealOrchestration({
         config: activeConfig,
         configHash: activeConfigHash,
-        adapter: selectAdapter({ backend: activeConfig.backend, streamOutput: false }),
+        adapter: selectAdapter({
+          backend: activeConfig.backend,
+          streamOutput: false,
+          agentRegistry
+        }),
         stopController,
         approvalController,
         notificationDependencies,
@@ -1837,6 +1956,7 @@ export const createCommandHandlers = (
         sleep: resolvedDependencies.sleep,
         onEvent,
       });
+      runStatus = result.checkpoint.status;
 
       const completedFeatures = Object.values(result.checkpoint.features ?? {})
         .filter((f) => f.status === 'completed')
@@ -1879,6 +1999,15 @@ export const createCommandHandlers = (
       process.off('SIGTERM', signalHandler);
       app.instance.unmount();
       await app.waitUntilExit();
+      await agentRegistry.clear();
+      agentRegistry.dispose();
+      await cleanupBackgroundPidIfOwned(input.config.paths.pidFile);
+    }
+
+    // Same contract as the headless/stream/dry-run paths: a run that ended
+    // failed must not exit 0 after the TUI is torn down.
+    if (runStatus === 'failed') {
+      process.exitCode = 1;
     }
   };
 
@@ -1906,7 +2035,7 @@ export const createCommandHandlers = (
       }
 
       // Config exists — returning user
-      const background = await readBackgroundPid(config.paths.pidFile, resolvedDependencies.isPidAlive);
+      const background = await readBackgroundPid(config.paths.pidFile, resolvedDependencies);
       if (background?.alive) {
         await handlers.status();
         return;
@@ -2315,12 +2444,26 @@ export const createCommandHandlers = (
       const backgroundChild = resolvedDependencies.getEnv().OPENWEFT_BACKGROUND_CHILD === '1';
       const existingBackground = await readBackgroundPid(
         config.paths.pidFile,
-        resolvedDependencies.isPidAlive
+        resolvedDependencies
       );
       const tmuxMonitor = readTmuxMonitorEnv(resolvedDependencies.getEnv());
 
       if (existingBackground?.alive && !tmuxMonitor && !backgroundChild) {
         throw new Error(`OpenWeft is already running with PID ${existingBackground.pid}.`);
+      }
+
+      if (
+        existingBackground &&
+        !existingBackground.alive &&
+        existingBackground.processAlive &&
+        !tmuxMonitor &&
+        !backgroundChild
+      ) {
+        resolvedDependencies.writeLine(
+          existingBackground.identity === 'legacy-unverified'
+            ? `Warning: ignoring legacy PID file (PID ${existingBackground.pid}); it cannot be verified as an OpenWeft process and will not be signaled.`
+            : `Warning: ignored a stale PID file; PID ${existingBackground.pid} now belongs to a different process.`
+        );
       }
 
       if (options.bg && options.tmux) {
@@ -2349,6 +2492,7 @@ export const createCommandHandlers = (
           pidFile: config.paths.pidFile,
           spawnedPid: pid,
           isPidAlive: resolvedDependencies.isPidAlive,
+          getProcessStartTime: resolvedDependencies.getProcessStartTime,
           sleep: resolvedDependencies.sleep
         });
         if (readyPid === null) {
@@ -2476,8 +2620,9 @@ export const createCommandHandlers = (
       process.on('SIGINT', signalHandler);
       process.on('SIGTERM', signalHandler);
 
+      let agentRegistry: AgentProcessRegistry | null = null;
       try {
-        await writeTextFileAtomic(config.paths.pidFile, `${process.pid}\n`);
+        await writeRunPidFile(config.paths.pidFile, resolvedDependencies.getProcessStartTime);
 
         if (options.dryRun) {
           const result = await runDryRunOrchestration({
@@ -2494,12 +2639,19 @@ export const createCommandHandlers = (
               ? `Dry run failed: planned ${result.plannedCount}, completed ${result.completedCount}, failed/review ${failedCount}.`
               : `Dry run complete: planned ${result.plannedCount}, completed ${result.completedCount}.`
           );
+          if (result.checkpoint.status === 'failed') {
+            process.exitCode = 1;
+          }
           return;
         }
 
+        agentRegistry = createAgentProcessRegistry({
+          registryFile: getAgentProcessRegistryFile(config.paths)
+        });
         const adapter = selectAdapter({
           backend: config.backend,
-          streamOutput: useStream
+          streamOutput: useStream,
+          agentRegistry
         });
 
         const result = await runRealOrchestration({
@@ -2520,10 +2672,17 @@ export const createCommandHandlers = (
             ? `${terminalLabel}: planned ${result.plannedCount}, merged ${result.mergedCount}, status ${result.checkpoint.status}, head ${result.finalizationSummary.finalHead ?? 'unknown'}, durability ${summarizeMergeDurability(result.finalizationSummary.mergeDurability)}, ${formatCleanupSummary(result.finalizationSummary.runtimeCleanup.action)}.`
             : `${terminalLabel}: planned ${result.plannedCount}, merged ${result.mergedCount}, status ${result.checkpoint.status}.`
         );
+        if (result.checkpoint.status === 'failed') {
+          process.exitCode = 1;
+        }
       } finally {
         process.off('SIGINT', signalHandler);
         process.off('SIGTERM', signalHandler);
 
+        if (agentRegistry !== null) {
+          await agentRegistry.clear();
+          agentRegistry.dispose();
+        }
         await cleanupBackgroundPidIfOwned(config.paths.pidFile);
       }
     },
@@ -2552,7 +2711,7 @@ export const createCommandHandlers = (
       });
       const background = await readBackgroundPid(
         config.paths.pidFile,
-        resolvedDependencies.isPidAlive
+        resolvedDependencies
       );
 
       if (process.stdout.isTTY) {
@@ -2620,21 +2779,28 @@ export const createCommandHandlers = (
 
       const background = await readBackgroundPid(
         config.paths.pidFile,
-        resolvedDependencies.isPidAlive
+        resolvedDependencies
       );
 
       if (!background?.alive) {
+        // PID-reuse / unverifiable protection: never signal a process we
+        // cannot prove is this project's OpenWeft run.
+        const message = background?.processAlive
+          ? background.identity === 'legacy-unverified'
+            ? `PID file records PID ${background.pid} in a legacy format; the process is alive but cannot be verified as this OpenWeft run, so no signals were sent. Delete ${config.paths.pidFile} manually if you are sure it is stale.`
+            : `PID ${background.pid} from the PID file now belongs to a different process (PID reuse); removed the stale PID file without sending signals.`
+          : 'No background OpenWeft run is active.';
         if (process.stdout.isTTY) {
           const React = await import('react');
           const { renderStyledOutput, WarningCard } = await import('../ui/styledOutput.js');
           await renderStyledOutput(
             React.createElement(WarningCard, {
-              message: 'No background OpenWeft run is active.',
+              message,
             })
           );
           return;
         }
-        resolvedDependencies.writeLine('No background OpenWeft run is active.');
+        resolvedDependencies.writeLine(message);
         return;
       }
 
@@ -2648,7 +2814,7 @@ export const createCommandHandlers = (
         await resolvedDependencies.sleep(1000);
         const liveState = await readBackgroundPid(
           config.paths.pidFile,
-          resolvedDependencies.isPidAlive
+          resolvedDependencies
         );
         if (!liveState?.alive) {
           if (process.stdout.isTTY) {
@@ -2683,15 +2849,52 @@ export const createCommandHandlers = (
         }
       }
 
+      // Escalation: SIGKILLing the orchestrator bypasses execa's exit-time
+      // cleanup, so first kill the recorded agent process groups — otherwise
+      // the in-flight codex/claude subprocess would keep mutating the repo
+      // after we report the run as stopped.
+      const agentRegistryFile = getAgentProcessRegistryFile(config.paths);
+      const agentEntries = await readAgentProcessRegistry(agentRegistryFile);
+      const killTargets = resolveAgentKillTargets(agentEntries);
+      for (const target of killTargets) {
+        try {
+          resolvedDependencies.sendSignal(target, 'SIGTERM');
+        } catch {
+          // group/process may have already exited
+        }
+      }
+      if (killTargets.length > 0) {
+        await resolvedDependencies.sleep(2000);
+        for (const target of killTargets) {
+          try {
+            resolvedDependencies.sendSignal(target, 'SIGKILL');
+          } catch {
+            // group/process may have already exited
+          }
+        }
+      }
+
       try {
         resolvedDependencies.sendSignal(background.pid, 'SIGKILL');
       } catch {
         // process may have already exited
       }
       await rm(config.paths.pidFile, { force: true });
+      await rm(agentRegistryFile, { force: true });
       resolvedDependencies.writeLine(
         `Background process ${background.pid} did not exit after SIGTERM; sent SIGKILL and removed PID file.`
       );
+      if (agentEntries.length === 0) {
+        resolvedDependencies.writeLine('Agent subprocesses: none were recorded for this run.');
+      } else {
+        const surviving = agentEntries.filter((entry) => resolvedDependencies.isPidAlive(entry.pid));
+        resolvedDependencies.writeLine(
+          surviving.length === 0
+            ? `Agent subprocesses: ${agentEntries.length} recorded, all confirmed stopped.`
+            : `Agent subprocesses: ${surviving.length} of ${agentEntries.length} may still be running (PID ${surviving.map((entry) => entry.pid).join(', ')}). Verify manually before starting a new run.`
+        );
+      }
+      process.exitCode = 1;
     }
   };
 

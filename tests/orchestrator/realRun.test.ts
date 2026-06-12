@@ -13,7 +13,12 @@ import type {
   AdapterTurnResult
 } from '../../src/adapters/types.js';
 import { loadOpenWeftConfig } from '../../src/config/index.js';
-import { createPromptBFilename } from '../../src/domain/featureIds.js';
+import { createPromptBFilename, slugifyFeatureRequest } from '../../src/domain/featureIds.js';
+import {
+  appendRequestsToQueueContent,
+  parseQueueFile,
+  removePendingQueueLine
+} from '../../src/domain/queue.js';
 import { createWorktree, getAutoGcSetting, listWorktrees, setAutoGc } from '../../src/git/index.js';
 import type { NotificationDependencies } from '../../src/notifications/index.js';
 import { ApprovalController } from '../../src/orchestrator/approval.js';
@@ -663,6 +668,15 @@ const samePath = async (left: string, right: string): Promise<boolean> => {
   }
 };
 
+const hasMergeHead = async (repoPath: string): Promise<boolean> => {
+  try {
+    await simpleGit(repoPath).revparse(['--verify', 'MERGE_HEAD']);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const writeProjectFiles = async (
   repoRoot: string,
   options: {
@@ -748,11 +762,13 @@ const seedInterruptedExecutionFeature = async (input: {
   commitMessage?: string;
   leaveDirty?: boolean;
   includeOffManifestFile?: boolean;
+  branchName?: string;
+  omitWorktreeIdentityFromCheckpoint?: boolean;
 }): Promise<void> => {
   const featureId = input.featureId ?? '001';
   const request = input.request ?? 'add dashboard filters';
   const status = input.status ?? 'executing';
-  const branchName = `openweft-${featureId}-resume-test`;
+  const branchName = input.branchName ?? `openweft-${featureId}-resume-test`;
   const worktreePath = path.join(input.config.paths.worktreesDir, featureId);
   const planFile = path.join(input.config.paths.featureRequestsDir, `${featureId}.plan.md`);
   const promptBFile = path.join(input.config.paths.promptBArtifactsDir, `${featureId}.prompt-b.md`);
@@ -823,8 +839,8 @@ const seedInterruptedExecutionFeature = async (input: {
     planFile,
     evolvedPlanFile: null,
     promptBFile,
-    branchName,
-    worktreePath,
+    branchName: input.omitWorktreeIdentityFromCheckpoint ? null : branchName,
+    worktreePath: input.omitWorktreeIdentityFromCheckpoint ? null : worktreePath,
     sessionId: 'resume-session',
     sessionScope: 'worktree',
     manifest: {
@@ -2217,6 +2233,242 @@ ${TEST_LEDGER_SECTION}
     expect(restartResult.checkpoint.features['002']?.request).toBe('add export controls');
   });
 
+  it('preserves operator-added pending queue lines when recovering a planning-state checkpoint', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add export controls', 'fix the login bug']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const now = new Date().toISOString();
+    const checkpoint = createEmptyCheckpoint({
+      orchestratorVersion: 'test',
+      configHash,
+      runId: 'test-run',
+      checkpointId: 'test-checkpoint',
+      createdAt: now
+    });
+    checkpoint.configHash = configHash;
+    checkpoint.status = 'in-progress';
+    checkpoint.currentState = 'planning';
+    // The checkpoint snapshot predates the operator running `openweft add "fix the login bug"`
+    // while the crashed run was down, so it only knows about the first request.
+    checkpoint.pendingRequests = [{ request: 'add export controls', queuedAt: now }];
+
+    await saveCheckpoint({
+      checkpoint,
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    const plannedRequests = Object.values(result.checkpoint.features)
+      .map((feature) => feature.request)
+      .sort();
+    expect(plannedRequests).toEqual(['add export controls', 'fix the login bug']);
+
+    const finalQueue = parseQueueFile(await readFile(config.paths.queueFile, 'utf8'));
+    expect(finalQueue.pending).toHaveLength(0);
+    expect(finalQueue.processed.map((entry) => entry.request).sort()).toEqual([
+      'add export controls',
+      'fix the login bug'
+    ]);
+  });
+
+  it('allows start with a changed configHash when the existing checkpoint contains only completed features and new queue entries', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const firstRun = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+    expect(firstRun.checkpoint.status).toBe('completed');
+
+    // The operator edits the config (new hash) and queues brand-new work between runs.
+    const onDiskQueue = await readFile(config.paths.queueFile, 'utf8');
+    await writeFile(
+      config.paths.queueFile,
+      appendRequestsToQueueContent(onDiskQueue, ['add export controls']),
+      'utf8'
+    );
+    const changedConfigHash = `${configHash}-changed`;
+
+    const secondRun = await runRealOrchestration({
+      config,
+      configHash: changedConfigHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(secondRun.checkpoint.status).toBe('completed');
+    expect(secondRun.checkpoint.configHash).toBe(changedConfigHash);
+    const plannedRequests = Object.values(secondRun.checkpoint.features)
+      .map((feature) => feature.request)
+      .sort();
+    expect(plannedRequests).toEqual(['add dashboard filters', 'add export controls']);
+
+    const persisted = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+    expect(persisted.checkpoint?.configHash).toBe(changedConfigHash);
+  });
+
+  it('still refuses a changed configHash while the checkpoint has planned unfinished work', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    await seedPlannedPromptBRecoveryFeature({
+      config,
+      configHash
+    });
+
+    await expect(
+      runRealOrchestration({
+        config,
+        configHash: `${configHash}-changed`,
+        adapter: new RecordingAdapter(new MockAgentAdapter()),
+        notificationDependencies: createNotificationRecorder().dependencies,
+        sleep: async () => {}
+      })
+    ).rejects.toThrow(/OpenWeft configuration changed while unfinished work remains/);
+
+    // The original hash must survive so restoring the old config still resumes cleanly.
+    const persisted = await loadCheckpoint({
+      checkpointFile: config.paths.checkpointFile,
+      checkpointBackupFile: config.paths.checkpointBackupFile
+    });
+    expect(persisted.checkpoint?.configHash).toBe(configHash);
+  });
+
+  it('preserves a request appended to queue.txt while a planning pass is in flight', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters', 'add export controls']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+    let appendedConcurrentRequest = false;
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'planning-s1' && request.featureId === '002' && !appendedConcurrentRequest) {
+        appendedConcurrentRequest = true;
+        // Simulate `openweft add "fix the login bug"` racing the in-flight planning pass.
+        const onDiskQueue = await readFile(config.paths.queueFile, 'utf8');
+        await writeFile(
+          config.paths.queueFile,
+          appendRequestsToQueueContent(onDiskQueue, ['fix the login bug']),
+          'utf8'
+        );
+      }
+
+      return originalRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(appendedConcurrentRequest).toBe(true);
+
+    const plannedRequests = Object.values(result.checkpoint.features)
+      .map((feature) => feature.request)
+      .sort();
+    expect(plannedRequests).toEqual([
+      'add dashboard filters',
+      'add export controls',
+      'fix the login bug'
+    ]);
+
+    const finalQueue = parseQueueFile(await readFile(config.paths.queueFile, 'utf8'));
+    expect(finalQueue.pending).toHaveLength(0);
+    expect(finalQueue.processed.map((entry) => entry.request).sort()).toEqual([
+      'add dashboard filters',
+      'add export controls',
+      'fix the login bug'
+    ]);
+  });
+
+  it('skips the queue processed-line rewrite with a warning when the planned request vanished from queue.txt', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters', 'add export controls']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+    let removedPendingLine = false;
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'planning-s1' && request.featureId === '002' && !removedPendingLine) {
+        removedPendingLine = true;
+        // Simulate an operator deleting the queued request while its plan is in flight.
+        const onDiskContent = await readFile(config.paths.queueFile, 'utf8');
+        const target = parseQueueFile(onDiskContent).pending.find(
+          (line) => line.request === 'add export controls'
+        );
+        if (!target) {
+          throw new Error('Expected the second request to still be pending.');
+        }
+        await writeFile(
+          config.paths.queueFile,
+          removePendingQueueLine(onDiskContent, target.lineIndex, target.request),
+          'utf8'
+        );
+      }
+
+      return originalRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(removedPendingLine).toBe(true);
+    expect(result.checkpoint.features['002']?.request).toBe('add export controls');
+
+    const auditEntries = await readAuditEntries(config.paths.auditLogFile);
+    expect(auditEntries.some((entry) => entry.event === 'queue.processed_line_skipped')).toBe(true);
+
+    const finalQueue = parseQueueFile(await readFile(config.paths.queueFile, 'utf8'));
+    expect(finalQueue.pending).toHaveLength(0);
+    expect(finalQueue.processed.map((entry) => entry.request)).toEqual(['add dashboard filters']);
+  });
+
   it('repairs a missing promptBFile from the canonical artifact before execution resumes', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
@@ -3158,6 +3410,79 @@ ${TEST_LEDGER_SECTION}
     expect(adapter.requests.filter((request) => request.stage === 'execution')).toHaveLength(5);
   });
 
+  it('keeps OpenWeft runtime artifacts out of the merged branch even when HEAD has no gitignore entry', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new DeterministicScoringAdapter(),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.mergedCount).toBe(1);
+
+    const trackedFiles = (await simpleGit(repoRoot).raw(['ls-tree', '-r', '--name-only', 'HEAD']))
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    expect(trackedFiles).toContain('src/target.ts');
+    expect(trackedFiles.some((file) => file === '.openweft' || file.startsWith('.openweft/'))).toBe(false);
+  });
+
+  it('fails a no-op agent run instead of committing OpenWeft runtime artifacts as agent work', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const inner = new DeterministicScoringAdapter();
+    const adapter = new RecordingAdapter(inner);
+    const innerRunTurn = inner.runTurn.bind(inner);
+
+    adapter.runTurn = async (request) => {
+      adapter.requests.push(request);
+      const result = await innerRunTurn(request);
+      if (request.stage === 'execution') {
+        // Undo the deterministic adapter's edit so the agent turn is a true no-op:
+        // the only contents left in the worktree are OpenWeft's own injected artifacts.
+        await rm(path.join(request.cwd, 'src'), { recursive: true, force: true });
+      }
+      return result;
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('failed');
+    expect(result.mergedCount).toBe(0);
+    expect(result.checkpoint.features['001']).toMatchObject({ status: 'failed' });
+    expect(result.checkpoint.features['001']?.lastError).toContain(
+      'without producing any workspace changes'
+    );
+
+    const trackedFiles = (await simpleGit(repoRoot).raw(['ls-tree', '-r', '--name-only', 'HEAD']))
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    expect(trackedFiles.some((file) => file === '.openweft' || file.startsWith('.openweft/'))).toBe(false);
+  });
+
   it('notifies when a feature fails after its full rerun budget is exhausted', async () => {
     const repoRoot = await createTempRepo();
     await writeProjectFiles(repoRoot, {
@@ -3936,6 +4261,231 @@ ${TEST_LEDGER_SECTION}
     expect(result.mergedCount).toBe(1);
     expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(true);
   });
+
+  it('persists the worktree identity to the checkpoint before phase settlement', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: ['add dashboard filters']
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = adapter.runTurn.bind(adapter);
+    let persistedDuringExecution: { branchName: string | null; worktreePath: string | null } | null = null;
+
+    adapter.runTurn = async (request) => {
+      if (request.stage === 'execution' && persistedDuringExecution === null) {
+        const persisted = await loadCheckpoint({
+          checkpointFile: config.paths.checkpointFile,
+          checkpointBackupFile: config.paths.checkpointBackupFile
+        });
+        const feature = persisted.checkpoint?.features['001'];
+        persistedDuringExecution = {
+          branchName: feature?.branchName ?? null,
+          worktreePath: feature?.worktreePath ?? null
+        };
+      }
+
+      return originalRunTurn(request);
+    };
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(persistedDuringExecution).not.toBeNull();
+    expect(persistedDuringExecution!.branchName).toMatch(/^openweft-001-/);
+    expect(persistedDuringExecution!.worktreePath).toBe(path.join(config.paths.worktreesDir, '001'));
+  });
+
+  it('recovers a completed feature branch after a crash that predates the worktree checkpoint write', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    const request = 'add dashboard filters';
+    const deterministicBranchName = `openweft-001-${slugifyFeatureRequest(request, 32)}`;
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config,
+      request,
+      branchName: deterministicBranchName,
+      omitWorktreeIdentityFromCheckpoint: true
+    });
+
+    const adapter = new RecordingAdapter(new MockAgentAdapter());
+    const result = await runRealOrchestration({
+      config,
+      configHash: 'test-config-hash',
+      adapter,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+    expect(result.mergedCount).toBe(1);
+    expect(adapter.requests.some((request) => request.stage === 'execution')).toBe(false);
+    expect(result.checkpoint.features['001']).toMatchObject({
+      status: 'completed',
+      branchName: null,
+      worktreePath: null
+    });
+
+    const mainLog = await simpleGit(repoRoot).log();
+    expect(mainLog.all.some((entry) => entry.message === 'openweft: complete feature 001')).toBe(true);
+  });
+
+  it('keeps unmerged feature branches when starting without a checkpoint', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: []
+    });
+
+    const { config, configHash } = await loadOpenWeftConfig(repoRoot);
+    const abandonedBranchName = 'openweft-001-abandoned';
+    const abandonedWorktreePath = path.join(config.paths.worktreesDir, '001');
+
+    await mkdir(config.paths.worktreesDir, { recursive: true });
+    await createWorktree({
+      repoRoot,
+      worktreePath: abandonedWorktreePath,
+      branchName: abandonedBranchName
+    });
+    const worktreeGit = simpleGit(abandonedWorktreePath);
+    await mkdir(path.join(abandonedWorktreePath, 'src'), { recursive: true });
+    await writeFile(path.join(abandonedWorktreePath, 'src', 'unmerged.ts'), 'export const unmerged = 1;\n', 'utf8');
+    await worktreeGit.add(['src/unmerged.ts']);
+    await worktreeGit.commit('openweft: complete feature 001');
+
+    const result = await runRealOrchestration({
+      config,
+      configHash,
+      adapter: new RecordingAdapter(new MockAgentAdapter()),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(result.checkpoint.status).toBe('completed');
+
+    const branches = await simpleGit(repoRoot).branchLocal();
+    expect(branches.all).toContain(abandonedBranchName);
+
+    const listed = await listWorktrees(repoRoot);
+    expect(
+      await Promise.all(
+        listed.map(async (entry) => samePath(entry.path, abandonedWorktreePath))
+      ).then((matches) => matches.some(Boolean))
+    ).toBe(false);
+
+    const auditEntries = await readAuditEntries(path.join(repoRoot, '.openweft', 'audit-trail.jsonl'));
+    const keptAudit = auditEntries.find((entry) => entry.event === 'repo.orphans.unmerged-branches-kept');
+    expect(keptAudit?.data?.keptUnmergedBranchNames).toContain(abandonedBranchName);
+
+    const pruneAudit = auditEntries.find((entry) => entry.event === 'repo.orphans.pruned');
+    expect(pruneAudit?.data?.removedBranchNames ?? []).not.toContain(abandonedBranchName);
+  });
+
+  it('preserves a completed execution commit when stop interrupts merge-conflict resolution', async () => {
+    const repoRoot = await createTempRepo();
+    await writeProjectFiles(repoRoot, {
+      maxParallelAgents: 1,
+      queueRequests: [],
+      configOverrides: {
+        approval: 'per-feature'
+      }
+    });
+
+    const { config } = await loadOpenWeftConfig(repoRoot);
+    await seedInterruptedExecutionFeature({
+      repoRoot,
+      config
+    });
+    const worktreePath = path.join(config.paths.worktreesDir, '001');
+
+    // Main advances with a conflicting version of the same manifest file so the
+    // recovered completion commit cannot merge cleanly.
+    const mainGit = simpleGit(repoRoot);
+    await mkdir(path.join(repoRoot, 'src'), { recursive: true });
+    await writeFile(path.join(repoRoot, 'src', 'target.ts'), 'export const target = \'main\';\n', 'utf8');
+    await mainGit.add(['src/target.ts']);
+    await mainGit.commit('main conflicting change');
+
+    const firstAdapter = new RecordingAdapter(new MockAgentAdapter());
+    const approvalEvents: string[] = [];
+    const approvalController = new ApprovalController((event) => {
+      approvalEvents.push(event.type);
+    });
+    const stopController = new StopController();
+
+    const firstRunPromise = runRealOrchestration({
+      config,
+      configHash: 'test-config-hash',
+      adapter: firstAdapter,
+      approvalController,
+      stopController,
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    for (let attempt = 0; attempt < 1000 && !approvalController.hasPendingApproval(); attempt += 1) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 10);
+      });
+    }
+
+    expect(approvalController.hasPendingApproval()).toBe(true);
+    stopController.request('keyboard');
+    expect(approvalController.resolveAll('skip')).toBe(1);
+
+    const firstResult = await firstRunPromise;
+
+    expect(firstResult.checkpoint.status).toBe('stopped');
+    expect(firstAdapter.requests.some((request) => request.stage === 'execution')).toBe(false);
+    // Stop must abort the in-progress merge instead of leaving the worktree
+    // mid-merge, where the completion commit underneath would be unrecoverable.
+    expect(await hasMergeHead(worktreePath)).toBe(false);
+    expect((await simpleGit(repoRoot).branchLocal()).all).toContain('openweft-001-resume-test');
+
+    const secondAdapter = new RecordingAdapter(new MockAgentAdapter());
+    const originalRunTurn = secondAdapter.runTurn.bind(secondAdapter);
+    secondAdapter.runTurn = async (request) => {
+      const result = await originalRunTurn(request);
+      if (request.stage === 'conflict-resolution') {
+        // The mock adapter rewrites conflict markers but does not stage the
+        // resolution like a real agent would.
+        await simpleGit(request.cwd).raw(['add', '-A']);
+      }
+
+      return result;
+    };
+
+    const secondResult = await runRealOrchestration({
+      config,
+      configHash: 'test-config-hash',
+      adapter: secondAdapter,
+      approvalController: createAutoApproveController([]),
+      notificationDependencies: createNotificationRecorder().dependencies,
+      sleep: async () => {}
+    });
+
+    expect(secondResult.checkpoint.status).toBe('completed');
+    expect(secondResult.mergedCount).toBe(1);
+    expect(secondAdapter.requests.some((request) => request.stage === 'execution')).toBe(false);
+    expect(secondAdapter.requests.some((request) => request.stage === 'conflict-resolution')).toBe(true);
+
+    const mainLog = await simpleGit(repoRoot).log();
+    expect(mainLog.all.some((entry) => entry.message === 'openweft: complete feature 001')).toBe(true);
+  }, 60_000);
 
   it('records post-merge auto-stash restore failures with merge metadata', async () => {
     const repoRoot = await createTempRepo();

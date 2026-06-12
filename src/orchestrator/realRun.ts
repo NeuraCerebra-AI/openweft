@@ -26,9 +26,11 @@ import type { PriorityTier } from '../domain/primitives.js';
 import {
   getNextFeatureIdFromQueue,
   buildQueueContentFromCheckpointState,
+  locatePendingQueueLine,
   markQueueLineProcessed,
   parseQueueFile,
-  summarizeQueueRequest
+  summarizeQueueRequest,
+  type QueuePendingLine
 } from '../domain/queue.js';
 import { scoreQueue, type FeatureScoreBreakdown, type RepoRiskContext } from '../domain/scoring.js';
 import {
@@ -68,6 +70,7 @@ import {
   type OrchestratorCheckpoint
 } from '../state/checkpoint.js';
 import {
+  hasActionableCheckpointWork,
   hasActionableUnfinishedWork,
   isActionableFeature,
   isReviewFeatureStatus,
@@ -301,6 +304,7 @@ const pruneOrphanedOpenWeftArtifactsAtStartup = async (
   removedWorktreePaths: string[];
   removedBranchNames: string[];
   retainedBranchNames: string[];
+  keptUnmergedBranchNames: string[];
 }> => {
   const checkpointResult = await loadCheckpoint({
     checkpointFile: config.paths.checkpointFile,
@@ -315,8 +319,18 @@ const pruneOrphanedOpenWeftArtifactsAtStartup = async (
   return pruneOrphanedOpenWeftArtifacts({
     repoRoot: config.repoRoot,
     worktreesDir: config.paths.worktreesDir,
-    retainedWorktreePaths: retainedFeatures.map((feature) => feature.worktreePath),
-    retainedBranchNames: retainedFeatures.map((feature) => feature.branchName)
+    // Retain by the checkpoint-recorded names AND by the deterministic names
+    // each feature would have been created with: a crash can land before the
+    // checkpoint write that records the worktree identity, and the work in
+    // those artifacts must survive the next startup.
+    retainedWorktreePaths: retainedFeatures.flatMap((feature) => [
+      feature.worktreePath,
+      buildWorktreePath(config, feature.id)
+    ]),
+    retainedBranchNames: retainedFeatures.flatMap((feature) => [
+      feature.branchName,
+      createFeatureBranchName(feature.id, feature.request)
+    ])
   });
 };
 
@@ -926,17 +940,40 @@ const loadOrCreateCheckpoint = async (
   const existingQueueContent = (await readTextFileIfExists(input.config.paths.queueFile)) ?? '';
   const existingQueue = parseQueueFile(existingQueueContent);
 
+  // Only checkpoint-owned work (in-flight features, unresolved reviews, pending
+  // merge re-analysis) pins the old configuration. Brand-new pending queue lines
+  // are not "unfinished" work — they have not been planned under any config yet.
   if (
     existing.checkpoint.configHash !== input.configHash &&
-    hasActionableUnfinishedWork(existing.checkpoint, existingQueue.pending)
+    hasActionableCheckpointWork(existing.checkpoint)
   ) {
     throw new Error(
-      'OpenWeft configuration changed while unfinished work remains. Resolve or clear the checkpoint before resuming.'
+      'OpenWeft configuration changed while unfinished work remains. Restore the previous configuration and run `openweft resume` to finish the in-flight work. To abandon the run instead, delete .openweft/checkpoint.json and .openweft/checkpoint.json.backup; OpenWeft keeps feature branches with unmerged commits so you can merge or delete them manually.'
     );
   }
 
   const checkpoint = cloneCheckpoint(existing.checkpoint);
   let needsCheckpointSave = false;
+
+  if (checkpoint.configHash !== input.configHash) {
+    // The guard above proved the checkpoint carries no actionable work of its
+    // own, so the new configuration can safely take over before fresh work is
+    // planned. Without this refresh, a config edit between otherwise-complete
+    // runs would permanently block every later start.
+    checkpoint.configHash = input.configHash;
+    checkpoint.updatedAt = timestamp();
+    needsCheckpointSave = true;
+    await appendAudit(input.config, {
+      level: 'info',
+      event: 'run.config_hash_refreshed',
+      message: 'Adopted the current configuration for a checkpoint with no unfinished checkpoint work.',
+      data: {
+        checkpointId: checkpoint.checkpointId,
+        previousConfigHash: existing.checkpoint.configHash,
+        configHash: input.configHash
+      }
+    });
+  }
   const recoveredExecutions = new Map<string, RecoveredExecutionResult>();
   const repoGit = simpleGit(input.config.repoRoot);
   const baseBranch = (await repoGit.revparse(['--abbrev-ref', 'HEAD'])).trim();
@@ -1006,6 +1043,29 @@ const loadOrCreateCheckpoint = async (
 
   for (const feature of Object.values(checkpoint.features)) {
     if (RECOVERABLE_EXECUTION_STATUSES.has(feature.status) || (feature.status === 'failed' && feature.rerunEligible)) {
+      if (!feature.branchName) {
+        // A crash inside a phase can predate the checkpoint write that records
+        // the worktree identity. Repair it from the deterministic names the
+        // feature would have been created with so its committed work can be
+        // recovered instead of recreated from scratch.
+        const deterministicBranchName = createFeatureBranchName(feature.id, feature.request);
+        const deterministicBranchExists = await repoGit
+          .raw(['rev-parse', '--verify', `refs/heads/${deterministicBranchName}`])
+          .then(() => true)
+          .catch(() => false);
+        if (deterministicBranchExists) {
+          feature.branchName = deterministicBranchName;
+          if (!feature.worktreePath) {
+            const deterministicWorktreePath = buildWorktreePath(input.config, feature.id);
+            if (await pathExists(deterministicWorktreePath)) {
+              feature.worktreePath = deterministicWorktreePath;
+            }
+          }
+          feature.updatedAt = timestamp();
+          needsCheckpointSave = true;
+        }
+      }
+
       let alreadyMerged = false;
       const recovered = await findReusableExecutionCommit({
         repoRoot: input.config.repoRoot,
@@ -1616,6 +1676,45 @@ const runTurnAndRecord = async (
   return result;
 };
 
+/**
+ * Computes the processed-line queue mutation for a planned feature against the
+ * CURRENT on-disk queue content instead of the snapshot read at the start of
+ * the planning pass. Planning turns take minutes, and `openweft add` (CLI or
+ * TUI) appends to queue.txt concurrently with no locking — rewriting from a
+ * stale snapshot would silently erase those requests. The target line is
+ * located by queue id / request text so stale line indexes cannot clobber a
+ * different request; when the line no longer exists (e.g. the operator removed
+ * it mid-pass) the rewrite is skipped and a warning is audited.
+ */
+const buildQueueRewriteFromDisk = async (
+  context: RealRunContext,
+  pending: QueuePendingLine,
+  featureId: string
+): Promise<{ content: string; rewriteNeeded: boolean }> => {
+  const freshContent = (await readTextFileIfExists(context.config.paths.queueFile)) ?? '';
+  const target = locatePendingQueueLine(parseQueueFile(freshContent), pending);
+
+  if (!target) {
+    await appendAudit(context.config, {
+      level: 'warn',
+      event: 'queue.processed_line_skipped',
+      message: `Could not locate the pending queue line for feature ${featureId} in queue.txt; skipping the processed-line rewrite.`,
+      data: {
+        featureId,
+        request: pending.request,
+        queueId: pending.queueId,
+        lineIndex: pending.lineIndex
+      }
+    });
+    return { content: freshContent, rewriteNeeded: false };
+  }
+
+  return {
+    content: markQueueLineProcessed(freshContent, target.lineIndex, featureId, pending.request, pending.request),
+    rewriteNeeded: true
+  };
+};
+
 const planPendingRequests = async (
   context: RealRunContext
 ): Promise<{ checkpoint: OrchestratorCheckpoint; plannedCount: number }> => {
@@ -1863,13 +1962,8 @@ const planPendingRequests = async (
         updatedAt: timestamp()
       };
 
-      updatedQueueContent = markQueueLineProcessed(
-        updatedQueueContent,
-        pending.lineIndex,
-        featureId,
-        pending.request,
-        pending.request
-      );
+      const queueRewrite = await buildQueueRewriteFromDisk(context, pending, featureId);
+      updatedQueueContent = queueRewrite.content;
 
       workingQueue = parseQueueFile(updatedQueueContent);
       checkpoint.pendingRequests = workingQueue.pending.map((line) => ({
@@ -1895,10 +1989,9 @@ const planPendingRequests = async (
         `Feature ${featureId} needs review because planning failed: ${message}`
       );
       await saveCheckpointSnapshot(context.config, checkpoint);
-      await writeTextFileAtomic(
-        context.config.paths.queueFile,
-        updatedQueueContent || '# OpenWeft feature queue\n'
-      );
+      if (queueRewrite.rewriteNeeded) {
+        await writeTextFileAtomic(context.config.paths.queueFile, updatedQueueContent);
+      }
       continue;
     }
 
@@ -1913,13 +2006,8 @@ const planPendingRequests = async (
     await writeTextFileAtomic(planFilePath, repairedPlan.markdown);
     await writeShadowPlan(context.config, featureId, repairedPlan.markdown);
 
-    updatedQueueContent = markQueueLineProcessed(
-      updatedQueueContent,
-      pending.lineIndex,
-      featureId,
-      pending.request,
-      pending.request
-    );
+    const queueRewrite = await buildQueueRewriteFromDisk(context, pending, featureId);
+    updatedQueueContent = queueRewrite.content;
 
     const recoveredStaleManifest = repairedPlan.recoveryMethod === 'last-known-good';
     checkpoint.features[featureId] = {
@@ -1955,17 +2043,15 @@ const planPendingRequests = async (
       queuedAt: checkpoint.createdAt
     }));
     await saveCheckpointSnapshot(context.config, checkpoint);
-    await writeTextFileAtomic(
-      context.config.paths.queueFile,
-      updatedQueueContent || '# OpenWeft feature queue\n'
-    );
+    if (queueRewrite.rewriteNeeded) {
+      await writeTextFileAtomic(context.config.paths.queueFile, updatedQueueContent);
+    }
     plannedCount += 1;
   }
 
-  await writeTextFileAtomic(
-    context.config.paths.queueFile,
-    updatedQueueContent || '# OpenWeft feature queue\n'
-  );
+  // No trailing full-file rewrite here: every processed-line mutation above is
+  // written against freshly read queue content, and an unconditional snapshot
+  // rewrite would clobber requests appended concurrently by `openweft add`.
 
   if (context.stopController?.isRequested) {
     checkpoint.status = 'stopped';
@@ -2587,6 +2673,15 @@ const runFeatureExecutionAttempt = async (
   error?: string;
 }> => {
   const worktreeState = await createOrResetFeatureWorktree(context, feature, baseBranch);
+  // Persist the worktree identity immediately: startup pruning only retains
+  // artifacts recorded in the checkpoint, so deferring this write until phase
+  // settlement would let a crash during a long parallel phase orphan — and
+  // later force-delete — this feature's committed work.
+  updateFeatureCheckpoint(checkpoint, feature.id, {
+    branchName: worktreeState.branchName,
+    worktreePath: worktreeState.worktreePath
+  });
+  await saveCheckpointSnapshot(context.config, checkpoint);
   const worktreePromptBFile = feature.promptBFile
     ? await syncPromptBFileToWorktree(context.config, feature.promptBFile, worktreeState.worktreePath)
     : null;
@@ -3362,6 +3457,10 @@ const executePhases = async (
               } catch (error) {
                 if (error instanceof TurnApprovalError) {
                   if (context.stopController?.isRequested) {
+                    // Abort the staged merge so the worktree is left clean on
+                    // top of the feature's completion commit; a mid-merge
+                    // worktree would defeat execution-commit reuse on resume.
+                    await gitMerge.abortMerge(feature.worktreePath).catch(() => {});
                     checkpoint.status = 'stopped';
                     checkpoint.currentState = 'stopped';
                     checkpoint.currentPhase = null;
@@ -3901,6 +4000,12 @@ const runRealWorkflow = async (
     if (scores.length === 0) {
       const unresolvedFeatures = Object.values(context.checkpoint.features).filter(isUnresolvedTerminalFeature);
       context.checkpoint.status = unresolvedFeatures.length > 0 ? 'failed' : 'completed';
+      if (context.checkpoint.status === 'completed') {
+        // A completed run leaves nothing pinned to the old configuration, so the
+        // checkpoint records the hash this run actually finished under. Future
+        // config edits must never block starts against a fully completed run.
+        context.checkpoint.configHash = context.configHash;
+      }
       context.checkpoint.currentState = 'idle';
       context.checkpoint.currentPhase = null;
       await saveCheckpointSnapshot(context.config, context.checkpoint);
@@ -3963,7 +4068,19 @@ export const runRealOrchestration = async (
       data: {
         removedWorktreePaths: prunedOrphans.removedWorktreePaths,
         removedBranchNames: prunedOrphans.removedBranchNames,
-        retainedBranchNames: prunedOrphans.retainedBranchNames
+        retainedBranchNames: prunedOrphans.retainedBranchNames,
+        keptUnmergedBranchNames: prunedOrphans.keptUnmergedBranchNames
+      }
+    });
+  }
+  if (prunedOrphans.keptUnmergedBranchNames.length > 0) {
+    await appendAudit(input.config, {
+      level: 'warn',
+      event: 'repo.orphans.unmerged-branches-kept',
+      message:
+        'Kept OpenWeft branches with unmerged commits during startup pruning. Merge or delete them manually if the work is no longer needed.',
+      data: {
+        keptUnmergedBranchNames: prunedOrphans.keptUnmergedBranchNames
       }
     });
   }
