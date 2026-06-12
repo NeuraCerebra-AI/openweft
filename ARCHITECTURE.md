@@ -60,7 +60,9 @@ Everything OpenWeft does fits inside one loop:
        Done
 ```
 
-The loop runs inside a `while(true)` in `realRun.ts`. Each iteration: plan pending requests → check for pending re-analysis → score and phase → execute one compatible phase → merge → collect diff summaries → loop. OpenWeft intentionally re-enters scoring and phasing after a phase finishes so remaining work can be adjusted against the real merged code. It breaks when the queue is empty, the user stops it, or unresolved failures remain.
+The loop runs inside a `while(true)` in `realRun.ts`. Each iteration: plan pending requests → check for pending re-analysis → score and phase → execute one compatible phase → merge → collect diff summaries → loop. OpenWeft intentionally re-enters scoring and phasing after a phase finishes so remaining work can be adjusted against the real merged code. It exits when the queue has no executable work left, the user stops it, a fatal/circuit-breaker condition halts the run, or only unresolved failed/review-needed work remains.
+
+Unresolved blockers do not automatically stop the whole run. If planning, adjustment, or terminal failure leaves one feature needing review, OpenWeft compares manifests: overlapping features become `blocked-by-failed-feature`, while unrelated planned or retryable features stay eligible and continue through scoring and phasing. The final run still reports `failed` if unresolved failed or review-needed work remains.
 
 ---
 
@@ -68,23 +70,32 @@ The loop runs inside a `while(true)` in `realRun.ts`. Each iteration: plan pendi
 
 ```
 src/
+├── bin/
+│   └── openweft.ts        Published CLI executable entrypoint
+│
 ├── cli/                    Commander program + command handlers
-│   ├── buildProgram.ts     Commands: launch, init, add, start, status, stop
-│   └── handlers.ts         Default templates (Prompt A, plan adjustment)
+│   ├── buildProgram.ts     Commands: launch, init, add, start, resume, status, stop
+│   ├── handlers.ts         Command implementations, onboarding/TUI launch, bg/tmux/status/stop
+│   └── pidFile.ts          Run-identity PID records (pid + start time + argv marker)
 │
 ├── adapters/               Backend abstraction layer
 │   ├── types.ts            AgentAdapter interface, AdapterSuccess | AdapterFailure
 │   ├── codex.ts            Codex CLI adapter
 │   ├── claude.ts           Claude Code adapter
-│   ├── mock.ts             Deterministic mock (powers --dry-run and tests)
+│   ├── mock.ts             Deterministic mock (supports --dry-run and tests)
 │   ├── runner.ts           Subprocess execution via execa
+│   ├── shared.ts           Auth/env helpers, error classification, result shaping
+│   ├── codexHome.ts        Isolated Codex worker-home preparation
 │   └── prompts.ts          Template injection ({{USER_REQUEST}}, {{CODE_EDIT_SUMMARY}})
 │
 ├── orchestrator/           Core workflow engine
 │   ├── realRun.ts          Main orchestration loop + state transitions
-│   ├── dryRun.ts           XState v5 state machine (mock-backed pipeline)
+│   ├── dryRun.ts           XState v5 mock-backed planning/execution smoke pipeline
+│   ├── approval.ts         Approval queue/controller for agent tool requests
 │   ├── audit.ts            Append-only JSONL audit trail
+│   ├── planMarkdown.ts     Plan validation/repair helpers
 │   ├── finalization.ts     Terminal durability checks + runtime cleanup
+│   ├── agentProcessRegistry.ts  Live agent-child PID/PGID registry for stop escalation
 │   └── stop.ts             Graceful shutdown controller
 │
 ├── domain/                 Pure business logic (no side effects)
@@ -96,7 +107,8 @@ src/
 │   └── featureIds.ts       ID formatting, plan/brief filenames, slugification
 │
 ├── state/                  Persistence
-│   └── checkpoint.ts       Zod-validated checkpoint with atomic write + backup
+│   ├── checkpoint.ts       Zod-validated checkpoint with atomic write + backup
+│   └── recovery.ts         Actionable-work detection + review metadata sync
 │
 ├── config/                 Configuration
 │   ├── schema.ts           OpenWeftConfig Zod schema (strict)
@@ -106,7 +118,18 @@ src/
 │   └── worktrees.ts        Worktree lifecycle, dirty-tree-safe --no-ff merge, conflict handling, gc
 │
 ├── status/                 Runtime diagnostics + status rendering
+│   ├── renderStatus.ts     Non-TTY status report + diagnostic lines
+│   ├── terminalCopy.ts     Shared health/meaning/next-action copy
 │   └── runtimeDiagnostics.ts HEAD, checkpoint, merge durability, and Codex-home checks
+│
+├── ui/                     Ink TUI and onboarding surfaces
+│   ├── App.tsx             Dashboard, completion, history, and model flows
+│   ├── AgentCard.tsx       Compact agent rows + selected detail behavior
+│   ├── StatusBar.tsx       Health/model/effort/phase strip
+│   └── onboarding/         First-run setup wizard and launch decision
+│
+├── notifications/          Runtime notification hooks
+├── tmux/                   tmux session integration
 │
 └── fs/                     File system utilities
     ├── paths.ts            RuntimePaths (all .openweft/ subdirectories)
@@ -157,8 +180,9 @@ OpenWeft doesn't send your feature request directly to an agent. It compiles it 
 
 The Stage 2 plan is what gets structurally validated:
 
-- **Manifest** must parse as `{ create: string[], modify: string[], delete: string[] }`. If JSON is malformed, OpenWeft tries `jsonrepair`, then `JSON5.parse`, then falls back to the last known good manifest.
-- **Ledger** must contain four required h3 subheadings: `Constraints`, `Assumptions`, `Watchpoints`, `Validation`. Enforced by `assertLedgerSection()`.
+- **Manifest** must parse as `{ create: string[], modify: string[], delete: string[] }`. If JSON is malformed, OpenWeft tries `jsonrepair`, then `JSON5.parse`, then optionally falls back to the last known good manifest.
+- **Manifest provenance** is preserved. `json`, `jsonrepair`, and `json5` are current enough to schedule; `last-known-good` is stale provenance and moves the feature to review instead of execution.
+- **Ledger** validation requires a `## Ledger` section with reconstructible `Constraints`, `Assumptions`, `Watchpoints`, and `Validation` labels. Those labels may appear as h3 headings, tolerated case/singular variants, repeated ledger sections, or semantic bullet/list labels.
 
 The Work Brief artifact is saved to `feature_requests/briefs/` and the validated plan is saved to `feature_requests/*.md`. If a session degrades or the process crashes, both survive. Recovery resumes from durable artifacts: checkpoint state, the Work Brief, and the plan. It does not depend on transient model memory.
 
@@ -348,13 +372,21 @@ mergeBranchIntoCurrent(repoRoot, branch):
 
 The `--no-ff` flag ensures every feature merge is a visible merge commit, even if it could fast-forward. This preserves per-feature history.
 
+OpenWeft's own runtime artifacts never ride along in feature work: worktree creation registers `.openweft/` in the repository's shared `info/exclude` (which linked worktrees inherit), `commitAllChanges` unstages any `.openweft` paths before committing, and worktree status summaries filter runtime paths — so artifact-only changes can never satisfy the did-the-agent-do-work check.
+
 ### Reuse detection
 
 On resume, OpenWeft checks whether a managed worktree already has a reusable completion commit (`openweft: complete feature <id>`) or whether that feature was already merged. Reusable completions are queued for merge recovery instead of re-execution; already-merged features are marked complete and can still restore deferred re-analysis state. No wasted compute on work that already succeeded.
 
+Reuse detection survives messy interruption states: an in-progress merge left in the managed worktree is aborted before evaluation, and a completion commit is recognized even when later merge-resolution commits sit on top of it. Ancestry and merged-ness checks use `rev-list --count` rather than `merge-base --is-ancestor`, because simple-git cannot distinguish that command's exit-code answer from success.
+
 ### Cleanup
 
-After merges, `pruneOrphanedOpenWeftArtifacts` removes worktrees and branches not in the active set. Auto-gc is temporarily disabled during heavy worktree operations to avoid git pauses.
+Successful feature merges remove that feature's managed worktree and attached branch immediately. At startup, `pruneOrphanedOpenWeftArtifacts` removes orphaned managed worktrees and stray directories while retaining checkpoint-active or unresolved artifacts. Detached retained OpenWeft branches are preserved rather than silently deleted.
+
+Pruning is guarded against data loss in two ways. A branch with commits not merged into the base is never force-deleted, even when no checkpoint records it (the operator may have deleted state; the work is still real). And retention keys on deterministic branch/worktree names in addition to checkpoint records, with branch/worktree identity persisted to the checkpoint at worktree creation rather than at phase settlement — so a crash mid-phase cannot leave finished work unrecorded and prunable.
+
+Auto-gc is temporarily disabled during heavy worktree operations to avoid git pauses. If a process dies while auto-gc is disabled, startup restores the previous `gc.auto` value from the OpenWeft breadcrumb before doing new work.
 
 ### Codex worker homes
 
@@ -387,7 +419,7 @@ Three backends, one interface. The orchestrator doesn't know or care which agent
         │  Codex  │  │ Claude  │  │  Mock   │
         │  CLI    │  │  Code   │  │         │
         └─────────┘  └─────────┘  └─────────┘
-                                  powers --dry-run
+                                  supports --dry-run
                                   and test suite
 ```
 
@@ -416,36 +448,54 @@ AdapterTurnRequest {
   auth:         { method: 'subscription' | 'api_key', envVar?: string }
   sessionId?:   string     // persist across turns
   sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access'
-  effortLevel?: string     // 'low'|'medium'|'high'|'xhigh' (codex) or 'max' (claude)
+  effortLevel?: string     // codex: low|medium|high|xhigh; claude: low|medium|high|max
   // ...
 }
 ```
+
+`idleTimeoutMs` is carried on command specs as a scheduling hint, but `createExecaCommandRunner()` does not currently enforce client-side idle or wall-clock termination. Long Codex/Claude turns are allowed to finish unless the surrounding process is stopped.
 
 ### Result (discriminated union)
 
 ```typescript
 AdapterSuccess {
   ok: true
+  backend: 'codex' | 'claude' | 'mock'
+  sessionId: string | null
   finalMessage: string           // agent output
+  model: string
   usage: {
     inputTokens, outputTokens,
     totalCostUsd: number | null  // legacy adapter field, not displayed
   }
-  sessionId: string | null
+  costRecord: CostRecord
+  artifacts: AdapterRunArtifacts
 }
 
 AdapterFailure {
   ok: false
+  backend: 'codex' | 'claude' | 'mock'
+  sessionId: string | null       // best effort on provider failures
+  model: string
   error: string
   classified: {
-    tier: 'infrastructure' | 'rate-limit' | 'permission'
-          | 'circuit-breaker' | 'user-input' | 'unknown'
-    isRecoverable: boolean
+    tier: 'transient' | 'agent' | 'fatal'
+    reason: string
   }
+  artifacts: AdapterRunArtifacts
+}
+
+AdapterRunArtifacts {
+  stdout, stderr, exitCode,
+  signal?, errorCode?, errorMessage?,
+  failed?, spawnFailure?,
+  command
 }
 ```
 
 Pattern: `if (result.ok) { ... } else { ... }`. No exception-based flow control.
+
+`runner.ts` catches execa spawn failures and returns `ok: false` adapter results with command metadata instead of letting missing commands collapse into success. Fatal setup failures include missing commands, undefined exits, authentication failures, permission errors, `EACCES`, `EPERM`, and local disk/config/template failures. Transient failures are retried with backoff, agent failures can take the normal retry path, and fatal failures halt without consuming full feature rerun budget.
 
 ---
 
@@ -473,6 +523,10 @@ OrchestratorCheckpoint {
   pendingRequests:  Array<{ request, queuedAt }>
   approvalState:    { firstApprovalSatisfied, approvedFeatureIds }
   pendingMergeSummaries: Array<{ featureId, summary }>
+  review:           { planningNeedsReviewFeatureIds,
+                      adjustmentNeedsReviewFeatureIds,
+                      blockedFeatureIds,
+                      lastReviewReason }
   cost:             { totalInputTokens, totalOutputTokens,
                       totalEstimatedUsd, perFeature: Record<...> }
                     // legacy field name; UI/status render tokens only
@@ -486,11 +540,22 @@ FeatureCheckpoint {
   id, title, request, status, attempts,
   planFile, promptBFile, evolvedPlanFile,
   branchName, worktreePath, sessionId, sessionScope, backend,
-  manifest, priorityScore, priorityTier, scoringCycles,
+  manifest, manifestRecoveryMethod, manifestConfidence,
+  reviewReason, blockedByFeatureIds,
+  priorityScore, priorityTier, scoringCycles,
   rerunEligible, mergeResolutionAttempts,
   mergeCommit, lastError, updatedAt
 }
 ```
+
+Feature status is one of:
+
+```
+pending | planned | executing | completed | failed | skipped
+planning-needs-review | adjustment-needs-review | blocked-by-failed-feature
+```
+
+The review/blocked statuses are explicit operator states. They remain backward-compatible with older checkpoints because the new fields are optional/defaulted, but they are not execution-ready states.
 
 `checkpointId` is created with the checkpoint and is not the per-write freshness signal; `updatedAt` changes on checkpoint saves. `promptBFile` is a legacy checkpoint field name kept for checkpoint compatibility. New artifacts use Work Brief language and `.work-brief.md` filenames.
 
@@ -498,9 +563,10 @@ FeatureCheckpoint {
 
 ```
 saveCheckpoint:
-  1. Read current checkpoint.json
-  2. Copy current → checkpoint.json.backup
-  3. Write new → checkpoint.json (via write-file-atomic)
+  1. Read current checkpoint.json if it exists
+  2. If current exists, copy current → checkpoint.json.backup
+  3. If current is missing, seed checkpoint.json.backup from the new checkpoint
+  4. Write new → checkpoint.json (via write-file-atomic)
 
 loadCheckpoint:
   1. Try checkpoint.json (Zod parse)
@@ -509,23 +575,30 @@ loadCheckpoint:
   4. If both missing → return null (fresh start)
 ```
 
+Backup write failures warn but do not block the primary atomic write. Loading fails closed when the primary is corrupt and no valid backup exists.
+
 ### Recovery on resume
 
-When `openweft start` resumes from a checkpoint:
+When `openweft start` or `openweft resume` resumes from a checkpoint:
 
 ```
-For each feature:
-  status === 'executing':
-    → Check if worktree exists and has completion commit
-      → yes (already-merged): mark 'completed' and restore deferred re-analysis if needed
-      → yes (reusable):       queue for merge recovery instead of re-execution
-      → missing:              reset to 'planned', re-run
+If checkpoint.status === 'stopped' and actionable unfinished work exists:
+  → reopen to 'in-progress'
+  → audit run.resumed_from_stopped
 
-  status === 'failed' + rerunEligible:
-    → Re-attempt execution
+For each planned/executing/retryable failed feature:
+  → Check if worktree/branch has completion commit
+    → already merged: mark 'completed' and restore deferred re-analysis if needed
+    → reusable:       queue for merge recovery instead of re-execution
+    → not reusable:   planned/retryable features execute normally
 
-  status === 'planned':
-    → Normal execution
+For executing features without reusable work:
+  → reset to 'planned'
+  → rerun from persisted Work Brief and plan
+
+For review/blocked features:
+  → keep as unresolved operator work
+  → exclude from execution until repaired
 ```
 
 Before actionable features execute, OpenWeft verifies the Work Brief artifact pointer and repairs it from the canonical Work Brief path when possible. If the Work Brief artifact is missing for an actionable feature, resume fails clearly instead of guessing.
@@ -575,17 +648,21 @@ Usage data accumulates in `.openweft/costs.jsonl` (append-only, one JSON line pe
 {"version":1,"type":"processed","id":"q_d4e5f6","featureId":"1","request":"refactor auth middleware"}
 ```
 
-Each line is a self-contained JSON record. Pending requests become processed when OpenWeft assigns a feature ID and begins planning.
+Canonical writes use a header plus JSON records. The parser also accepts comments, blank lines, and plain-English pending lines under the v1 header for operator convenience; the next rewrite canonicalizes pending/processed work back to v1 JSON records.
+
+Queue writes are clobber-safe: the orchestrator re-reads `queue.txt` immediately before each rewrite and applies its single-line mutation against fresh content (skipping with a warn audit if the line vanished), so `openweft add` during a multi-minute planning pass survives — and gets planned in the same pass. The planning-crash rebuild likewise unions checkpoint pending state with on-disk pending lines, deduplicated by normalized request text.
+
+Pending requests become processed after planning produces either a validated plan or a durable review checkpoint for that feature. OpenWeft does not mark a line processed merely because planning started.
 
 ### Multiline requests
 
-Requests containing newlines or starting with `#` are base64url-encoded:
+v1 JSON records store the request string directly; JSON escaping handles newlines. The `@@openweft:request:v1:` base64url wrapper remains supported for legacy/plain queue lines, especially requests containing newlines, starting with `#`, or starting with the encoded-request prefix:
 
 ```
 @@openweft:request:v1:<base64url-encoded-utf8>
 ```
 
-Decoded transparently on parse.
+Decoded transparently on parse, then canonicalized to JSON on rewrite.
 
 ### Legacy format
 
@@ -604,7 +681,7 @@ New writes always use v1 JSON.
 
 This is what makes execution inspectable, not just observable.
 
-Every validated plan contains a `## Ledger` section — a structured Markdown record of constraints, assumptions, watchpoints, validation, and execution notes. OpenWeft persists that plan in `feature_requests/*.md`, mirrors it in `.openweft/shadow-plans/`, and syncs copies into worktrees during execution. Not a log dump. A narrative.
+Every validated plan contains a parser-compatible `## Ledger` section. The prompts ask for a rich execution ledger, but the structural validator enforces the four required semantic anchors: constraints, assumptions, watchpoints, and validation. OpenWeft persists the plan in `feature_requests/*.md`, mirrors it in `.openweft/shadow-plans/`, and syncs copies into worktrees during execution. Not a log dump. A narrative.
 
 A representative ledger section looks like:
 
@@ -635,7 +712,7 @@ After:  [exact code]
 Why it matters: [explanation]
 ```
 
-Each step in the plan uses a required schema:
+The Prompt A/Work Brief contract asks each step in the plan to use this schema:
 
 ```
 - Step ID, title
@@ -643,10 +720,14 @@ Each step in the plan uses a required schema:
 - Risk level
 - Rollback notes (how to undo if it breaks)
 - Validation criteria (how to verify it worked)
-- Status (pending → in-progress → completed)
+- Status (`Not Started`, `In Progress`, `Blocked`, `Complete`)
 ```
 
+OpenWeft's structural validator does not parse every step row. It enforces the parser-compatible ledger anchors and manifest; the richer step schema is a prompt/work-protocol contract that keeps generated plans reviewable and executable.
+
 The plan ledger survives context loss because the canonical plan file is persisted on disk and promoted forward after successful execution/merge. Recovery uses the checkpoint plus the saved plan, not the model's memory.
+
+If execution updates the worktree plan but merge or reconciliation fails, OpenWeft can preserve that updated plan in `.openweft/evolved-plans/<featureId>.md` without promoting it to the canonical feature plan or shadow plan.
 
 ---
 
@@ -666,11 +747,16 @@ Feature statuses:
 
 ```
   pending ──► planned ──► executing ──► completed
-                 │            │
-                 │            └──► failed (retry if rerunEligible)
-                 │
-                 └──► skipped
+     │           │            │
+     │           │            └──► failed (retry if rerunEligible)
+     │           │
+     │           ├──► planning-needs-review
+     │           ├──► adjustment-needs-review
+     │           ├──► blocked-by-failed-feature
+     │           └──► skipped
 ```
+
+`planning-needs-review`, `adjustment-needs-review`, and `blocked-by-failed-feature` are unresolved operator states. They preserve context and next-action information instead of pretending unsafe work is either executable or cleanly skipped.
 
 Run statuses:
 
@@ -678,15 +764,15 @@ Run statuses:
   idle ──► in-progress ──► completed
                │
                ├──► paused (legacy threshold hit)
-               ├──► stopped (user requested)
-               └──► failed (unrecoverable)
+               ├──► stopped (phase-safe user stop)
+               └──► failed (unresolved failed/review work or finalization failure)
 ```
 
 ---
 
 ## Configuration
 
-Config loads via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig). Any of these work: `.openweftrc.json`, `.openweftrc.yaml`, `openweft.config.js`, or the `openweft` key in `package.json`.
+Config loads via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig), with discovery explicitly bounded: the upward search stops at the enclosing git repository root (`.git` directory or file, so worktrees bound correctly), or at the nearest `package.json` outside a repo, and home/XDG global locations are never consulted. A loaded config resolving outside the current repository is refused with an error naming the config path and the would-be `repoRoot` — destructive git operations can never be redirected by an ancestor or `$HOME` config. The checkpoint's `configHash` guard only blocks resume while the checkpoint itself has actionable unfinished work (pure pending queue lines don't trigger it), and the hash is refreshed when a run completes. Verified config forms include `.openweftrc.json`, `.openweftrc.yaml`, `openweft.config.js`, `openweft.config.cjs`, and the `openweft` key in `package.json`. JS config syntax follows Node package mode: CommonJS packages can use `module.exports = { ... }` in `openweft.config.js`; `type: "module"` packages should use `export default { ... }` in `openweft.config.js` or `module.exports = { ... }` in `openweft.config.cjs`.
 
 The schema is Zod-strict (no extra properties). Full shape:
 
@@ -756,7 +842,8 @@ your-repo/
 │   ├── costs.jsonl                  Token usage per call (legacy filename)
 │   ├── audit-trail.jsonl            Append-only audit entries for real runs
 │   ├── output.log                   --bg mode output
-│   ├── pid                          Background process ID
+│   ├── pid                          Run-identity record (pid + start time + marker; all run modes)
+│   ├── agent-pids.json              Live agent-subprocess registry (pid/pgid per child)
 │   ├── worktrees/                   Git worktrees (one numeric dir per feature)
 │   ├── shadow-plans/                Canonical internal plan mirrors
 │   ├── evolved-plans/               Worktree-promoted plan copies awaiting promotion or cleanup
@@ -791,15 +878,46 @@ openweft                setup wizard (first run) · dashboard (returning)
 openweft init           config, directories, prompt files, work protocol skill
 openweft add "feature"  queue a request (also accepts stdin)
 openweft start          run the queue with interactive dashboard
+openweft resume         alias for start; resumes through the same checkpoint path
 openweft start --model <model>  run once with a model override
 openweft start --effort <level> run once with a reasoning effort override
 openweft start --bg     detach — PID tracked, logs to .openweft/output.log
 openweft start --stream stream raw agent output to terminal
 openweft start --tmux   launch in a tmux session
-openweft start --dry-run planning/phasing/execution simulation with mock adapter
+openweft start --dry-run mock planning/execution smoke; no real git merges
 openweft status         queue state, tokens, feature breakdown
-openweft stop           ask a background run to finish the current phase, then stop
+openweft stop           request a phase-safe stop for a background run
 ```
+
+Every run mode — background, streamed, and the interactive TUI — records a run-identity PID file (`{pid, startedAt, argvMarker, processStartTime}`) under `.openweft/`, giving all modes the same concurrent-run guard and stop path. `openweft status` verifies process identity (kernel start time) before reporting "running"; a recycled or foreign PID renders as stale and is never signaled, and a checkpoint left `in-progress` with no live process renders as **Interrupted** with resume guidance. `openweft stop` waits for a phase-safe checkpoint and escalates only after timeout — and escalation SIGTERMs/SIGKILLs the registered agent subprocess groups (agents spawn detached in their own process groups on POSIX) before force-killing the orchestrator, so no orphaned codex/claude process keeps mutating the repo after "stopped". Runs that end `failed` exit non-zero in every mode, including dry runs and the TUI. `--tmux` launches a monitored tmux session and cannot be combined with `--bg`.
+
+---
+
+## Release readiness
+
+`npm run release:check` is the package/repo gate. It runs typecheck, tests, build, packaged installed-CLI smoke, and `npm publish --dry-run`. CI pins npm `11.6.0`, matching `packageManager`.
+
+Live provider readiness is separate from the package gate:
+
+```
+OPENWEFT_LIVE_SMOKE_TIMEOUT_MS=<timeout> npm run smoke:live:codex:resume
+npm run smoke:live:claude
+```
+
+Claim Codex-ready only after the Codex resume smoke passes in the current release window. Claim Claude-ready only after the Claude smoke passes. Claim both-backend readiness only when both live smokes pass in the same release window.
+
+---
+
+## Test coverage map
+
+- `tests/domain/` covers manifest parsing/ledger tolerance, scoring, phases, queue parsing, and pure domain behavior.
+- `tests/state/` covers checkpoint validation, backup fallback, first-save backup seeding, and recovery helpers.
+- `tests/adapters/` covers Codex, Claude, mock, runner spawn failures, session extraction, and error classification surfaces.
+- `tests/git/` covers worktree lifecycle, merge safety, conflict/autostash behavior, orphan pruning, and retained branch handling.
+- `tests/orchestrator/` covers real-run planning, scoring/phasing, execution/merge/re-analysis, continue-unrelated policy, stop/resume, finalization, and checkpoint durability behavior.
+- `tests/status/`, `tests/ui/`, and `tests/cli/` cover shared terminal copy, status rendering, dashboard/onboarding affordances, command handling, and background status behavior.
+- `tests/e2e/` covers CLI dry-run, mock-backed real runs, and background flows.
+- `tests/release/` covers release gate expectations, runtime version wiring, live-smoke helpers, wizard recording, and asciicast normalization.
 
 ---
 

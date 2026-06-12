@@ -40,7 +40,15 @@ openweft start
 ```
 $ openweft status
 
-Status: completed · Features: 3 total (3 completed)
+Health: Completed
+Meaning: All schedulable work in the current checkpoint has finished.
+Next Action: Review the completed features, merge output, and audit trail before adding more work.
+Status: completed
+Machine State: idle
+Background: not running
+Pending Queue: 0
+Processed Queue Entries: 3
+Features: 3 total (3 completed)
 Tokens: 384000 input / 4000 output
 Completed:
   [001] Add password reset flow (high 0.891)
@@ -48,7 +56,7 @@ Completed:
   [003] Refactor auth middleware (medium 0.544)
 ```
 
-Features 1 and 2 ran in parallel — no file overlap. Feature 3 touched the same auth files, so OpenWeft queued it for the next batch and re-planned against the merged code. Three features, two batches, zero babysitting. Status reports token counts only.
+Features 1 and 2 ran in parallel — no file overlap. Feature 3 touched the same auth files, so OpenWeft queued it for the next batch and re-planned against the merged code. Three features, two batches, zero babysitting. Status starts with health, meaning, and a safe next action before raw details and token counts.
 
 <p align="center">
   <picture>
@@ -145,7 +153,7 @@ Every plan must include a manifest:
 }
 ```
 
-The manifest is parsed structurally with `remark`, validated with strict Zod schemas, and repaired with `jsonrepair` / JSON5 fallback when possible. Every plan also needs a `## Ledger` section with required `Constraints`, `Assumptions`, `Watchpoints`, and `Validation` subheadings, making execution inspectable before agents touch code.
+The manifest is parsed structurally with `remark`, validated with strict Zod schemas, and repaired with `jsonrepair` / JSON5 fallback when possible. If OpenWeft can only recover a manifest from a last-known-good fallback, it preserves that stale provenance and moves the feature to review instead of silently scheduling it. Every plan also needs a `## Ledger` section with reconstructible `Constraints`, `Assumptions`, `Watchpoints`, and `Validation` anchors, making execution inspectable before agents touch code.
 
 ---
 
@@ -227,9 +235,14 @@ Fire-and-forget only works if the process can survive bad timing: terminal exits
 | `feature_requests/*.md` | Validated Markdown execution plans. |
 | `feature_requests/briefs/*.work-brief.md` | Durable Work Briefs. |
 | `.openweft/shadow-plans/` | Internal mirrors used during execution and recovery. |
+| `.openweft/evolved-plans/` | Worktree-updated plans preserved when merge or reconciliation cannot safely promote them. |
 | `.openweft/codex-home/` | Minimal isolated Codex homes for worker turns; cleaned after successful runs by default. |
 
-Checkpoint writes are atomic and Zod-validated. Loading prefers the primary checkpoint, falls back to the backup if the primary is corrupt, and rejects unexpected schema fields. On resume, in-flight features reset to `planned` unless OpenWeft can prove there is already a reusable completion or recorded merge. Clean re-execution from the persisted Work Brief, plan, and checkpoint is safer than trying to resurrect half-valid model context.
+Checkpoint writes are atomic and Zod-validated. The first save seeds both primary and backup checkpoints; later saves keep the previous primary as the backup snapshot. Loading prefers the primary checkpoint, falls back to the backup if the primary is corrupt, and rejects unexpected schema fields.
+
+Recovery is conservative about your work in three specific ways. Worktree and branch identity is persisted to the checkpoint the moment a worktree is created, so a crash mid-phase cannot orphan a finished feature branch. Startup pruning never force-deletes a branch that has commits not merged into the base — even when the checkpoint is missing or was deleted. And queue rewrites re-read `queue.txt` immediately before each write, so requests you add while planning is running (or while a crashed run is down) survive instead of being clobbered.
+
+`openweft start` and `openweft resume` use the same checkpoint path. If a stopped checkpoint still has actionable work, OpenWeft reopens it, records `run.resumed_from_stopped` in the audit trail, and continues from persisted state. In-flight features reset to `planned` unless OpenWeft can prove there is already a reusable completion or recorded merge. Clean re-execution from the persisted Work Brief, plan, and checkpoint is safer than trying to resurrect half-valid model context.
 
 Completion is also verified after the run. OpenWeft checks that recorded merge commits are reachable from final `HEAD`; if durability verification fails, the run is downgraded instead of pretending success.
 
@@ -257,12 +270,17 @@ OpenWeft has explicit boundaries for failure and retry behavior:
 
 | Guardrail | Behavior |
 |---|---|
-| Failure taxonomy | Errors are classified as infrastructure, rate-limit, permission, circuit-breaker, user-input, or unknown. |
-| Retry policy | Recoverable execution failures can reset the worktree and rerun within configured limits. |
+| Failure taxonomy | Errors are classified as transient, agent, or fatal, with auth, permission, missing-command, disk, config, and template failures treated as setup blockers. |
+| Retry policy | Retryable execution failures can reset the worktree and rerun within configured limits. |
+| Review states | Unsafe planning or adjustment results become `planning-needs-review` or `adjustment-needs-review` instead of being silently scheduled or skipped. |
+| Continue unrelated work | A terminal failed feature blocks overlapping work as `blocked-by-failed-feature`, while unrelated eligible features may continue. The final run still reports failed until unresolved work is handled. |
 | Circuit breaker | Excessive failures can stop the run rather than burning through the rest of the queue. |
 | Bounded conflict resolution | Merge conflicts get a limited number of agent-assisted resolution rounds. |
 | Post-merge re-analysis | Remaining plans whose manifests overlap with real changed paths get adjusted before execution. |
 | Token accounting | Every agent call records input and output tokens by stage and feature. |
+| Honest exit codes | Runs that end `failed` — real, dry-run, streamed, or TUI — exit non-zero, as does a stop that had to force-kill. `openweft start && deploy` actually gates. |
+| Run identity | PID records carry process identity (start time + marker), so `stop`/`status` never signal or trust a recycled PID. Stop escalation also terminates agent subprocess groups, not just the orchestrator. |
+| Repo hygiene | `.openweft/` runtime artifacts are excluded from feature commits via the shared git exclude file plus commit-time filtering, and never count as agent work. |
 
 This is the main distinction: OpenWeft operationalizes AI coding agents as schedulable workers. The model performs cognition inside a bounded worktree; the orchestrator owns state, ordering, recovery, and reconciliation.
 
@@ -277,6 +295,7 @@ openweft init
 openweft add "add password reset flow"
 openweft start --dry-run
 openweft start
+openweft resume
 openweft status
 openweft stop
 ```
@@ -288,6 +307,7 @@ openweft                       setup wizard (first run) · dashboard (returning)
 openweft init                  set up config, directories, prompts, and work protocol
 openweft add "feature"         queue a request (also accepts stdin)
 openweft start                 run the queue with interactive dashboard
+openweft resume                alias for start; resumes through the same checkpoint path
 openweft start --model gpt-5.5 run once with a model override
 openweft start --effort high   run once with a reasoning effort override
 openweft start --bg            detach — PID tracked, logs to .openweft/output.log
@@ -302,7 +322,7 @@ openweft stop                  finish the current phase, then stop
 
 ## Configuration
 
-`openweft init` writes `.openweftrc.json`, creates runtime directories, starter prompt templates, a repo-local `skills/openweft-work-protocol/` skill, and a `.gitignore` entry for `.openweft/`. Config loads via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig), so `.openweftrc`, `.openweftrc.yaml`, `openweft.config.js`, or the `openweft` key in `package.json` all work.
+`openweft init` writes `.openweftrc.json`, creates runtime directories, starter prompt templates, a repo-local `skills/openweft-work-protocol/` skill, and a `.gitignore` entry for `.openweft/`. Config loads via [cosmiconfig](https://github.com/cosmiconfig/cosmiconfig), with discovery bounded to the current git repository (or the nearest `package.json` outside one) — a stray openweft config in a parent directory or `$HOME` can never redirect `repoRoot`, and a changed config only blocks resume while the checkpoint still has genuinely unfinished work. Verified config forms include `.openweftrc.json`, `.openweftrc.yaml`, `openweft.config.js`, `openweft.config.cjs`, and the `openweft` key in `package.json`. JS config syntax follows Node package mode: CommonJS packages can use `module.exports = { ... }` in `openweft.config.js`; `type: "module"` packages should use `export default { ... }` in `openweft.config.js` or `module.exports = { ... }` in `openweft.config.cjs`.
 
 | Setting | Default | Meaning |
 |---|---|---|
