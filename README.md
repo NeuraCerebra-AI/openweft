@@ -60,6 +60,12 @@ Features 1 and 2 ran in parallel — no file overlap. Feature 3 touched the same
 
 <p align="center">
   <picture>
+    <img alt="OpenWeft dashboard — queue, live run, verified completion" src="./docs/dashboard-dark.svg" width="100%">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
     <img alt="OpenWeft setup wizard" src="./docs/wizard-dark.svg" width="100%">
   </picture>
 </p>
