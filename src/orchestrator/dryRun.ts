@@ -83,7 +83,8 @@ const createDryRunCheckpoint = (configHash: string): OrchestratorCheckpoint => {
     configHash,
     runId: randomUUID(),
     checkpointId: randomUUID(),
-    createdAt
+    createdAt,
+    runMode: 'dry-run'
   });
 };
 

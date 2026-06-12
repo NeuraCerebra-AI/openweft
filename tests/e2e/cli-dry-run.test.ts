@@ -159,6 +159,25 @@ describe('openweft CLI dry-run flow', () => {
     expect(stopOutput).toContain('No background OpenWeft run is active.');
   });
 
+  it('reports healthy status after a completed dry run', async () => {
+    const repoRoot = await createTempRepo();
+
+    await runCli(repoRoot, ['init']);
+    await runCli(repoRoot, ['add', 'add dark mode toggle']);
+    await runCli(repoRoot, ['start', '--dry-run']);
+
+    const checkpoint = JSON.parse(
+      await readFile(path.join(repoRoot, '.openweft', 'checkpoint.json'), 'utf8')
+    ) as { runMode?: string; status: string };
+    expect(checkpoint.status).toBe('completed');
+    expect(checkpoint.runMode).toBe('dry-run');
+
+    const statusReport = (await runCli(repoRoot, ['status'])).join('\n');
+    expect(statusReport).toContain('Health: Completed');
+    expect(statusReport).not.toContain('Durability check failed');
+    expect(statusReport).toContain('Current HEAD Check: skipped (dry run)');
+  });
+
   it('signals a failed dry run through process.exitCode', async () => {
     await installFailingDryRunAdapter();
     const repoRoot = await createTempRepo();

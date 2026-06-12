@@ -108,6 +108,7 @@ export const CheckpointSchema = z
     schemaVersion: z.literal('1.0.0'),
     orchestratorVersion: z.string(),
     configHash: z.string(),
+    runMode: z.enum(['real', 'dry-run']).optional().default('real'),
     checkpointId: z.string(),
     runId: z.string(),
     createdAt: z.string().datetime(),
@@ -218,11 +219,13 @@ export const createEmptyCheckpoint = (input: {
   runId: string;
   checkpointId: string;
   createdAt: string;
+  runMode?: 'real' | 'dry-run';
 }): OrchestratorCheckpoint => {
   return {
     schemaVersion: '1.0.0',
     orchestratorVersion: input.orchestratorVersion,
     configHash: input.configHash,
+    runMode: input.runMode ?? 'real',
     checkpointId: input.checkpointId,
     runId: input.runId,
     createdAt: input.createdAt,

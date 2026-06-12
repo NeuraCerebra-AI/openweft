@@ -169,9 +169,11 @@ describe('openweft CLI real mock flow', () => {
       await readFile(path.join(repoRoot, '.openweft', 'checkpoint.json'), 'utf8')
     ) as {
       status: string;
+      runMode?: string;
       features: Record<string, { status: string }>;
     };
     expect(checkpoint.status).toBe('completed');
+    expect(checkpoint.runMode).toBe('real');
     expect(Object.values(checkpoint.features).every((feature) => feature.status === 'completed')).toBe(true);
 
     const statusOutput = await runCli(repoRoot, ['status']);

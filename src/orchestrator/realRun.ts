@@ -3921,6 +3921,7 @@ const runRealWorkflow = async (
   input: RealRunInput
 ): Promise<OrchestratorOutput> => {
   const { checkpoint, recoveredExecutions, resumeReanalysisPhaseIndex } = await loadOrCreateCheckpoint(input);
+  checkpoint.runMode = 'real';
   let context: RealRunContext = {
     ...input,
     checkpoint,

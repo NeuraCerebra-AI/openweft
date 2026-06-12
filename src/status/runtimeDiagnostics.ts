@@ -22,6 +22,7 @@ export interface RuntimeDiagnostics {
     totalCompletedFeatures: number;
     verifiedCount: number;
     checks: readonly MergeDurabilityCheck[];
+    skippedForDryRun?: boolean;
   };
   runtimeArtifacts: {
     codexHomePresent: boolean;
@@ -32,6 +33,10 @@ export interface RuntimeDiagnostics {
 export const summarizeMergeDurability = (
   mergeDurability: RuntimeDiagnostics['mergeDurability']
 ): string => {
+  if (mergeDurability.skippedForDryRun) {
+    return 'skipped (dry run)';
+  }
+
   const failingCheck = mergeDurability.checks.find((check) => check.result !== 'verified');
   if (!failingCheck) {
     return `verified (${mergeDurability.verifiedCount}/${mergeDurability.totalCompletedFeatures} completed features)`;
@@ -118,18 +123,22 @@ export const collectRuntimeDiagnostics = async (input: {
   checkpointBackupFile: string;
   codexHomeDir: string;
   completedFeatures: FeatureCheckpoint[];
+  runMode?: 'real' | 'dry-run';
 }): Promise<RuntimeDiagnostics> => {
+  const skippedForDryRun = input.runMode === 'dry-run';
   const headCommit = await getHeadCommit(input.repoRoot).then((value) => value.trim()).catch(() => null);
   const [primaryUpdatedAt, backupUpdatedAt, codexHomePresent, residueFileCount, checks] = await Promise.all([
     readCheckpointUpdatedAt(input.checkpointFile),
     readCheckpointUpdatedAt(input.checkpointBackupFile),
     readdir(input.codexHomeDir).then(() => true).catch(() => false),
     countResidueFiles(input.codexHomeDir).catch(() => 0),
-    buildMergeDurabilityChecks({
-      repoRoot: input.repoRoot,
-      headCommit,
-      completedFeatures: input.completedFeatures
-    })
+    skippedForDryRun
+      ? Promise.resolve<MergeDurabilityCheck[]>([])
+      : buildMergeDurabilityChecks({
+          repoRoot: input.repoRoot,
+          headCommit,
+          completedFeatures: input.completedFeatures
+        })
   ]);
 
   const verifiedCount = checks.filter((check) => check.result === 'verified').length;
@@ -143,7 +152,8 @@ export const collectRuntimeDiagnostics = async (input: {
     mergeDurability: {
       totalCompletedFeatures: input.completedFeatures.length,
       verifiedCount,
-      checks
+      checks,
+      ...(skippedForDryRun ? { skippedForDryRun: true } : {})
     },
     runtimeArtifacts: {
       codexHomePresent,

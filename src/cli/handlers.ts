@@ -2707,7 +2707,8 @@ export const createCommandHandlers = (
         codexHomeDir: config.paths.codexHomeDir,
         completedFeatures: Object.values(checkpointResult.checkpoint?.features ?? {}).filter(
           (feature) => feature.status === 'completed'
-        )
+        ),
+        runMode: checkpointResult.checkpoint?.runMode ?? 'real'
       });
       const background = await readBackgroundPid(
         config.paths.pidFile,
